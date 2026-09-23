@@ -67,7 +67,7 @@ DEFAULT_PLATFORMS: list[dict] = [
         "vendor": "sophos",
         "scrapli": None,
         "netmiko": "sophos_sfos",
-        "commands": ["show"],
+        "commands": [],  # collected over the XML API (services/backup/sfos.py, NOM_SFOS_ENTITIES)
     },
     {
         "slug": "routeros",

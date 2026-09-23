@@ -397,6 +397,50 @@ def create_mapping(body: MappingIn, ctx: Ctx = Depends(require("tacacs:write")))
     return _mapping_out(m)
 
 
+class MappingPatch(BaseModel):
+    tacacs_username: str | None = None
+    auth_method: str | None = None
+    password: str | None = None
+    clear_password: bool = False
+    enabled: bool | None = None
+    valid_until: datetime | None = None
+
+
+@router.patch("/users/{mapping_id}", response_model=MappingOut)
+def update_mapping(mapping_id: uuid.UUID, body: MappingPatch, ctx: Ctx = Depends(require("tacacs:write"))):
+    """Enable/disable, set expiry (``valid_until: null`` clears it), change auth method or set a new
+    device password (checked against the password policy; stored as crypt(3) only)."""
+    from app.core.security import PasswordPolicyError, validate_password_policy
+
+    m = get_owned(ctx, TacacsUserMapping, mapping_id, "mapping")
+    data = body.model_dump(exclude_unset=True, exclude={"password", "clear_password"})
+    if data.get("auth_method") is not None and data["auth_method"] not in ("crypt", "ldap"):
+        raise HTTPException(422, "auth_method must be crypt or ldap")
+    if "tacacs_username" in data and not data["tacacs_username"]:
+        raise HTTPException(422, "tacacs_username cannot be empty")
+    for k in ("auth_method", "enabled"):
+        if k in data and data[k] is None:
+            raise HTTPException(422, f"{k} cannot be null")
+    before = {**_mapping_out(m).model_dump(mode="json", exclude={"id", "user_id"})}
+    for k, v in data.items():
+        setattr(m, k, v)
+    if body.password:
+        owner = ctx.db.get(User, m.user_id)
+        try:
+            validate_password_policy(body.password, owner.username if owner else m.tacacs_username)
+        except PasswordPolicyError as e:
+            raise HTTPException(422, str(e)) from e
+        m.password_crypt = tacacs_crypt(body.password)
+    elif body.clear_password:
+        m.password_crypt = None
+    after = _mapping_out(m).model_dump(mode="json", exclude={"id", "user_id"})
+    if body.password:
+        after["password_changed"] = True
+    _audit(ctx, "tacacs.user.update", m, m.tacacs_username, before=before, after=after)
+    ctx.db.commit()
+    return _mapping_out(m)
+
+
 @router.delete("/users/{mapping_id}", status_code=204)
 def delete_mapping(mapping_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:write"))):
     m = get_owned(ctx, TacacsUserMapping, mapping_id, "mapping")

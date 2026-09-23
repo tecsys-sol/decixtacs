@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 
+from git.exc import GitCommandError
 from sqlalchemy import delete, select, text
 
 from app.core.config import get_settings
@@ -16,10 +18,13 @@ from app.models import (
     Alert,
     ChangeRequest,
     CommandLog,
+    ConfigBackup,
+    ConfigRestore,
     Device,
     Integration,
     LoginHistory,
     ReportSchedule,
+    SessionRecording,
     Tenant,
 )
 from app.services import metrics
@@ -42,7 +47,19 @@ def session():
         db.close()
 
 
-@celery_app.task(name="app.workers.tasks.backup_devices")
+# A concurrent writer on the shared Git volume (lock timeout, index.lock left by a killed worker,
+# NFS hiccup) is transient: the whole chunk is retried with exponential backoff. Commits that made
+# it into Git before the failure are picked up again by the retry (see engine.process_result).
+BACKUP_RETRY = {
+    "autoretry_for": (GitCommandError, OSError),
+    "retry_backoff": 30,
+    "retry_backoff_max": 600,
+    "retry_jitter": True,
+    "max_retries": 3,
+}
+
+
+@celery_app.task(name="app.workers.tasks.backup_devices", **BACKUP_RETRY)
 def backup_devices(
     tenant_id: str,
     device_ids: list[str],
@@ -103,7 +120,9 @@ def run_integration_sync(db, integration: Integration) -> dict:
 
     try:
         if integration.kind == "netbox":
-            return netbox.sync(db, integration)
+            stats = netbox.sync(db, integration)
+            metrics.safe_refresh_device_gauge(db)
+            return stats
         if integration.kind == "ixpmanager":
             return ixpmanager.sync_members(db, integration)
         if integration.kind == "birdseye":
@@ -166,9 +185,19 @@ def deliver_alert(alert_id: str, channel_ids: list[str]) -> list[dict]:
         return deliver_now(db, alert, [uuid.UUID(c) for c in channel_ids])
 
 
+@celery_app.task(name="app.workers.tasks.refresh_metrics")
+def refresh_metrics() -> int:
+    with session() as db:
+        return metrics.refresh_device_gauge(db)
+
+
 @celery_app.task(name="app.workers.tasks.apply_retention")
 def apply_retention() -> dict:
-    """Drop whole monthly partitions on PostgreSQL (cheap); row-delete elsewhere."""
+    """Drop whole monthly partitions on PostgreSQL (cheap); row-delete elsewhere.
+
+    Config backups: rows that recorded a change (and anything referenced by a restore or a change
+    request) are kept forever - they index the Git history; routine 'unchanged'/'failed' poll rows
+    are purged. Session recordings: rows and their .cast files. Alerts: rows."""
     s = get_settings()
     out = {}
     with session() as db:
@@ -186,6 +215,41 @@ def apply_retention() -> dict:
             out["command_logs"] = db.execute(delete(CommandLog).where(CommandLog.timestamp < cutoff)).rowcount
         cutoff = utcnow() - timedelta(days=s.retention_login_history_days)
         out["login_history"] = db.execute(delete(LoginHistory).where(LoginHistory.timestamp < cutoff)).rowcount
+
+        cutoff = utcnow() - timedelta(days=s.retention_backup_rows_days)
+        referenced = select(ConfigRestore.backup_id).union(
+            select(ConfigRestore.pre_restore_backup_id).where(ConfigRestore.pre_restore_backup_id.is_not(None))
+        )
+        out["config_backups"] = db.execute(
+            delete(ConfigBackup)
+            .where(
+                ConfigBackup.status.in_(["unchanged", "failed"]),
+                ConfigBackup.changed.is_(False),
+                ConfigBackup.collected_at < cutoff,
+                ConfigBackup.change_request_id.is_(None),
+                ConfigBackup.id.not_in(referenced),
+            )
+            .execution_options(synchronize_session=False)
+        ).rowcount
+
+        cutoff = utcnow() - timedelta(days=s.retention_session_recordings_days)
+        old = db.execute(
+            select(SessionRecording.id, SessionRecording.storage_uri).where(SessionRecording.started_at < cutoff)
+        ).all()
+        for _, uri in old:
+            if uri.startswith("file://"):
+                try:
+                    os.unlink(uri.removeprefix("file://"))
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    log.warning("retention: could not delete recording %s", uri, exc_info=True)
+        if old:
+            db.execute(delete(SessionRecording).where(SessionRecording.id.in_([i for i, _ in old])))
+        out["session_recordings"] = len(old)
+
+        cutoff = utcnow() - timedelta(days=s.retention_alerts_days)
+        out["alerts"] = db.execute(delete(Alert).where(Alert.created_at < cutoff)).rowcount
     return out
 
 

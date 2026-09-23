@@ -437,7 +437,21 @@ class TenantOut(ORM):
     name: str
     slug: str
     is_active: bool
+    settings: dict = {}
     created_at: datetime
+
+
+class TenantSettings(BaseModel):
+    """Per-tenant overrides. ``None`` removes the override (global default applies)."""
+
+    backup_sanitize_secrets: bool | None = None  # overrides NOM_BACKUP_SANITIZE_SECRETS
+    restore_requires_change: bool | None = None  # real restores need an approved change (default true)
+
+
+class TenantPatch(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None
+    settings: TenantSettings | None = None
 
 
 @router.get("/tenants", response_model=list[TenantOut])
@@ -463,6 +477,42 @@ def create_tenant(body: TenantIn, ctx: Ctx = Depends(require("tenants:admin"))):
         target_type="tenant",
         target_id=t.id,
         target_name=t.slug,
+        source_ip=ctx.ip,
+    )
+    ctx.db.commit()
+    return t
+
+
+@router.patch("/tenants/{tenant_id}", response_model=TenantOut)
+def update_tenant(tenant_id: uuid.UUID, body: TenantPatch, ctx: Ctx = Depends(require("tenants:admin"))):
+    t = ctx.db.get(Tenant, tenant_id)
+    if t is None:
+        raise HTTPException(404, "tenant not found")
+    before = {"name": t.name, "is_active": t.is_active, "settings": dict(t.settings or {})}
+    if body.name is not None:
+        t.name = body.name
+    if body.is_active is not None:
+        if t.id == ctx.principal.tenant_id and not body.is_active:
+            raise HTTPException(409, "cannot deactivate your own tenant")
+        t.is_active = body.is_active
+    if body.settings is not None:
+        merged = dict(t.settings or {})
+        for k, v in body.settings.model_dump(exclude_unset=True).items():
+            if v is None:
+                merged.pop(k, None)
+            else:
+                merged[k] = v
+        t.settings = merged
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.principal.tenant_id,
+        action="tenant.update",
+        actor=ctx.user,
+        target_type="tenant",
+        target_id=t.id,
+        target_name=t.slug,
+        before=before,
+        after={"name": t.name, "is_active": t.is_active, "settings": t.settings},
         source_ip=ctx.ip,
     )
     ctx.db.commit()

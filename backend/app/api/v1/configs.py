@@ -265,7 +265,7 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
     if target is None:
         raise HTTPException(422, "device has no credential/platform")
     config = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), b.commit_sha)
-    if config and "<removed>" in config:
+    if config and ("<removed>" in config or "&lt;removed&gt;" in config):
         # Backups taken with NOM_BACKUP_SANITIZE_SECRETS mask secrets; pushing them would overwrite
         # real keys/passwords on the device with the placeholder.
         raise HTTPException(
@@ -417,8 +417,7 @@ def list_drift(
 @router.post("/devices/{device_id}/drift-check")
 def drift_check(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:backup"))):
     """Collect the running config now and compare it with the last backup (without committing)."""
-    from app.core.config import get_settings
-    from app.services.backup.collector import nornir_collect
+    from app.services.backup import engine
     from app.services.backup.sanitize import prepare
     from app.services.drift import compare_running
 
@@ -426,10 +425,10 @@ def drift_check(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:backup
     target = build_target(d)
     if target is None:
         raise HTTPException(422, "device has no credential/platform")
-    res = nornir_collect([target], workers=1)[0]
+    res = engine.default_collect([target])[0]
     if not res.ok:
         raise HTTPException(502, f"collection failed: {res.error}")
-    running = prepare(res.config, d.platform.slug, get_settings().backup_sanitize_secrets)
+    running = prepare(res.config, d.platform.slug, engine.sanitize_for(ctx.db, ctx.tenant_id))
     last = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d)) or ""
     r = compare_running(running, last)
     if r.drifted:

@@ -129,7 +129,8 @@ flowchart LR
 | `backup_devices` | collect | also manual (`POST /backups/run`), change approve/implement |
 | `sync_all_integrations` → `sync_integration` | celery | every `NOM_NETBOX_SYNC_MINUTES` (15) |
 | `run_compliance_all` | celery | daily 02:30 |
-| `apply_retention` (drops monthly partitions) | celery | daily 03:15 |
+| `apply_retention` (drops monthly partitions; purges old unchanged/failed backup rows, recordings, alerts, login history) | celery | daily 03:15 |
+| `refresh_metrics` (`nom_devices` gauge) | celery | every 5 min |
 | `ensure_partitions` (3 months ahead) | celery | daily 00:10 |
 | `run_report_schedules` | celery | hourly at :00 |
 | `deliver_alert` | alerts | on alert emission |
@@ -161,7 +162,7 @@ each process has its own counters and a scrape only sees one of them.
 | `nom_alerts_total` | event_type, severity | alert emission |
 | `nom_integration_sync_total` | kind, status | NetBox / IXP Manager / birdseye syncs |
 | `nom_http_request_duration_seconds` | method, route, status | every API request |
-| `nom_devices` | tenant, vendor | declared, currently not set by the code |
+| `nom_devices` | tenant, vendor | inventory size; recomputed every 5 min (`refresh_metrics`) and after device create/update/delete and NetBox syncs in the process that made the change (vendor = device vendor, else platform vendor, else `unknown`) |
 
 Prometheus rules (`deploy/prometheus/alerts.yml`, mirrored as a `PrometheusRule`) cover backup
 failures, compliance score drops, login-failure spikes, TACACS deploy errors, stalled ingest,
@@ -359,12 +360,11 @@ Scale knobs: more worker replicas (or KEDA on the `collect` list length, see
 whole run well inside the hour: tasks are not de-duplicated, so a run that takes longer than 60
 minutes overlaps with the next one.
 
-Known limitation: the per-repository Git lock in `git_store.py` is a `threading.Lock` (per
-process). Two worker processes committing to the **same tenant repository** at the same instant
-can hit Git's `index.lock`; the failing task raises and is not retried automatically. With chunks
-of 250 and most configs unchanged the window is small, but for very large single tenants
-**(recommendation)** watch `nom_config_backups_total{status="failed"}` / worker logs and consider
-a dedicated collect queue per large tenant or a distributed (Redis) lock.
+Git write concurrency: commits to one tenant repository are serialised by a thread lock plus an
+`flock` on `.git/nom.lock` (works across processes and pods on the shared volume). Transient Git
+or filesystem errors (`GitCommandError`, `OSError`) make `backup_devices` retry the chunk (up to 3
+times, exponential backoff from 30 s with jitter); commits written by a failed attempt are adopted
+by the retry (see [backup-architecture.md](backup-architecture.md#4-per-tenant-git-repositories)).
 
 ### 5.2 TACACS+ and accounting ingest
 
@@ -392,11 +392,11 @@ request loads the tenant's device list once to correlate NAS addresses, so prefe
 | `command_logs` (+ trigram GIN on `command`) | 1,000,000 | ~0.8–1.2 KB | 25–35 GB | 365 d | **300–420 GB** |
 | `tacacs_auth_events` | 100,000–340,000 | ~0.3 KB | 1–3 GB | 365 d (uses the command-log retention) | 12–36 GB |
 | `audit_events` | ~10,000 | ~1 KB (before/after JSON) | ~0.3 GB | 730 d | ~7 GB |
-| `config_backups` (not partitioned) | 240,000 (10k × 24) | ~0.3 KB | ~2 GB | **no automatic retention** | grows ~25 GB/year |
+| `config_backups` (not partitioned) | 240,000 (10k × 24) | ~0.3 KB | ~2 GB | unchanged/failed rows 90 d (`NOM_RETENTION_BACKUP_ROWS_DAYS`); changed rows kept | ~6 GB + changed rows |
 | `config_index` | replaced per changed device | | | current state only | 1–5 GB |
 
-**(recommendation)** Purge old `status='unchanged'` rows of `config_backups` (they only record
-that a poll happened) with a periodic job, or reduce the backup frequency for stable devices.
+Old `status='unchanged'`/`'failed'` rows of `config_backups` (they only record that a poll
+happened) are purged by `apply_retention`; rows that recorded a change are kept.
 
 Connections: each API or worker process holds a SQLAlchemy pool of up to 40 connections
 (`pool_size=20, max_overflow=20`). Budget `max_connections` ≥ API pods × 40 + worker processes ×
@@ -405,12 +405,10 @@ prepares statements) / a CloudNativePG `Pooler` in front for large deployments.
 
 ### 5.4 API
 
-The API is stateless (JWTs, tokens and rate-limit counters in PostgreSQL/Redis) and scales
-horizontally; the reference Kubernetes deployment runs 3–12 replicas (HPA on CPU). Exceptions to
-statelessness: the OIDC `state`/PKCE verifier is kept in process memory between
-`/auth/oidc/authorize` and `/auth/oidc/callback` - with several replicas enable session affinity
-for those paths or the callback can fail with "unknown state"
-(see [high-availability.md](high-availability.md#api)).
+The API is stateless (JWTs, tokens and rate-limit counters in PostgreSQL/Redis, OIDC
+`state`/PKCE verifier in Redis with a 10-minute TTL) and scales horizontally; the reference
+Kubernetes deployment runs 3–12 replicas (HPA on CPU). Redis may be a Sentinel deployment
+(`NOM_REDIS_SENTINELS`, see [high-availability.md](high-availability.md#redis)).
 
 ## 6. Code map
 

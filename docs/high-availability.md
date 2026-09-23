@@ -80,28 +80,18 @@ and watch `last_heartbeat_at` per server.
 
 * Stateless: JWT access tokens, refresh/API tokens in PostgreSQL, rate-limit counters in Redis.
   Scale with replicas (`NOM_API_WORKERS=1` per container so Prometheus counters stay coherent).
-* Probes: `/healthz` (process alive) for liveness, `/readyz` (runs `SELECT 1`) for readiness -
-  pods leave the load balancer while the database is unreachable.
+* Probes: `/healthz` (process alive) for liveness, `/readyz` for readiness. `/readyz` returns 503
+  only when PostgreSQL is unreachable (pods leave the load balancer); a Redis outage returns 200
+  with `"degraded": true` and `checks.redis: "down"` - the API keeps serving (rate limits and OIDC
+  state fall back to per-process memory, async jobs cannot be queued), because taking every replica
+  out of rotation for a Redis blip would turn a partial outage into a full one. Body:
+  `{"status": "ready", "degraded": false, "checks": {"database": "ok", "redis": "ok"}}`.
 * `preStop` sleep + `maxUnavailable: 0` rolling updates avoid dropped requests during deploys.
-* **OIDC caveat**: `/auth/oidc/authorize` keeps the PKCE verifier and `state` in the memory of the
-  replica that served it (`_pending` in `api/v1/auth.py`); the callback must reach the same replica.
-  With more than one replica, enable cookie affinity for these paths, e.g. a second Ingress:
-
-  ```yaml
-  metadata:
-    annotations:
-      nginx.ingress.kubernetes.io/affinity: cookie
-      nginx.ingress.kubernetes.io/session-cookie-name: nom-oidc
-      nginx.ingress.kubernetes.io/session-cookie-max-age: "600"
-  spec:
-    rules:
-      - host: nom.example.net
-        http:
-          paths:
-            - {path: /api/v1/auth/oidc, pathType: Prefix, backend: {service: {name: nom-api, port: {name: http}}}}
-  ```
-
-  **(recommendation)** Move `_pending` to Redis to remove this constraint.
+* OIDC: the pending authorisation (`state` → PKCE verifier + tenant) is stored in Redis
+  (`nom:oidc:state:<state>`, `SET EX 600`, consumed with `GETDEL` so a state is single-use), so the
+  callback may land on any replica - no session affinity is needed. Only while Redis is
+  unreachable does the API fall back to a per-process TTL dict (then a login started on one replica
+  must finish on the same one; it simply fails with "unknown or expired state" otherwise).
 * Synchronous operations (`POST /backups/run` with `run_async=false`, drift-check, restore) run
   inside the API request; keep them for single devices and use the async path for bulk work.
 
@@ -133,19 +123,24 @@ workers, and the partition/retention jobs keep table sizes bounded.
 
 ## Redis
 
-The code takes a **single** `NOM_REDIS_URL` for the Celery broker/result backend and the rate
-limiter. It does not configure Sentinel-aware clients (a `sentinel://` URL would need
-`broker_transport_options.master_name` in Celery and is not understood by the rate limiter).
-Options, best first:
+All Redis clients are built in one place (`app/core/redis.py`): the API rate limiter, the OIDC
+state store and the Celery broker/result backend. Two modes:
 
-1. **Managed Redis with automatic failover** behind a stable primary endpoint (ElastiCache
-   Multi-AZ, Memorystore Standard, Azure Cache Standard/Premium). Use `rediss://` + AUTH.
-2. **Redis Sentinel** (3 sentinels, 1 primary, 1–2 replicas, e.g. the Bitnami chart or the
-   OT-CONTAINER-KIT redis-operator) **plus a master-tracking proxy** (HAProxy with
-   `tcp-check` on `role:master`, or a sentinel-aware proxy) giving one stable address for
-   `NOM_REDIS_URL`.
-3. **(recommendation, code change)** native Sentinel support: Celery `broker_url=sentinel://...`
-   with `master_name`, and `redis.sentinel.Sentinel` in `core/ratelimit.py`.
+* **Plain** - `NOM_REDIS_URL=redis://:pw@redis:6379/0` (or `rediss://`). Use with a managed Redis
+  that has automatic failover behind a stable endpoint (ElastiCache Multi-AZ, Memorystore
+  Standard, Azure Cache Standard/Premium) or a master-tracking proxy.
+* **Sentinel (native)** - set `NOM_REDIS_SENTINELS=sen1:26379,sen2:26379,sen3:26379` and
+  `NOM_REDIS_SENTINEL_MASTER=mymaster` (plus `NOM_REDIS_SENTINEL_PASSWORD` if the sentinels
+  require AUTH). The password and db number still come from `NOM_REDIS_URL` (its host/port are
+  ignored). The API uses `redis.sentinel.Sentinel(...).master_for(master)` and follows failovers;
+  Celery gets `broker_url = result_backend = sentinel://:pw@sen1:26379/0;sentinel://...` with
+  `broker_transport_options` / `result_backend_transport_options` =
+  `{"master_name": ..., "sentinel_kwargs": {"password": ...}}`. Typical deployment: 3 sentinels,
+  1 primary, 1-2 replicas (Bitnami chart with `sentinel.enabled=true`, or the OT-CONTAINER-KIT
+  redis-operator).
+
+While Redis is unreachable the API does not wait on it for every request: after an error the rate
+limiter and OIDC store skip Redis for 30 s (circuit breaker) and use per-process memory.
 
 What a Redis failover costs: tasks queued but not yet started may be lost with asynchronous
 replication (the next hourly schedule re-collects; manual backup requests may need resubmitting);

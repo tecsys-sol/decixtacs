@@ -84,7 +84,8 @@ immediately; clients refresh (refresh tokens are not JWTs and stay valid).
 
 ## 3. Rate limiting and HTTP hardening
 
-* Fixed-window limiter per client IP backed by Redis (per-process fallback if Redis is down):
+* Fixed-window limiter per client IP backed by Redis (plain or Sentinel, `app/core/redis.py`;
+  per-process fallback with a 30 s circuit breaker while Redis is down):
   `/auth/login`, `/auth/refresh`, `/auth/mfa/verify` → `NOM_RATE_LIMIT_LOGIN` (10) per
   `NOM_RATE_LIMIT_WINDOW_SECONDS` (60); every other `/api/v1` call → `NOM_RATE_LIMIT_API` (600).
   429 responses carry `Retry-After`; successful ones `X-RateLimit-Limit/Remaining`.
@@ -137,7 +138,38 @@ the UI have keys **redacted**; only the agent receives the clear-text config ove
 authenticated channel, and writes it with mode 0640.
 
 TACACS user passwords are stored as SHA-512 crypt (656,000 rounds) and rendered as
-`password login = crypt ...`; they never appear in clear text in the database.
+`password login = crypt ...`; they never appear in clear text in the database. They are set on
+create or with `PATCH /tacacs/users/{id}` (`password`, checked against the password policy;
+`clear_password`; `enabled`; `valid_until`; `auth_method`), audited as `tacacs.user.update` with
+only a `password_changed` flag - never the value.
+
+### Secrets in configuration backups
+
+`NOM_BACKUP_SANITIZE_SECRETS=true` (default) masks passwords, keys and communities before configs
+are committed to the Git repositories. A tenant can override it with the tenant setting
+`backup_sanitize_secrets` (`PATCH /api/v1/tenants/{id}`, `tenants:admin`, audited) - needed for
+byte-exact restores, because the restore API refuses backups with masked secrets. With sanitising
+off, the repositories contain device secrets in their on-box form (IOS type 7 and Junos `$9$` are
+reversible). Then:
+
+* encrypt the repository volume at rest (encrypted StorageClass / LUKS / KMS-backed EFS/Filestore)
+  **and** every copy of it: Git mirrors (`git-mirror-cronjob` target must be a private, encrypted
+  remote), volume snapshots, DR replicas;
+* do not export the volume beyond the API/worker pods; treat `configs:read` on that tenant as
+  access to device secrets and grant it accordingly;
+* prefer per-tenant decisions: keep sanitising on for tenants that do not restore through the
+  platform.
+
+The platform does not add its own encryption layer on top of Git (diffs, search and compliance
+need the plain text); protection is at the storage layer.
+
+### OIDC login state
+
+The OIDC `state`/PKCE verifier lives in Redis for 10 minutes and is deleted on first use
+(`GETDEL`), so replayed or forged callbacks fail with 400. First-time SSO users are provisioned
+(`auth_source=oidc`, matched by `sub`); a first login whose username already belongs to a local or
+LDAP account is refused (409) instead of silently taking the account over, and disabled SSO users
+are refused (401).
 
 ## 5. Audit trail
 

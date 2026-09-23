@@ -233,11 +233,13 @@ SELECT nom_drop_old_partitions('command_logs', 365);
 | `NOM_RETENTION_COMMAND_LOGS_DAYS` | 365 | `command_logs` **and** `tacacs_auth_events` | partition drop (PostgreSQL) |
 | `NOM_RETENTION_AUDIT_DAYS` | 730 | `audit_events` | partition drop |
 | `NOM_RETENTION_LOGIN_HISTORY_DAYS` | 365 | `login_history` | row `DELETE` |
-| `NOM_RETENTION_SESSION_RECORDINGS_DAYS` | 180 | session recordings | **declared, not enforced** by the current code - **(recommendation)** expire files with a storage lifecycle rule / `find -mtime` job and delete the rows |
+| `NOM_RETENTION_SESSION_RECORDINGS_DAYS` | 180 | `session_recordings` + `.cast` files | row `DELETE`; `file://` recordings are unlinked (object-storage recordings: add a bucket lifecycle rule) |
+| `NOM_RETENTION_BACKUP_ROWS_DAYS` | 90 | `config_backups` with status `unchanged`/`failed` | row `DELETE`; rows that recorded a change, are linked to a change request or referenced by a restore are kept (Git history is never rewritten) |
+| `NOM_RETENTION_ALERTS_DAYS` | 180 | `alerts` | row `DELETE` |
 
 Granularity is a month: a partition is dropped when its *upper bound* is older than the
-retention, so up to one extra month is kept. `config_backups`, `alerts`, `compliance_*` and
-`drift_events` have no automatic retention (see sizing notes in
+retention, so up to one extra month is kept. `compliance_*` and `drift_events` have no automatic
+retention (see sizing notes in
 [architecture.md](architecture.md#53-postgresql-sizing-partitioned-log-tables)).
 
 ## Audit trail: append-only trigger and hash chain

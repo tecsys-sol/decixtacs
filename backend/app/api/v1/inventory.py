@@ -15,7 +15,7 @@ from app.api.v1.common import ORM, Page, paginate
 from app.core.security import encrypt_secret
 from app.db.base import utcnow
 from app.models import Credential, Device, DeviceGroup, Link, Platform, Rack, Region, Site, Vendor
-from app.services import audit
+from app.services import audit, metrics
 from app.services.audit import model_snapshot
 
 router = APIRouter(tags=["inventory"])
@@ -465,6 +465,7 @@ def create_device(body: DeviceIn, ctx: Ctx = Depends(require("devices:write"))):
         source_ip=ctx.ip,
     )
     ctx.db.commit()
+    metrics.safe_refresh_device_gauge(ctx.db)
     return ctx.db.scalar(_device_query(ctx).where(Device.id == d.id))
 
 
@@ -501,6 +502,7 @@ def update_device(device_id: uuid.UUID, body: DevicePatch, ctx: Ctx = Depends(re
         source_ip=ctx.ip,
     )
     ctx.db.commit()
+    metrics.safe_refresh_device_gauge(ctx.db)
     return d
 
 
@@ -522,6 +524,7 @@ def delete_device(device_id: uuid.UUID, ctx: Ctx = Depends(require("devices:writ
     )
     ctx.db.delete(d)
     ctx.db.commit()
+    metrics.safe_refresh_device_gauge(ctx.db)
 
 
 # --- device groups ---------------------------------------------------------------------

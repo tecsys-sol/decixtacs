@@ -4,7 +4,7 @@ How NetworkOps Manager collects, normalises, versions, indexes and analyses devi
 configurations (Modules 4, 5, 6, 11 + config intelligence, drift and change-risk analysis), and
 how the platform's own data is backed up.
 
-Code: `backend/app/services/backup/{collector,sanitize,git_store,engine}.py`,
+Code: `backend/app/services/backup/{collector,sfos,sanitize,git_store,engine}.py`, `services/restore.py`,
 `services/{diff,drift,risk}.py`, `services/intel/parser.py`, `workers/tasks.py`.
 
 ## 1. Triggers
@@ -20,10 +20,11 @@ Only devices with `status = active` and `backup_enabled = true` are collected.
 `run_backup_schedule` fans out **one task per 250 devices per tenant**, so a large estate spreads
 over all collect workers (sizing: [architecture.md §5](architecture.md#51-configuration-collection)).
 
-## 2. Collection (Nornir + Scrapli / Netmiko)
+## 2. Collection (Nornir + Scrapli / Netmiko, SFOS XML API)
 
-`nornir_collect()` builds an in-memory Nornir inventory from the targets and runs the threaded
-runner with `NOM_BACKUP_CONCURRENCY` workers (default 50). Per device it uses **Scrapli** when the
+`engine.default_collect()` dispatches per platform: `sfos` targets go to the Sophos XML API
+collector (below), everything else to `nornir_collect()`, which builds an in-memory Nornir
+inventory from the targets and runs the threaded runner with `NOM_BACKUP_CONCURRENCY` workers (default 50). Per device it uses **Scrapli** when the
 platform has a native Scrapli driver, otherwise **Netmiko**, and runs the platform's
 `backup_commands` (data-driven, stored in `platforms`):
 
@@ -34,7 +35,7 @@ platform has a native Scrapli driver, otherwise **Netmiko**, and runs the platfo
 | `ios` (IOS / IOS-XE) | Scrapli `cisco_iosxe` | `show running-config` | yes |
 | `nxos` | Scrapli `cisco_nxos` | `show running-config` | yes |
 | `fortios` | Netmiko `fortinet` | `show` | no |
-| `sfos` | Netmiko `sophos_sfos` | `show` | no |
+| `sfos` | **XML API** (HTTPS, not SSH) | `Get` of `NOM_SFOS_ENTITIES` | no |
 | `routeros` | Netmiko `mikrotik_routeros` | `/export terse` | no |
 | `vyos` | Netmiko `vyos` | `show configuration commands` | no |
 | `linux` | Netmiko `linux` | `cat /etc/network/interfaces; cat /etc/bird/bird.conf` | no |
@@ -45,9 +46,31 @@ restrict the collectors' egress to the management network. Timeouts: 60 s socket
 Failures are recorded per device (`status=failed`, error text) and raise `backup_failed` /
 `device_unreachable` alerts; the rest of the chunk continues.
 
+### Sophos Firewall (SFOS)
+
+SFOS has no usable text running-config over SSH (the console is a menu), so `services/backup/sfos.py`
+uses the XML API: one `POST https://<management_ip>:4444/webconsole/APIController` per firewall
+with a multipart `reqxml` field containing `<Login>` (the device credential's username/password,
+XML-escaped - never in the URL) and a `<Get>` of every entity in the list. Enable the API on the
+firewall (*Backup & firmware > API*) and allow-list the collector workers' source addresses.
+
+| Setting | Default | Per-device override (`devices.custom_fields`) |
+|---|---|---|
+| `NOM_SFOS_ENTITIES` | `Zone,Interface,VLAN,LAG,Alias,UnicastRoute,IPHost,IPHostGroup,FQDNHost,FQDNHostGroup,MACHost,Services,ServiceGroup,FirewallRule,FirewallRuleGroup,NATRule,DNS,DHCPServer,AdminSettings,AuthenticationServer,SNMPCommunity,SyslogServers,User` | `sfos_entities` (list or comma separated) |
+| `NOM_SFOS_API_PORT` | `4444` | `api_port` |
+| `NOM_SFOS_VERIFY_TLS` | `true` | `verify_tls` (set `false` only for the factory self-signed certificate) |
+
+The response is validated (login status, API-level `<Status>` errors, DOCTYPE/ENTITY declarations
+are refused), the `<Login>` block and per-request attributes (`transactionid`, `IPS_CAT_VER`) are
+removed and the document is stored **pretty-printed** (2-space indented XML), so an unchanged
+firewall produces an identical file and diffs are line-oriented. Entity names the firmware does
+not know come back as a per-entity status element and are kept as such (no failure). Collections
+run in a thread pool of `NOM_BACKUP_CONCURRENCY`.
+
 ## 3. Normalisation and sanitisation
 
-`sanitize.prepare(config, platform, NOM_BACKUP_SANITIZE_SECRETS)`:
+`sanitize.prepare(config, platform, sanitize)` where `sanitize` is the tenant setting
+`backup_sanitize_secrets` if present, else `NOM_BACKUP_SANITIZE_SECRETS`:
 
 1. **Volatile lines are stripped** (Oxidized-style) so an unchanged device never produces a
    commit: Junos `## Last commit: ...`, EOS `! Time:` / uptime, IOS `! Last configuration change`,
@@ -55,13 +78,27 @@ Failures are recorded per device (`status=failed`, error text) and raise `backup
    RouterOS export timestamps.
 2. **Secrets are masked** (default on): Junos `encrypted-password`, `authentication-key`, `secret`,
    `$9$` keys; EOS/IOS/NX-OS `secret`, `password`, `key`, SNMP communities; FortiOS `ENC` values;
-   RouterOS/VyOS passwords and keys → `<removed>`.
+   RouterOS/VyOS passwords and keys → `<removed>`; SFOS XML elements whose name contains
+   `Password`, `Passphrase`, `Secret`, `PresharedKey`, `PSK`, `SharedKey`, `PrivateKey`, `AuthKey`
+   → `&lt;removed&gt;` (escaped so the XML stays valid).
 
 Masking makes the repositories safe to share with auditors and NOC staff, at a cost: a masked
 configuration is **not a byte-exact restore source**. A restore of a masked config would push
-`<removed>` placeholders; always review the device-computed diff of the dry run. For tenants that
-rely on full restores, set `NOM_BACKUP_SANITIZE_SECRETS=false` and protect the repositories
-accordingly (the setting is global in the current code).
+`<removed>` placeholders, so the restore API refuses backups containing them (HTTP 422).
+
+**Per-tenant override.** Tenants that need restorable backups keep secrets in Git by setting
+`PATCH /api/v1/tenants/{id}` `{"settings": {"backup_sanitize_secrets": false}}` (platform operators,
+`tenants:admin`; audited as `tenant.update`; `null` removes the override). Their files then contain
+device secrets in the vendor's on-box form (Junos `$9$`/`$6$`, IOS type 7/9, FortiOS `ENC`) - which
+is as good as clear text for type 7 / `$9$`. When any tenant has sanitising off:
+
+* the repository volume (`NOM_BACKUP_REPO_ROOT`) **must be encrypted at rest** (encrypted
+  StorageClass / LUKS / EFS-KMS) and so must every mirror and snapshot of it
+  (`git-mirror-cronjob`, volume snapshots);
+* restrict who can read it (only API/worker pods; no shared NFS export to user hosts); the
+  `configs:read` permission becomes a secrets-read permission for that tenant.
+
+See [security-hardening.md](security-hardening.md#secrets-in-configuration-backups).
 
 ## 4. Per-tenant Git repositories
 
@@ -85,6 +122,11 @@ $NOM_BACKUP_REPO_ROOT/../recordings/<tenant-id>/<uuid>.cast   (session recording
 → **no commit**; the backup row gets `status=unchanged`, `changed=false` and the previous
 `commit_sha`. Different → atomic file replace (`tmp` + `os.replace`), `git add`, commit;
 `status=success`, `changed=true`, `lines_added/removed`, `risk_score`.
+
+Row retention (`apply_retention`, daily): `unchanged` and `failed` rows older than
+`NOM_RETENTION_BACKUP_ROWS_DAYS` (90) are deleted; rows that recorded a change, rows linked to a
+change request and rows referenced by a restore are kept forever (they index the Git history,
+which is never rewritten).
 
 ### Structured commits
 
@@ -121,8 +163,14 @@ requesting user (manual/change) or `networkops-backup`. Accurate attribution the
 command accounting on the devices (see [deployment.md §10](deployment.md#10-onboarding-devices-to-tacacs))
 and NTP-synchronised clocks.
 
-Concurrency: writes to one tenant repository are serialised by an in-process lock; see
-[architecture.md §5.1](architecture.md#51-configuration-collection) for the multi-process caveat.
+Concurrency: writes to one tenant repository are serialised by a thread lock plus an `flock` on
+`.git/nom.lock`, so workers in different processes/pods sharing the RWX volume never interleave
+`git add`/`commit`. Transient failures (a stale `index.lock` left by a killed worker, NFS hiccups:
+`GitCommandError`/`OSError`) make the `backup_devices` task **retry the chunk** with exponential
+backoff (30 s base, max 10 min, jitter, at most 3 retries). Because the database transaction of the
+failed attempt is rolled back while its Git commits are not, the retry detects a device whose Git
+HEAD for the file is a commit the database never recorded and **adopts** it (row `changed=true`,
+diff stats computed against the last recorded commit) instead of recording "unchanged".
 
 ## 5. After each changed backup
 
@@ -172,9 +220,34 @@ get the **device-computed** diff, then abort (dry run) or commit. A real push re
 backup afterwards (`reason: restored to <sha>`). Everything is audited (`config.restore`,
 `config.restore.dry_run`).
 
-Caveats: masked secrets (see §3); Junos backups are stored in `display set` format - verify with a
-dry run in your lab that the replace path of scrapli-cfg accepts it for your Junos version before
-relying on restores.
+Caveats: masked secrets (see §3) are refused.
+
+### Junos: replaying a `display set` backup as a full replace
+
+scrapli-cfg (`scrapli_cfg/platform/core/juniper_junos/sync_platform.py`) writes the candidate to
+`/config/scrapli_cfg_<ts>` with one `echo >> file '<line>'` per line from the root shell and then
+runs, in configuration mode, `load override <file>` when `replace=True`, or `load set <file>` when
+`replace=False, set=True`. `load override` only accepts the hierarchical (curly-brace) format, and
+our backups are `show configuration | display set` - pushing them with `replace=True` fails with
+syntax errors. Decision (`restore.junos_load_plan`):
+
+* **set-format content** (every non-comment line starts with `set`/`delete`/`deactivate`/...):
+  load with `set=True` and prepend a single top-level `delete`. Inside a `load set` file a bare
+  `delete` empties the candidate without the interactive "Delete everything under this level?"
+  prompt, and the following `set` lines rebuild it - a full replace. It is still atomic: nothing is
+  active until `commit`; the dry run shows `show | compare` and then `rollback 0`.
+* **hierarchical content** (imported/hand-made golden configs): `load override` as before.
+* Single quotes in lines (descriptions) are escaped for the `echo '...'` wrapper.
+* The load output is checked for `error:` / `syntax error` / `load complete (N errors)` in addition
+  to scrapli's own failure detection; any error aborts (`rollback 0`) before a diff or commit.
+
+We chose this over also collecting a hierarchical copy (doubling collection time and Git size, two
+sources of truth for diffs/compliance/intel). Unit tests drive the real `ScrapliCfgJunos` with a
+fake connection and replay the generated shell commands to prove the candidate file content.
+**Before relying on restores, run a dry run against a lab box of your Junos release** - device-side
+behaviour of `load set` with a leading `delete` is standard Junos but was not tested against real
+hardware in CI. The pushed configuration contains everything in the backup, including secrets, so
+restores need backups taken with sanitising off (§3).
 
 ## 7. Backing up the platform itself
 

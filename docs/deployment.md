@@ -149,9 +149,39 @@ with `X-Tenant`). For an MSP, create further tenants with `POST /api/v1/tenants`
 classes). After the first login: enable MFA for the admin (`/auth/mfa/setup` + `/auth/mfa/verify`),
 create named accounts, and stop using the bootstrap account.
 
-Other CLI commands: `genkey` (new Fernet key), `rotate-secrets` (re-encrypt with the newest key,
-see [security-hardening.md](security-hardening.md#4-secret-encryption-and-key-rotation)),
-`export-openapi --output openapi.json`.
+`init` also creates/updates the tenant's NetBox / IXP Manager integrations from
+`NOM_NETBOX_URL`/`NOM_NETBOX_TOKEN` and `NOM_IXPMANAGER_URL`/`NOM_IXPMANAGER_API_KEY` when those
+are set (see §9).
+
+Other CLI commands:
+
+| Command | Purpose |
+|---|---|
+| `genkey` | new Fernet key |
+| `rotate-secrets` | re-encrypt with the newest key, see [security-hardening.md](security-hardening.md#4-secret-encryption-and-key-rotation) |
+| `sync-integrations-from-env --tenant <slug>` | create/update the env-managed integrations (§9) for an existing tenant |
+| `seed-demo --tenant <slug> [--force] [--seed N]` | fill a tenant with deterministic demo data (below) |
+| `export-openapi --output openapi.json` | write the OpenAPI document |
+
+### Demo data
+
+`python -m app.cli seed-demo --tenant demo` populates an **existing** tenant through the real
+services: 4 sites, 13 devices (Junos, EOS, IOS, FortiOS) in 4 device groups, a 30-day Git history
+produced by the backup engine with a built-in fake collector (back-dated commits, authors
+correlated from ingested TACACS accounting), compliance runs, 6 change requests in every state
+with pre/post snapshots, a TACACS server with NAS clients, policies and user mappings, 7 days of
+accounting/authentication events, two session recordings, IXP members and route-server clients
+(via the IXP Manager / birdseye sync code with canned payloads), alerts and a golden config. It
+creates the users `alice` (network engineer), `bob` (NOC) and `carol` (change manager) with the
+password `Demo-Passw0rd-2026` - **demo environments only**. It refuses to run when the tenant
+already has devices; `--force` wipes the tenant's inventory, activity, TACACS and IXP data (the
+audit trail and non-demo users are kept) and re-seeds. The RNG is seeded (`--seed`, default 42),
+timestamps are relative to "now". The end-to-end suite uses it:
+
+```bash
+python -m app.cli init --slug demo --name Demo --password '<admin password>' --superuser
+python -m app.cli seed-demo --tenant demo
+```
 
 ## 6. TLS
 
@@ -221,8 +251,9 @@ Register a confidential client with the redirect URI above, scopes `openid profi
 and a `groups` claim in the ID token. The flow is authorization code + PKCE
 (`GET /auth/oidc/authorize` → IdP → `GET /auth/oidc/callback`). Users are matched by `sub`,
 provisioned on first login, and membership of platform groups with `source: "oidc"` follows the
-groups claim. With more than one API replica, enable session affinity for `/api/v1/auth/oidc/*`
-(the PKCE state is kept in process memory - see [high-availability.md](high-availability.md#api)).
+groups claim; groups not sourced from OIDC are never touched. The pending state/PKCE verifier is
+kept in Redis (10 min, single use), so no session affinity is needed with several API replicas
+(see [high-availability.md](high-availability.md#api)).
 
 ## 8. TACACS+ service
 
@@ -259,6 +290,14 @@ groups claim. With more than one API replica, enable session affinity for `/api/
 All integrations are per tenant: `POST /api/v1/integrations` (permission `integrations:write`),
 token stored Fernet-encrypted; syncs run every `NOM_NETBOX_SYNC_MINUTES` and on demand with
 `POST /api/v1/integrations/{id}/sync`.
+
+Bootstrap from the environment: when `NOM_NETBOX_URL` (+ `NOM_NETBOX_TOKEN`) and/or
+`NOM_IXPMANAGER_URL` (+ `NOM_IXPMANAGER_API_KEY`) are set, `python -m app.cli init` and
+`python -m app.cli sync-integrations-from-env --tenant <slug>` create or update the integrations
+named `netbox-env` / `ixpmanager-env` for that tenant (URL and token; options are left alone and
+can be edited in the UI/API). Integrations created through the API are never modified. Running the
+command again after changing a variable rotates the stored token (audited as
+`integration.update`).
 
 ```jsonc
 // NetBox 3.x/4.x - read-only API token (write if push_back is enabled)
@@ -432,6 +471,10 @@ end
 keep working independently of TACACS+.
 
 ### Sophos Firewall (SFOS)
+
+Configuration backups of SFOS use the XML API, not SSH: enable it under *Backup & firmware > API*,
+allow-list the collector workers' addresses and give the device a credential of an API-enabled
+administrator (see [backup-architecture.md](backup-architecture.md#sophos-firewall-sfos)).
 
 SFOS supports TACACS+ for **administrator authentication** (web admin and SSH console); per-command
 authorization and command accounting are not available, so permissions come from the SFOS

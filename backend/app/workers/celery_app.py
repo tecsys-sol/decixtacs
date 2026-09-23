@@ -4,10 +4,12 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import get_settings
+from app.core.redis import celery_redis_config
 
 s = get_settings()
-celery_app = Celery("networkops", broker=s.redis_url, backend=s.redis_url, include=["app.workers.tasks"])
+celery_app = Celery("networkops", include=["app.workers.tasks"])
 celery_app.conf.update(
+    **celery_redis_config(s),  # plain redis:// or sentinel:// + master_name transport options
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_track_started=True,
@@ -29,5 +31,6 @@ celery_app.conf.update(
         "retention-daily": {"task": "app.workers.tasks.apply_retention", "schedule": crontab(hour=3, minute=15)},
         "partitions-daily": {"task": "app.workers.tasks.ensure_partitions", "schedule": crontab(hour=0, minute=10)},
         "reports": {"task": "app.workers.tasks.run_report_schedules", "schedule": crontab(minute=0)},
+        "metrics-refresh": {"task": "app.workers.tasks.refresh_metrics", "schedule": 300.0},
     },
 )

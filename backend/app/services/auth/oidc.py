@@ -57,7 +57,36 @@ def exchange_code(code: str, verifier: str) -> dict:
     )
     r.raise_for_status()
     id_token = r.json()["id_token"]
-    key = jwt.PyJWKClient(d["jwks_uri"]).get_signing_key_from_jwt(id_token)
     return jwt.decode(
-        id_token, key.key, algorithms=["RS256", "ES256", "PS256"], audience=s.oidc_client_id, issuer=d["issuer"]
+        id_token,
+        signing_key(d["jwks_uri"], id_token),
+        algorithms=["RS256", "ES256", "PS256"],
+        audience=s.oidc_client_id,
+        issuer=d["issuer"],
     )
+
+
+def signing_key(jwks_uri: str, id_token: str):
+    """Fetch the provider JWKS over httpx (same proxy/CA handling as the rest) and pick the key
+    matching the token's ``kid``."""
+    r = httpx.get(jwks_uri, timeout=10)
+    r.raise_for_status()
+    kid = jwt.get_unverified_header(id_token).get("kid")
+    keys = [k for k in jwt.PyJWKSet.from_dict(r.json()).keys if kid is None or k.key_id == kid]
+    if not keys:
+        raise jwt.InvalidTokenError(f"no JWKS key matches kid {kid!r}")
+    return keys[0].key
+
+
+STATE_TTL_SECONDS = 600
+_store = None
+
+
+def state_store():
+    """Pending authorisations (state -> PKCE verifier + tenant), shared by all API replicas."""
+    global _store
+    if _store is None:
+        from app.core.redis import EphemeralStore, redis_client
+
+        _store = EphemeralStore("nom:oidc:state:", None if get_settings().environment == "test" else redis_client(0.5))
+    return _store

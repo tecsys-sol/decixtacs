@@ -251,6 +251,12 @@ def list_recordings(
     return paginate(ctx.db, stmt, RecordingOut, limit, offset)
 
 
+@router.get("/sessions/{rec_id}", response_model=RecordingOut)
+def get_recording(rec_id: uuid.UUID, ctx: Ctx = Depends(require("sessions:read"))):
+    """Recording metadata + extracted command index (viewing metadata is not audited; replay is)."""
+    return get_owned(ctx, SessionRecording, rec_id, "recording")
+
+
 @router.get("/sessions/{rec_id}/cast")
 def get_cast(rec_id: uuid.UUID, ctx: Ctx = Depends(require("sessions:read"))):
     rec = get_owned(ctx, SessionRecording, rec_id, "recording")
@@ -529,6 +535,7 @@ def transition_change(change_id: uuid.UUID, body: TransitionIn, ctx: Ctx = Depen
         source_ip=ctx.ip,
     )
     ctx.db.commit()
+    ctx.db.refresh(cr)  # pick up pre/post_backup_ids written by the snapshot task (eager/fast workers)
     return cr
 
 

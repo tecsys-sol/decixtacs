@@ -5,8 +5,16 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import PasswordPolicyError, hash_password, validate_password_policy
-from app.models import ComplianceRule, Platform, Role, RoleBinding, Tenant, User, Vendor
+from app.core.config import get_settings
+from app.core.security import (
+    PasswordPolicyError,
+    decrypt_secret,
+    encrypt_secret,
+    hash_password,
+    validate_password_policy,
+)
+from app.models import ComplianceRule, Integration, Platform, Role, RoleBinding, Tenant, User, Vendor
+from app.services import audit
 from app.services.backup.collector import DEFAULT_PLATFORMS
 from app.services.compliance.engine import DEFAULT_RULES
 from app.services.rbac import seed_rbac
@@ -88,3 +96,51 @@ def create_tenant(
         db.add(ComplianceRule(tenant_id=t.id, **{k: v for k, v in r.items()}))
     db.flush()
     return t
+
+
+# Integration rows managed from NOM_NETBOX_* / NOM_IXPMANAGER_* (bootstrap defaults).
+ENV_INTEGRATIONS = {"netbox": "netbox-env", "ixpmanager": "ixpmanager-env"}
+
+
+def integrations_from_env(db: Session, tenant: Tenant) -> dict[str, str]:
+    """Create/update the tenant's env-managed NetBox / IXP Manager integrations from settings.
+
+    Returns ``{kind: "created"|"updated"|"unchanged"}`` for every kind whose URL is set. Rows are
+    matched on (tenant, kind, name) so integrations created in the UI are never touched.
+    """
+    s = get_settings()
+    wanted = {"netbox": (s.netbox_url, s.netbox_token), "ixpmanager": (s.ixpmanager_url, s.ixpmanager_api_key)}
+    out: dict[str, str] = {}
+    for kind, (url, token) in wanted.items():
+        if not url:
+            continue
+        name = ENV_INTEGRATIONS[kind]
+        row = db.scalar(
+            select(Integration).where(
+                Integration.tenant_id == tenant.id, Integration.kind == kind, Integration.name == name
+            )
+        )
+        if row is None:
+            row = Integration(tenant_id=tenant.id, kind=kind, name=name, base_url=url, options={"managed_by": "env"})
+            row.token_enc = encrypt_secret(token) if token else None
+            db.add(row)
+            out[kind] = "created"
+        elif row.base_url != url or (decrypt_secret(row.token_enc) or "") != token:
+            row.base_url = url
+            row.token_enc = encrypt_secret(token) if token else None
+            out[kind] = "updated"
+        else:
+            out[kind] = "unchanged"
+        if out[kind] != "unchanged":
+            db.flush()
+            audit.record(
+                db,
+                tenant_id=tenant.id,
+                action=f"integration.{out[kind][:-1]}",
+                actor_name="bootstrap",
+                target_type="integration",
+                target_id=row.id,
+                target_name=name,
+                after={"kind": kind, "base_url": url, "source": "environment"},
+            )
+    return out

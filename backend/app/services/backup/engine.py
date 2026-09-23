@@ -6,7 +6,7 @@ import hashlib
 import logging
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
@@ -30,6 +30,7 @@ from app.services.alerting import emit_event
 from app.services.backup.collector import Collector, CollectResult, CollectTarget, nornir_collect
 from app.services.backup.git_store import GitConfigStore
 from app.services.backup.sanitize import prepare
+from app.services.backup.sfos import sfos_collect
 from app.services.drift import compare_golden
 from app.services.intel.parser import parse
 from app.services.risk import analyse_diff
@@ -45,6 +46,27 @@ def store_for(db: Session, tenant_id: uuid.UUID) -> GitConfigStore:
     tenant = db.get(Tenant, tenant_id)
     assert tenant is not None
     return GitConfigStore(get_settings().backup_repo_root, tenant.slug)
+
+
+def sanitize_for(db: Session, tenant_id: uuid.UUID) -> bool:
+    """``Tenant.settings["backup_sanitize_secrets"]`` overrides NOM_BACKUP_SANITIZE_SECRETS. Tenants
+    that turn it off get restorable backups WITH secrets in Git - the repository volume must then be
+    encrypted at rest and access to it restricted (docs/security-hardening.md)."""
+    tenant = db.get(Tenant, tenant_id)
+    override = (tenant.settings or {}).get("backup_sanitize_secrets") if tenant else None
+    return get_settings().backup_sanitize_secrets if override is None else bool(override)
+
+
+# Platforms that are not collected over SSH/Nornir.
+API_COLLECTED = {"sfos"}
+
+
+def default_collect(targets: list[CollectTarget]) -> list[CollectResult]:
+    """Dispatch by platform: SFOS over its XML API, everything else through Nornir (SSH)."""
+    workers = get_settings().backup_concurrency
+    api = [t for t in targets if t.platform == "sfos"]
+    ssh = [t for t in targets if t.platform not in API_COLLECTED]
+    return (nornir_collect(ssh, workers) if ssh else []) + (sfos_collect(api, workers) if api else [])
 
 
 def device_relpath(device: Device) -> str:
@@ -68,6 +90,9 @@ def build_target(device: Device) -> CollectTarget | None:
         password=decrypt_secret(cred.password_enc),
         ssh_key=decrypt_secret(cred.ssh_key_enc),
         enable_secret=decrypt_secret(cred.enable_secret_enc),
+        extras={
+            k: v for k, v in (device.custom_fields or {}).items() if k in ("api_port", "verify_tls", "sfos_entities")
+        },
     )
 
 
@@ -100,7 +125,9 @@ def run_backups(
     reason: str | None = None,
     change_request_id: uuid.UUID | None = None,
     requested_by: str | None = None,
+    at: datetime | None = None,
 ) -> list[ConfigBackup]:
+    """``at`` back-dates the backup rows and Git commits (demo/import tooling only)."""
     q = (
         select(Device)
         .where(Device.tenant_id == tenant_id, Device.backup_enabled, Device.status == "active")
@@ -117,7 +144,7 @@ def run_backups(
         else:
             targets.append(t)
     if targets:
-        results = (collector or (lambda ts: nornir_collect(ts, get_settings().backup_concurrency)))(targets)
+        results = (collector or default_collect)(targets)
         for r in results:
             dev = devices[r.device_id]
             backups.append(
@@ -129,6 +156,7 @@ def run_backups(
                     reason=reason,
                     change_request_id=change_request_id,
                     requested_by=requested_by,
+                    at=at,
                 )
             )
     db.flush()
@@ -174,6 +202,7 @@ def process_result(
     reason: str | None = None,
     change_request_id: uuid.UUID | None = None,
     requested_by: str | None = None,
+    at: datetime | None = None,
 ) -> ConfigBackup:
     platform = device.platform.slug if device.platform else "unknown"
     if not result.ok:
@@ -182,7 +211,7 @@ def process_result(
     metrics.BACKUP_DURATION.labels(platform=platform).observe(result.duration_ms / 1000)
     store = store_for(db, device.tenant_id)
     relpath = device_relpath(device)
-    content = prepare(result.config, platform, get_settings().backup_sanitize_secrets)
+    content = prepare(result.config, platform, sanitize_for(db, device.tenant_id))
     previous = store.read(relpath) or ""
 
     last = db.scalar(
@@ -223,8 +252,20 @@ def process_result(
             "Change-Request": f"CHG-{cr.number}" if cr else "",
             "Trigger": trigger,
         },
+        when=at,
     )
-    now = utcnow()
+    if sha is None:
+        # The file already matches, but if Git HEAD for it is a commit the database never recorded,
+        # an earlier attempt committed and then failed (the task is retried): adopt that commit.
+        head = store.last_commit(relpath)
+        if head and (last is None or last.commit_sha != head):
+            sha = head
+            base = last.commit_sha if last and last.commit_sha else None
+            previous = (store.read(relpath, base) if base else "") or ""
+            info = store.history(relpath, 1)
+            if info:
+                author_name = info[0].author or author_name
+    now = at or utcnow()
     backup = ConfigBackup(
         tenant_id=device.tenant_id,
         device_id=device.id,

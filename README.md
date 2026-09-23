@@ -109,6 +109,7 @@ cd backend
 export NOM_DATABASE_URL=postgresql+psycopg://nom:nom@localhost:5432/nom
 .venv/bin/alembic upgrade head
 .venv/bin/python -m app.cli init --name Dev --slug dev --username admin --superuser
+.venv/bin/python -m app.cli seed-demo --tenant dev              # optional: deterministic demo data
 .venv/bin/uvicorn app.main:app --reload                      # http://localhost:8000/api/docs
 .venv/bin/celery -A app.workers.celery_app worker -B -Q collect,alerts,celery   # jobs (+beat)
 NOM_TEST_DATABASE_URL=postgresql+psycopg://nom:nom@localhost:5432/nom_test .venv/bin/pytest

@@ -87,6 +87,7 @@ class GitConfigStore:
         author_email: str | None,
         subject: str,
         trailers: dict[str, str],
+        when: datetime | None = None,
     ) -> str | None:
         """Write + commit if content changed. Returns the new commit sha, or None if unchanged."""
         with _lock(str(self.path)):
@@ -101,7 +102,9 @@ class GitConfigStore:
             body = "\n".join(f"{k}: {v}" for k, v in trailers.items() if v)
             actor = Actor(author, author_email or f"{author}@networkops.local")
             committer = Actor("NetworkOps Manager", "backup@networkops.local")
-            commit = self.repo.index.commit(f"{subject}\n\n{body}\n", author=actor, committer=committer)
+            raw = f"{int(when.timestamp())} +0000" if when else None  # git "raw" date format
+            dates = {"author_date": raw, "commit_date": raw} if raw else {}
+            commit = self.repo.index.commit(f"{subject}\n\n{body}\n", author=actor, committer=committer, **dates)
             return commit.hexsha
 
     def delete(self, relpath: str, *, author: str, reason: str) -> str | None:

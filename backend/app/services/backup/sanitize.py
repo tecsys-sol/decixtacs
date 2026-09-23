@@ -58,6 +58,15 @@ SECRETS: dict[str, list[tuple[str, str]]] = {
     "fortios": [(r"(set (?:password|passwd|psksecret|secret|key|private-key) )ENC \S+", r"\1ENC <removed>")],
     "routeros": [(r"((?:password|secret|authentication-key)=)\S+", r"\1<removed>")],
     "vyos": [(r"((?:encrypted-password|password|secret|key) )\S+", r"\1<removed>")],
+    # SFOS XML: any element whose name says it holds a secret (Password, EncryptedPassword,
+    # PresharedKey, SharedSecret, Passphrase, PrivateKey ...). Escaped so the XML stays valid.
+    "sfos": [
+        (
+            r"(?i)(<(\w*(?:password|passphrase|secret|presharedkey|psk|sharedkey|privatekey|authkey)\w*)>)"
+            r"[^<]*(</\2>)",
+            r"\1&lt;removed&gt;\3",
+        )
+    ],
 }
 
 

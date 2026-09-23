@@ -6,6 +6,8 @@ import secrets
 import uuid
 from datetime import datetime
 
+import httpx
+import jwt
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -101,10 +103,9 @@ def logout(body: RefreshIn, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=MeOut)
 def me(ctx: Ctx = Depends(get_ctx)):
-    out = MeOut.model_validate(ctx.user)
-    out.permissions = sorted(ctx.principal.permissions)
-    out.groups = [g.name for g in ctx.user.groups]
-    return out
+    u = ctx.user
+    fields = {k: getattr(u, k) for k in MeOut.model_fields if k not in ("permissions", "groups")}
+    return MeOut(**fields, permissions=sorted(ctx.principal.permissions), groups=[g.name for g in u.groups])
 
 
 class PasswordChangeIn(BaseModel):
@@ -190,8 +191,6 @@ def mfa_verify(body: OtpIn, ctx: Ctx = Depends(get_ctx)):
 
 # --- OIDC ----------------------------------------------------------------------
 
-_pending: dict[str, tuple[str, str | None]] = {}  # state -> (verifier, tenant); use Redis in multi-replica setups
-
 
 @router.get("/oidc/authorize")
 def oidc_authorize(tenant: str | None = None):
@@ -199,23 +198,37 @@ def oidc_authorize(tenant: str | None = None):
         raise HTTPException(404, "OIDC not enabled")
     state = secrets.token_urlsafe(24)
     url, verifier = oidc.authorize_url(state)
-    _pending[state] = (verifier, tenant)
+    oidc.state_store().put(state, {"verifier": verifier, "tenant": tenant}, oidc.STATE_TTL_SECONDS)
     return {"authorization_url": url, "state": state}
 
 
 @router.get("/oidc/callback", response_model=TokenOut)
 def oidc_callback(code: str, state: str, request: Request, db: Session = Depends(get_db)):
     s = get_settings()
-    if state not in _pending:
-        raise HTTPException(400, "unknown state")
-    verifier, tenant_slug = _pending.pop(state)
-    claims = oidc.exchange_code(code, verifier)
-    tenant = login_svc.resolve_tenant(db, tenant_slug)
+    if not s.oidc_enabled:
+        raise HTTPException(404, "OIDC not enabled")
+    pending = oidc.state_store().pop(state)  # one-time use
+    if pending is None:
+        raise HTTPException(400, "unknown or expired state")
+    try:
+        tenant = login_svc.resolve_tenant(db, pending.get("tenant"))
+    except login_svc.AuthError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        claims = oidc.exchange_code(code, pending["verifier"])
+    except (httpx.HTTPError, jwt.PyJWTError, KeyError) as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "OIDC code exchange failed") from e
     username = claims.get("preferred_username") or claims.get("email") or claims["sub"]
     user = db.scalar(select(User).where(User.tenant_id == tenant.id, User.external_id == claims["sub"]))
     if user is None:
+        clash = db.scalar(select(User).where(User.tenant_id == tenant.id, User.username == username))
+        if clash is not None:
+            # never silently take over an existing (local/LDAP) account by username
+            raise HTTPException(409, "username already belongs to a non-SSO account; ask an admin to link it")
         user = User(tenant_id=tenant.id, username=username, auth_source="oidc", external_id=claims["sub"])
         db.add(user)
+    elif not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")
     user.email = claims.get("email") or user.email
     user.full_name = claims.get("name") or user.full_name
     groups = claims.get(s.oidc_groups_claim) or []
@@ -233,7 +246,7 @@ def oidc_callback(code: str, state: str, request: Request, db: Session = Depends
         request.client.host if request.client else None,
         request.headers.get("user-agent"),
     )
-    audit.record(db, tenant_id=tenant.id, action="auth.login", actor=user, after={"method": "oidc"})
+    audit.record(db, tenant_id=tenant.id, action="auth.login", actor=user, after={"method": "oidc", "groups": groups})
     pair = login_svc.issue_tokens(db, user)
     db.commit()
     return _tok(pair)

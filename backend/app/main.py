@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.api.v1 import activity, auth, configs, inventory, ops, tacacs, users
 from app.core.config import get_settings
 from app.core.ratelimit import RateLimiter, RateLimitMiddleware
+from app.core.redis import redis_client
 from app.services import metrics
 
 log = logging.getLogger("nom")
@@ -49,7 +50,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(s.redis_url if s.environment != "test" else None))
+    app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(redis_client(0.2) if s.environment != "test" else None))
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -86,11 +87,26 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz", include_in_schema=False)
     def readyz():
+        """Not ready only when PostgreSQL is unreachable. Redis being down degrades the API (rate
+        limits and OIDC state fall back to per-process memory, async jobs cannot be queued) but
+        does not take the pod out of the load balancer."""
+        from app.core import redis as nom_redis
         from app.db.session import engine
 
-        with engine.connect() as c:
-            c.execute(text("SELECT 1"))
-        return {"status": "ready"}
+        checks = {"database": "ok", "redis": "disabled" if s.environment == "test" else nom_redis.ping()}
+        try:
+            with engine.connect() as c:
+                c.execute(text("SELECT 1"))
+        except Exception:  # noqa: BLE001
+            log.warning("readiness: database unreachable", exc_info=True)
+            checks["database"] = "down"
+        degraded = checks["redis"] == "down"
+        body = {
+            "status": "ready" if checks["database"] == "ok" else "unavailable",
+            "degraded": degraded,
+            "checks": checks,
+        }
+        return JSONResponse(body, status_code=200 if checks["database"] == "ok" else 503)
 
     return app
 

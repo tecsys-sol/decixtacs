@@ -11,28 +11,24 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.redis import Breaker
 
 log = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    def __init__(self, redis_url: str | None):
-        self._mem: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
-        self._redis = None
-        if redis_url:
-            try:
-                import redis
+    """``client`` comes from :func:`app.core.redis.redis_client` (plain or Sentinel master). While
+    Redis is unreachable the limiter counts per process and retries Redis after a cool-down."""
 
-                self._redis = redis.Redis.from_url(redis_url, socket_timeout=0.2, socket_connect_timeout=0.2)
-                self._redis.ping()
-            except Exception:  # noqa: BLE001
-                log.warning("rate limiter: redis unavailable, using per-process memory")
-                self._redis = None
+    def __init__(self, client=None):
+        self._mem: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
+        self._redis = client
+        self._breaker = Breaker(30)
 
     def hit(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         bucket = int(time.time() // window)
         k = f"rl:{key}:{bucket}"
-        if self._redis is not None:
+        if self._redis is not None and self._breaker.closed:
             try:
                 pipe = self._redis.pipeline()
                 pipe.incr(k)
@@ -40,7 +36,8 @@ class RateLimiter:
                 count = int(pipe.execute()[0])
                 return count <= limit, max(limit - count, 0)
             except Exception:  # noqa: BLE001
-                log.debug("rate limiter: redis error, falling back to memory", exc_info=True)
+                log.warning("rate limiter: redis unavailable, counting per process for 30s", exc_info=True)
+                self._breaker.trip()
         b, count = self._mem[key]
         count = count + 1 if b == bucket else 1
         self._mem[key] = (bucket, count)
