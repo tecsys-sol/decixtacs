@@ -41,9 +41,7 @@ def validate_password_policy(password: str, username: str | None = None) -> None
     problems: list[str] = []
     if len(password) < s.password_min_length:
         problems.append(f"must be at least {s.password_min_length} characters")
-    classes = sum(
-        bool(re.search(p, password)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^a-zA-Z0-9]")
-    )
+    classes = sum(bool(re.search(p, password)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^a-zA-Z0-9]"))
     if classes < s.password_require_classes:
         problems.append(f"must contain at least {s.password_require_classes} character classes")
     if username and username.lower() in password.lower():

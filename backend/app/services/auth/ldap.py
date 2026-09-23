@@ -33,8 +33,12 @@ def authenticate(username: str, password: str) -> LdapIdentity | None:
     server = Server(s.ldap_uri, get_info=ALL, connect_timeout=5)
     try:
         svc = Connection(server, user=s.ldap_bind_dn, password=s.ldap_bind_password, auto_bind=True, receive_timeout=10)
-        svc.search(s.ldap_user_base, s.ldap_user_filter.format(username=_escape(username)), SUBTREE,
-                   attributes=["mail", "displayName", "cn", s.ldap_group_attr])
+        svc.search(
+            s.ldap_user_base,
+            s.ldap_user_filter.format(username=_escape(username)),
+            SUBTREE,
+            attributes=["mail", "displayName", "cn", s.ldap_group_attr],
+        )
         if len(svc.entries) != 1:
             return None
         entry = svc.entries[0]
@@ -43,7 +47,7 @@ def authenticate(username: str, password: str) -> LdapIdentity | None:
     except LDAPException:
         return None
     groups = []
-    for gdn in (entry[s.ldap_group_attr].values if s.ldap_group_attr in entry else []):
+    for gdn in entry[s.ldap_group_attr].values if s.ldap_group_attr in entry else []:
         cn = str(gdn).split(",")[0]
         groups.append(cn.split("=", 1)[1] if "=" in cn else cn)
     return LdapIdentity(

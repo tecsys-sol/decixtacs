@@ -120,8 +120,17 @@ def run_backups(
         results = (collector or (lambda ts: nornir_collect(ts, get_settings().backup_concurrency)))(targets)
         for r in results:
             dev = devices[r.device_id]
-            backups.append(process_result(db, dev, r, trigger=trigger, reason=reason,
-                                          change_request_id=change_request_id, requested_by=requested_by))
+            backups.append(
+                process_result(
+                    db,
+                    dev,
+                    r,
+                    trigger=trigger,
+                    reason=reason,
+                    change_request_id=change_request_id,
+                    requested_by=requested_by,
+                )
+            )
     db.flush()
     return backups
 
@@ -131,13 +140,28 @@ def _record_failure(db: Session, device: Device, error: str, trigger: str) -> Co
     db.add(b)
     device.last_backup_status = "failed"
     metrics.BACKUPS.labels(status="failed", platform=device.platform.slug if device.platform else "unknown").inc()
-    emit_event(db, device.tenant_id, "backup_failed", severity="medium", title=f"Backup failed: {device.hostname}",
-               body=error, device_id=device.id, dedup_key=f"backup_failed:{device.id}")
+    emit_event(
+        db,
+        device.tenant_id,
+        "backup_failed",
+        severity="medium",
+        title=f"Backup failed: {device.hostname}",
+        body=error,
+        device_id=device.id,
+        dedup_key=f"backup_failed:{device.id}",
+    )
     if re.search(r"timed? ?out|unreachable|no route|refused", error, re.I):
         device.reachability = "down"
-        emit_event(db, device.tenant_id, "device_unreachable", severity="high",
-                   title=f"Device unreachable: {device.hostname}", body=error, device_id=device.id,
-                   dedup_key=f"unreachable:{device.id}")
+        emit_event(
+            db,
+            device.tenant_id,
+            "device_unreachable",
+            severity="high",
+            title=f"Device unreachable: {device.hostname}",
+            body=error,
+            device_id=device.id,
+            dedup_key=f"unreachable:{device.id}",
+        )
     return b
 
 
@@ -162,20 +186,28 @@ def process_result(
     previous = store.read(relpath) or ""
 
     last = db.scalar(
-        select(ConfigBackup).where(ConfigBackup.device_id == device.id, ConfigBackup.status != "failed")
-        .order_by(ConfigBackup.collected_at.desc()).limit(1)
+        select(ConfigBackup)
+        .where(ConfigBackup.device_id == device.id, ConfigBackup.status != "failed")
+        .order_by(ConfigBackup.collected_at.desc())
+        .limit(1)
     )
     # Correlate against accounting since the last *change* we recorded (log timestamps are only
     # second-precise, so using the last unchanged poll could miss the commit).
     last_change = db.scalar(
-        select(ConfigBackup.collected_at).where(ConfigBackup.device_id == device.id, ConfigBackup.changed)
-        .order_by(ConfigBackup.collected_at.desc()).limit(1)
+        select(ConfigBackup.collected_at)
+        .where(ConfigBackup.device_id == device.id, ConfigBackup.changed)
+        .order_by(ConfigBackup.collected_at.desc())
+        .limit(1)
     )
     since = (last_change - timedelta(seconds=1)) if last_change else utcnow() - timedelta(days=1)
     author, commit_comment = correlate_author(db, device, since)
     cr = db.get(ChangeRequest, change_request_id) if change_request_id else None
-    why = reason or (f"CHG-{cr.number}: {cr.title}" if cr else None) or commit_comment or (
-        "Configuration change detected" if previous else "Initial backup")
+    why = (
+        reason
+        or (f"CHG-{cr.number}: {cr.title}" if cr else None)
+        or commit_comment
+        or ("Configuration change detected" if previous else "Initial backup")
+    )
     author_name = author or requested_by or "networkops-backup"
 
     sha = store.write(
@@ -226,10 +258,16 @@ def process_result(
         check_golden_drift(db, device, content)
         if previous and not cr and trigger != "change":
             # A change nobody announced through a change request - surface it.
-            emit_event(db, device.tenant_id, "config_drift", severity="low",
-                       title=f"Unplanned config change on {device.hostname} by {author_name}",
-                       body=f"+{backup.lines_added} / -{backup.lines_removed} lines. {why}",
-                       device_id=device.id, dedup_key=f"unplanned:{device.id}:{sha}")
+            emit_event(
+                db,
+                device.tenant_id,
+                "config_drift",
+                severity="low",
+                title=f"Unplanned config change on {device.hostname} by {author_name}",
+                body=f"+{backup.lines_added} / -{backup.lines_removed} lines. {why}",
+                device_id=device.id,
+                dedup_key=f"unplanned:{device.id}:{sha}",
+            )
     return backup
 
 
@@ -237,8 +275,14 @@ def reindex(db: Session, device: Device, content: str, backup_id: uuid.UUID | No
     db.execute(delete(ConfigIndexEntry).where(ConfigIndexEntry.device_id == device.id))
     objs = parse(content, device.platform.slug if device.platform else "")
     db.add_all(
-        ConfigIndexEntry(tenant_id=device.tenant_id, device_id=device.id, backup_id=backup_id,
-                         kind=o.kind, key=o.key[:255], attributes=o.attributes)
+        ConfigIndexEntry(
+            tenant_id=device.tenant_id,
+            device_id=device.id,
+            backup_id=backup_id,
+            kind=o.kind,
+            key=o.key[:255],
+            attributes=o.attributes,
+        )
         for o in objs
     )
     return len(objs)
@@ -257,7 +301,14 @@ def check_golden_drift(db: Session, device: Device, content: str) -> list[DriftE
             db.add(ev)
             events.append(ev)
             metrics.DRIFT_EVENTS.labels(kind="backup_vs_golden").inc()
-            emit_event(db, device.tenant_id, "config_drift", severity="medium",
-                       title=f"{device.hostname} drifted from golden config '{gc.name}'",
-                       body=res.diff[:4000], device_id=device.id, dedup_key=f"golden:{device.id}:{gc.id}")
+            emit_event(
+                db,
+                device.tenant_id,
+                "config_drift",
+                severity="medium",
+                title=f"{device.hostname} drifted from golden config '{gc.name}'",
+                body=res.diff[:4000],
+                device_id=device.id,
+                dedup_key=f"golden:{device.id}:{gc.id}",
+            )
     return events

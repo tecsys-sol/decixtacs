@@ -15,25 +15,85 @@ log = logging.getLogger(__name__)
 
 # Default recipes, seeded into the ``platforms`` table.
 DEFAULT_PLATFORMS: list[dict] = [
-    {"slug": "junos", "name": "Juniper Junos", "vendor": "juniper", "scrapli": "juniper_junos",
-     "netmiko": "juniper_junos", "commands": ["show configuration | display set | no-more"],
-     "tacacs_service": "junos-exec", "replace": True},
-    {"slug": "eos", "name": "Arista EOS", "vendor": "arista", "scrapli": "arista_eos", "netmiko": "arista_eos",
-     "commands": ["show running-config"], "replace": True},
-    {"slug": "ios", "name": "Cisco IOS / IOS-XE", "vendor": "cisco", "scrapli": "cisco_iosxe", "netmiko": "cisco_ios",
-     "commands": ["show running-config"], "replace": True},
-    {"slug": "nxos", "name": "Cisco NX-OS", "vendor": "cisco", "scrapli": "cisco_nxos", "netmiko": "cisco_nxos",
-     "commands": ["show running-config"], "replace": True},
-    {"slug": "fortios", "name": "Fortinet FortiOS", "vendor": "fortinet", "scrapli": None, "netmiko": "fortinet",
-     "commands": ["show"], "tacacs_service": "fortigate"},
-    {"slug": "sfos", "name": "Sophos SFOS", "vendor": "sophos", "scrapli": None, "netmiko": "sophos_sfos",
-     "commands": ["show"]},
-    {"slug": "routeros", "name": "MikroTik RouterOS", "vendor": "mikrotik", "scrapli": None,
-     "netmiko": "mikrotik_routeros", "commands": ["/export terse"], "supports_tacacs": False},
-    {"slug": "vyos", "name": "VyOS", "vendor": "vyos", "scrapli": None, "netmiko": "vyos",
-     "commands": ["show configuration commands"]},
-    {"slug": "linux", "name": "Linux", "vendor": "linux", "scrapli": None, "netmiko": "linux",
-     "commands": ["cat /etc/network/interfaces 2>/dev/null; cat /etc/bird/bird.conf 2>/dev/null"]},
+    {
+        "slug": "junos",
+        "name": "Juniper Junos",
+        "vendor": "juniper",
+        "scrapli": "juniper_junos",
+        "netmiko": "juniper_junos",
+        "commands": ["show configuration | display set | no-more"],
+        "tacacs_service": "junos-exec",
+        "replace": True,
+    },
+    {
+        "slug": "eos",
+        "name": "Arista EOS",
+        "vendor": "arista",
+        "scrapli": "arista_eos",
+        "netmiko": "arista_eos",
+        "commands": ["show running-config"],
+        "replace": True,
+    },
+    {
+        "slug": "ios",
+        "name": "Cisco IOS / IOS-XE",
+        "vendor": "cisco",
+        "scrapli": "cisco_iosxe",
+        "netmiko": "cisco_ios",
+        "commands": ["show running-config"],
+        "replace": True,
+    },
+    {
+        "slug": "nxos",
+        "name": "Cisco NX-OS",
+        "vendor": "cisco",
+        "scrapli": "cisco_nxos",
+        "netmiko": "cisco_nxos",
+        "commands": ["show running-config"],
+        "replace": True,
+    },
+    {
+        "slug": "fortios",
+        "name": "Fortinet FortiOS",
+        "vendor": "fortinet",
+        "scrapli": None,
+        "netmiko": "fortinet",
+        "commands": ["show"],
+        "tacacs_service": "fortigate",
+    },
+    {
+        "slug": "sfos",
+        "name": "Sophos SFOS",
+        "vendor": "sophos",
+        "scrapli": None,
+        "netmiko": "sophos_sfos",
+        "commands": ["show"],
+    },
+    {
+        "slug": "routeros",
+        "name": "MikroTik RouterOS",
+        "vendor": "mikrotik",
+        "scrapli": None,
+        "netmiko": "mikrotik_routeros",
+        "commands": ["/export terse"],
+        "supports_tacacs": False,
+    },
+    {
+        "slug": "vyos",
+        "name": "VyOS",
+        "vendor": "vyos",
+        "scrapli": None,
+        "netmiko": "vyos",
+        "commands": ["show configuration commands"],
+    },
+    {
+        "slug": "linux",
+        "name": "Linux",
+        "vendor": "linux",
+        "scrapli": None,
+        "netmiko": "linux",
+        "commands": ["cat /etc/network/interfaces 2>/dev/null; cat /etc/bird/bird.conf 2>/dev/null"],
+    },
 ]
 
 
@@ -119,7 +179,9 @@ def nornir_collect(targets: list[CollectTarget], workers: int = 50, timeout: int
             conn = task.host.get_connection("netmiko", task.nornir.config)
             for cmd in t.commands:
                 outputs.append(conn.send_command(cmd, read_timeout=timeout))
-        return Result(host=task.host, result={"config": "\n".join(outputs), "ms": int((time.monotonic() - start) * 1000)})
+        return Result(
+            host=task.host, result={"config": "\n".join(outputs), "ms": int((time.monotonic() - start) * 1000)}
+        )
 
     agg = nr.run(task=collect)
     results = []

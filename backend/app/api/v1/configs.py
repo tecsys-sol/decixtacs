@@ -8,8 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-from sqlalchemy import cast, select, String
-from sqlalchemy.orm import selectinload
+from sqlalchemy import String, cast, select
 
 from app.api.deps import Ctx, get_owned, require
 from app.api.v1.common import ORM, Page, paginate
@@ -64,10 +63,19 @@ def _device(ctx: Ctx, device_id: uuid.UUID, permission: str = "configs:read") ->
 
 
 @router.get("/backups", response_model=Page[BackupOut])
-def list_backups(device_id: uuid.UUID | None = None, status: str | None = None, changed_only: bool = False,
-                 author: str | None = None, since: datetime | None = None, limit: int = Query(50, le=500),
-                 offset: int = 0, ctx: Ctx = Depends(require("configs:read"))):
-    stmt = select(ConfigBackup).where(ConfigBackup.tenant_id == ctx.tenant_id).order_by(ConfigBackup.collected_at.desc())
+def list_backups(
+    device_id: uuid.UUID | None = None,
+    status: str | None = None,
+    changed_only: bool = False,
+    author: str | None = None,
+    since: datetime | None = None,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("configs:read")),
+):
+    stmt = (
+        select(ConfigBackup).where(ConfigBackup.tenant_id == ctx.tenant_id).order_by(ConfigBackup.collected_at.desc())
+    )
     visible = visible_devices_filter(ctx, select(Device.id).where(Device.tenant_id == ctx.tenant_id), "configs:read")
     stmt = stmt.where(ConfigBackup.device_id.in_(visible))
     if device_id:
@@ -96,17 +104,36 @@ def trigger_backup(body: BackupRequest, ctx: Ctx = Depends(require("configs:back
         _device(ctx, did, "configs:backup")
     if body.change_request_id:
         get_owned(ctx, ChangeRequest, body.change_request_id, "change request")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="config.backup_requested", actor=ctx.user,
-                 after={"devices": [str(d) for d in body.device_ids] or "all", "reason": body.reason}, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="config.backup_requested",
+        actor=ctx.user,
+        after={"devices": [str(d) for d in body.device_ids] or "all", "reason": body.reason},
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     if body.run_async:
         from app.workers.tasks import backup_devices
 
-        job = backup_devices.delay(str(ctx.tenant_id), [str(d) for d in body.device_ids], "manual", body.reason,
-                                   str(body.change_request_id) if body.change_request_id else None, ctx.user.username)
+        job = backup_devices.delay(
+            str(ctx.tenant_id),
+            [str(d) for d in body.device_ids],
+            "manual",
+            body.reason,
+            str(body.change_request_id) if body.change_request_id else None,
+            ctx.user.username,
+        )
         return {"task_id": job.id}
-    backups = run_backups(ctx.db, ctx.tenant_id, body.device_ids or None, trigger="manual", reason=body.reason,
-                          change_request_id=body.change_request_id, requested_by=ctx.user.username)
+    backups = run_backups(
+        ctx.db,
+        ctx.tenant_id,
+        body.device_ids or None,
+        trigger="manual",
+        reason=body.reason,
+        change_request_id=body.change_request_id,
+        requested_by=ctx.user.username,
+    )
     ctx.db.commit()
     return {"backups": [BackupOut.model_validate(b) for b in backups]}
 
@@ -138,8 +165,14 @@ class DiffOut(BaseModel):
 
 
 @router.get("/devices/{device_id}/diff", response_model=DiffOut)
-def device_diff(device_id: uuid.UUID, old: str, new: str = "HEAD", context: int = 3, include_inline: bool = False,
-                ctx: Ctx = Depends(require("configs:read"))):
+def device_diff(
+    device_id: uuid.UUID,
+    old: str,
+    new: str = "HEAD",
+    context: int = 3,
+    include_inline: bool = False,
+    ctx: Ctx = Depends(require("configs:read")),
+):
     """Diff two Git revisions (commit sha, ``HEAD~1`` ...) of a device configuration."""
     d = _device(ctx, device_id)
     store = store_for(ctx.db, ctx.tenant_id)
@@ -150,17 +183,32 @@ def device_diff(device_id: uuid.UUID, old: str, new: str = "HEAD", context: int 
     uni = diffsvc.unified(a, b, f"{d.hostname}@{old[:10]}", f"{d.hostname}@{new[:10]}", context)
     st = diffsvc.stats(a, b)
     r = analyse_diff(uni)
-    return DiffOut(old_rev=old, new_rev=new, unified=uni, side_by_side=diffsvc.side_by_side(a, b, context),
-                   inline=diffsvc.inline(a, b) if include_inline else None, added=st.added, removed=st.removed,
-                   risk={"score": r.score, "level": r.level, "findings": r.findings, "summary": r.summary})
+    return DiffOut(
+        old_rev=old,
+        new_rev=new,
+        unified=uni,
+        side_by_side=diffsvc.side_by_side(a, b, context),
+        inline=diffsvc.inline(a, b) if include_inline else None,
+        added=st.added,
+        removed=st.removed,
+        risk={"score": r.score, "level": r.level, "findings": r.findings, "summary": r.summary},
+    )
 
 
 @router.delete("/backups/{backup_id}", status_code=204)
 def delete_backup(backup_id: uuid.UUID, ctx: Ctx = Depends(require("configs:delete"))):
     """Deletes the backup record (Git history is immutable and kept for forensic purposes)."""
     b = get_owned(ctx, ConfigBackup, backup_id, "backup")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="config.delete", actor=ctx.user, target_type="config_backup",
-                 target_id=b.id, before={"device_id": str(b.device_id), "commit": b.commit_sha}, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="config.delete",
+        actor=ctx.user,
+        target_type="config_backup",
+        target_id=b.id,
+        before={"device_id": str(b.device_id), "commit": b.commit_sha},
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(b)
     ctx.db.commit()
 
@@ -204,7 +252,11 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
 
         tenant = ctx.db.get(Tenant, ctx.tenant_id)
         if (tenant.settings or {}).get("restore_requires_change", True):
-            cr = get_owned(ctx, ChangeRequest, body.change_request_id, "change request") if body.change_request_id else None
+            cr = (
+                get_owned(ctx, ChangeRequest, body.change_request_id, "change request")
+                if body.change_request_id
+                else None
+            )
             if cr is None or cr.state != "approved" or str(d.id) not in [str(x) for x in cr.device_ids]:
                 raise HTTPException(409, "an approved change request covering this device is required")
     if not (d.platform and d.platform.supports_config_replace):
@@ -213,24 +265,52 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
     if target is None:
         raise HTTPException(422, "device has no credential/platform")
     config = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), b.commit_sha)
-    r = ConfigRestore(tenant_id=ctx.tenant_id, device_id=d.id, backup_id=b.id, requested_by=ctx.user.id,
-                      change_request_id=body.change_request_id, dry_run=body.dry_run)
+    r = ConfigRestore(
+        tenant_id=ctx.tenant_id,
+        device_id=d.id,
+        backup_id=b.id,
+        requested_by=ctx.user.id,
+        change_request_id=body.change_request_id,
+        dry_run=body.dry_run,
+    )
     if not body.dry_run:
-        pre = run_backups(ctx.db, ctx.tenant_id, [d.id], trigger="change", reason=f"pre-restore snapshot",
-                          change_request_id=body.change_request_id, requested_by=ctx.user.username)
+        pre = run_backups(
+            ctx.db,
+            ctx.tenant_id,
+            [d.id],
+            trigger="change",
+            reason="pre-restore snapshot",
+            change_request_id=body.change_request_id,
+            requested_by=ctx.user.username,
+        )
         r.pre_restore_backup_id = pre[0].id if pre else None
     outcome = scrapli_cfg_push(target, config or "", body.dry_run)
     r.device_diff, r.output = outcome.device_diff, outcome.output
     r.status = ("diffed" if body.dry_run else "pushed") if outcome.ok else "failed"
     ctx.db.add(r)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="config.restore" + (".dry_run" if body.dry_run else ""),
-                 actor=ctx.user, target_type="device", target_id=d.id, target_name=d.hostname,
-                 after={"commit": b.commit_sha, "status": r.status}, outcome="success" if outcome.ok else "failure",
-                 source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="config.restore" + (".dry_run" if body.dry_run else ""),
+        actor=ctx.user,
+        target_type="device",
+        target_id=d.id,
+        target_name=d.hostname,
+        after={"commit": b.commit_sha, "status": r.status},
+        outcome="success" if outcome.ok else "failure",
+        source_ip=ctx.ip,
+    )
     if not body.dry_run and outcome.ok:
-        run_backups(ctx.db, ctx.tenant_id, [d.id], trigger="change", reason=f"restored to {b.commit_sha[:10]}",
-                    change_request_id=body.change_request_id, requested_by=ctx.user.username)
+        run_backups(
+            ctx.db,
+            ctx.tenant_id,
+            [d.id],
+            trigger="change",
+            reason=f"restored to {b.commit_sha[:10]}",
+            change_request_id=body.change_request_id,
+            requested_by=ctx.user.username,
+        )
     ctx.db.commit()
     return r
 
@@ -268,8 +348,16 @@ def create_golden(body: GoldenIn, ctx: Ctx = Depends(require("compliance:write")
     g = GoldenConfig(tenant_id=ctx.tenant_id, **body.model_dump())
     ctx.db.add(g)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="golden_config.create", actor=ctx.user,
-                 target_type="golden_config", target_id=g.id, target_name=g.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="golden_config.create",
+        actor=ctx.user,
+        target_type="golden_config",
+        target_id=g.id,
+        target_name=g.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return g
 
@@ -277,8 +365,16 @@ def create_golden(body: GoldenIn, ctx: Ctx = Depends(require("compliance:write")
 @router.delete("/golden-configs/{golden_id}", status_code=204)
 def delete_golden(golden_id: uuid.UUID, ctx: Ctx = Depends(require("compliance:write"))):
     g = get_owned(ctx, GoldenConfig, golden_id, "golden config")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="golden_config.delete", actor=ctx.user,
-                 target_type="golden_config", target_id=g.id, target_name=g.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="golden_config.delete",
+        actor=ctx.user,
+        target_type="golden_config",
+        target_id=g.id,
+        target_name=g.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(g)
     ctx.db.commit()
 
@@ -293,10 +389,18 @@ class DriftOut(ORM):
 
 
 @router.get("/drift", response_model=Page[DriftOut])
-def list_drift(resolved: bool = False, device_id: uuid.UUID | None = None, limit: int = Query(50, le=500),
-               offset: int = 0, ctx: Ctx = Depends(require("configs:read"))):
-    stmt = select(DriftEvent).where(DriftEvent.tenant_id == ctx.tenant_id, DriftEvent.resolved.is_(resolved)) \
+def list_drift(
+    resolved: bool = False,
+    device_id: uuid.UUID | None = None,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("configs:read")),
+):
+    stmt = (
+        select(DriftEvent)
+        .where(DriftEvent.tenant_id == ctx.tenant_id, DriftEvent.resolved.is_(resolved))
         .order_by(DriftEvent.detected_at.desc())
+    )
     if device_id:
         stmt = stmt.where(DriftEvent.device_id == device_id)
     return paginate(ctx.db, stmt, DriftOut, limit, offset)
@@ -305,10 +409,10 @@ def list_drift(resolved: bool = False, device_id: uuid.UUID | None = None, limit
 @router.post("/devices/{device_id}/drift-check")
 def drift_check(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:backup"))):
     """Collect the running config now and compare it with the last backup (without committing)."""
+    from app.core.config import get_settings
     from app.services.backup.collector import nornir_collect
     from app.services.backup.sanitize import prepare
     from app.services.drift import compare_running
-    from app.core.config import get_settings
 
     d = _device(ctx, device_id, "configs:backup")
     target = build_target(d)
@@ -339,8 +443,11 @@ class IndexOut(ORM):
 
 @router.get("/config-search", response_model=list[IndexOut])
 def config_search(
-    kind: str | None = Query(None, description="bgp_neighbor|bgp_group|community|community_value|prefix_list|"
-                                                "firewall_filter|policy|interface|vlan|routing_instance"),
+    kind: str | None = Query(
+        None,
+        description="bgp_neighbor|bgp_group|community|community_value|prefix_list|"
+        "firewall_filter|policy|interface|vlan|routing_instance",
+    ),
     key: str | None = Query(None, description="exact key, or prefix with trailing *"),
     peer_as: int | None = Query(None, description="BGP neighbours with this ASN"),
     community: str | None = Query(None, description="devices using this community value, e.g. 65000:100"),
@@ -349,8 +456,11 @@ def config_search(
     ctx: Ctx = Depends(require("configs:read")),
 ):
     """Examples: ``?community=65000:100``, ``?peer_as=13335``, ``?kind=prefix_list&key=XYZ``."""
-    stmt = select(ConfigIndexEntry, Device.hostname).join(Device, Device.id == ConfigIndexEntry.device_id) \
+    stmt = (
+        select(ConfigIndexEntry, Device.hostname)
+        .join(Device, Device.id == ConfigIndexEntry.device_id)
         .where(ConfigIndexEntry.tenant_id == ctx.tenant_id)
+    )
     visible = visible_devices_filter(ctx, select(Device.id).where(Device.tenant_id == ctx.tenant_id), "configs:read")
     stmt = stmt.where(ConfigIndexEntry.device_id.in_(visible))
     if community:
@@ -361,9 +471,13 @@ def config_search(
     elif kind:
         stmt = stmt.where(ConfigIndexEntry.kind == kind)
     if key:
-        stmt = stmt.where(ConfigIndexEntry.key.like(key[:-1] + "%") if key.endswith("*") else ConfigIndexEntry.key == key)
+        stmt = stmt.where(
+            ConfigIndexEntry.key.like(key[:-1] + "%") if key.endswith("*") else ConfigIndexEntry.key == key
+        )
     if text:
-        stmt = stmt.where(ConfigIndexEntry.key.ilike(f"%{text}%") | cast(ConfigIndexEntry.attributes, String).ilike(f"%{text}%"))
+        stmt = stmt.where(
+            ConfigIndexEntry.key.ilike(f"%{text}%") | cast(ConfigIndexEntry.attributes, String).ilike(f"%{text}%")
+        )
     out = []
     for entry, hostname in ctx.db.execute(stmt.limit(limit if peer_as is None else limit * 10)):
         if peer_as is not None and entry.attributes.get("peer_as") != peer_as:
@@ -409,7 +523,9 @@ class RuleOut(RuleIn, ORM):
 
 @router.get("/compliance/rules", response_model=list[RuleOut])
 def list_rules(ctx: Ctx = Depends(require("compliance:read"))):
-    return ctx.db.scalars(select(ComplianceRule).where(ComplianceRule.tenant_id == ctx.tenant_id).order_by(ComplianceRule.name)).all()
+    return ctx.db.scalars(
+        select(ComplianceRule).where(ComplianceRule.tenant_id == ctx.tenant_id).order_by(ComplianceRule.name)
+    ).all()
 
 
 def _validate_rule(body: RuleIn) -> None:
@@ -428,9 +544,17 @@ def create_rule(body: RuleIn, ctx: Ctx = Depends(require("compliance:write"))):
     r = ComplianceRule(tenant_id=ctx.tenant_id, **body.model_dump())
     ctx.db.add(r)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="compliance.rule.create", actor=ctx.user,
-                 target_type="compliance_rule", target_id=r.id, target_name=r.name,
-                 after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="compliance.rule.create",
+        actor=ctx.user,
+        target_type="compliance_rule",
+        target_id=r.id,
+        target_name=r.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return r
 
@@ -442,9 +566,18 @@ def update_rule(rule_id: uuid.UUID, body: RuleIn, ctx: Ctx = Depends(require("co
     before = RuleOut.model_validate(r).model_dump(mode="json")
     for k, v in body.model_dump().items():
         setattr(r, k, v)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="compliance.rule.update", actor=ctx.user,
-                 target_type="compliance_rule", target_id=r.id, target_name=r.name, before=before,
-                 after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="compliance.rule.update",
+        actor=ctx.user,
+        target_type="compliance_rule",
+        target_id=r.id,
+        target_name=r.name,
+        before=before,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return r
 
@@ -452,8 +585,16 @@ def update_rule(rule_id: uuid.UUID, body: RuleIn, ctx: Ctx = Depends(require("co
 @router.delete("/compliance/rules/{rule_id}", status_code=204)
 def delete_rule(rule_id: uuid.UUID, ctx: Ctx = Depends(require("compliance:write"))):
     r = get_owned(ctx, ComplianceRule, rule_id, "rule")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="compliance.rule.delete", actor=ctx.user,
-                 target_type="compliance_rule", target_id=r.id, target_name=r.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="compliance.rule.delete",
+        actor=ctx.user,
+        target_type="compliance_rule",
+        target_id=r.id,
+        target_name=r.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(r)
     ctx.db.commit()
 
@@ -471,35 +612,53 @@ def run_now(ctx: Ctx = Depends(require("compliance:write"))):
     from app.services.compliance.runner import run_compliance
 
     run = run_compliance(ctx.db, ctx.tenant_id)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="compliance.run", actor=ctx.user,
-                 after={"score": run.score, "devices": run.devices_checked}, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="compliance.run",
+        actor=ctx.user,
+        after={"score": run.score, "devices": run.devices_checked},
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return run
 
 
 @router.get("/compliance/runs", response_model=list[RunOut])
 def list_runs(limit: int = Query(30, le=365), ctx: Ctx = Depends(require("compliance:read"))):
-    return ctx.db.scalars(select(ComplianceRun).where(ComplianceRun.tenant_id == ctx.tenant_id)
-                          .order_by(ComplianceRun.started_at.desc()).limit(limit)).all()
+    return ctx.db.scalars(
+        select(ComplianceRun)
+        .where(ComplianceRun.tenant_id == ctx.tenant_id)
+        .order_by(ComplianceRun.started_at.desc())
+        .limit(limit)
+    ).all()
 
 
 @router.get("/compliance/runs/{run_id}")
 def run_detail(run_id: uuid.UUID, ctx: Ctx = Depends(require("compliance:read"))):
     run = get_owned(ctx, ComplianceRun, run_id, "run")
-    scores = ctx.db.execute(select(DeviceComplianceScore, Device.hostname).join(Device, Device.id == DeviceComplianceScore.device_id)
-                            .where(DeviceComplianceScore.run_id == run.id).order_by(DeviceComplianceScore.score)).all()
+    scores = ctx.db.execute(
+        select(DeviceComplianceScore, Device.hostname)
+        .join(Device, Device.id == DeviceComplianceScore.device_id)
+        .where(DeviceComplianceScore.run_id == run.id)
+        .order_by(DeviceComplianceScore.score)
+    ).all()
     failures = ctx.db.execute(
         select(ComplianceResult, ComplianceRule.name, ComplianceRule.severity, Device.hostname)
         .join(ComplianceRule, ComplianceRule.id == ComplianceResult.rule_id)
         .join(Device, Device.id == ComplianceResult.device_id)
-        .where(ComplianceResult.run_id == run.id, ComplianceResult.passed.is_(False)).limit(5000)).all()
+        .where(ComplianceResult.run_id == run.id, ComplianceResult.passed.is_(False))
+        .limit(5000)
+    ).all()
     by_rule: dict[str, int] = {}
     for _, name, _, _ in failures:
         by_rule[name] = by_rule.get(name, 0) + 1
     return {
         "run": RunOut.model_validate(run),
-        "devices": [{"device_id": str(s.device_id), "hostname": h, "score": s.score, "passed": s.passed,
-                     "failed": s.failed} for s, h in scores],
+        "devices": [
+            {"device_id": str(s.device_id), "hostname": h, "score": s.score, "passed": s.passed, "failed": s.failed}
+            for s, h in scores
+        ],
         "failures": [{"device": h, "rule": n, "severity": sev, "detail": r.detail} for r, n, sev, h in failures],
         "failures_by_rule": by_rule,
     }

@@ -2,7 +2,8 @@
 
 The file/syslog destinations configured by the generator emit tab separated records::
 
-    2026-09-23 10:01:02 +0000<TAB>10.0.0.1<TAB>shashank<TAB>ssh<TAB>192.0.2.10<TAB>stop<TAB>task_id=7<TAB>service=shell<TAB>cmd=show version <cr>
+    2026-09-23 10:01:02 +0000<TAB>10.0.0.1<TAB>shashank<TAB>ssh<TAB>192.0.2.10<TAB>stop
+        <TAB>task_id=7<TAB>service=shell<TAB>cmd=show version <cr>   (one line)
 
 Field layout differs slightly between versions and between the accounting and authorization logs,
 so the parser is positional for the fixed prefix (time, NAS, user, port, client, record type) and

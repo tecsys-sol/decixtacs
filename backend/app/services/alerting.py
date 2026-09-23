@@ -22,8 +22,15 @@ log = logging.getLogger(__name__)
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 EVENT_TYPES = {
-    "backup_failed", "device_unreachable", "unauthorized_command", "compliance_failure",
-    "config_drift", "login_failed", "tacacs_deploy_failed", "change_approved", "sync_failed",
+    "backup_failed",
+    "device_unreachable",
+    "unauthorized_command",
+    "compliance_failure",
+    "config_drift",
+    "login_failed",
+    "tacacs_deploy_failed",
+    "change_approved",
+    "sync_failed",
 }
 
 
@@ -41,25 +48,36 @@ def emit_event(
 ) -> Alert | None:
     """Record an alert and queue delivery for matching rules. Returns None if suppressed by throttling."""
     rules = [
-        r for r in db.scalars(
-            select(AlertRule).where(AlertRule.tenant_id == tenant_id, AlertRule.event_type == event_type, AlertRule.enabled)
+        r
+        for r in db.scalars(
+            select(AlertRule).where(
+                AlertRule.tenant_id == tenant_id, AlertRule.event_type == event_type, AlertRule.enabled
+            )
         )
         if SEVERITY_ORDER.get(severity, 0) >= SEVERITY_ORDER.get(r.min_severity, 0)
     ]
     throttle = max([r.throttle_minutes for r in rules], default=15)
     if dedup_key:
         recent = db.scalar(
-            select(Alert.id).where(
+            select(Alert.id)
+            .where(
                 Alert.tenant_id == tenant_id,
                 Alert.dedup_key == dedup_key,
                 Alert.created_at >= utcnow() - timedelta(minutes=throttle),
-            ).limit(1)
+            )
+            .limit(1)
         )
         if recent:
             return None
     alert = Alert(
-        tenant_id=tenant_id, event_type=event_type, severity=severity, title=title, body=body,
-        device_id=device_id, dedup_key=dedup_key, delivered=[],
+        tenant_id=tenant_id,
+        event_type=event_type,
+        severity=severity,
+        title=title,
+        body=body,
+        device_id=device_id,
+        dedup_key=dedup_key,
+        delivered=[],
     )
     db.add(alert)
     db.flush()
@@ -92,25 +110,31 @@ def deliver_now(db: Session, alert: Alert, channel_ids: list[uuid.UUID]) -> list
 def send(kind: str, target: str, title: str, body: str, severity: str) -> None:
     text = f"[{severity.upper()}] {title}"
     if kind == "slack":
-        payload = {"text": text, "blocks": [
-            {"type": "header", "text": {"type": "plain_text", "text": text[:150]}},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"```{body[:2900]}```" if body else " "}},
-        ]}
+        payload = {
+            "text": text,
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": text[:150]}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"```{body[:2900]}```" if body else " "}},
+            ],
+        }
         httpx.post(target, json=payload, timeout=10).raise_for_status()
     elif kind == "teams":
         payload = {
             "type": "message",
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard", "version": "1.4",
-                    "body": [
-                        {"type": "TextBlock", "text": text, "weight": "Bolder", "wrap": True},
-                        {"type": "TextBlock", "text": body[:4000], "wrap": True, "fontType": "Monospace"},
-                    ],
-                },
-            }],
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {"type": "TextBlock", "text": text, "weight": "Bolder", "wrap": True},
+                            {"type": "TextBlock", "text": body[:4000], "wrap": True, "fontType": "Monospace"},
+                        ],
+                    },
+                }
+            ],
         }
         httpx.post(target, json=payload, timeout=10).raise_for_status()
     elif kind == "webhook":

@@ -36,7 +36,7 @@ def create_app() -> FastAPI:
         title=s.app_name,
         version="1.0.0",
         description="Network Access & Configuration Management Platform - TACACS+ AAA, config backup, "
-                    "compliance, accounting and change management for ISPs, IXPs and MSPs.",
+        "compliance, accounting and change management for ISPs, IXPs and MSPs.",
         openapi_tags=TAGS,
         docs_url="/api/docs",
         redoc_url="/api/redoc",
@@ -57,8 +57,9 @@ def create_app() -> FastAPI:
         start = time.perf_counter()
         response: Response = await call_next(request)
         route = request.scope.get("route")
-        metrics.HTTP_REQUESTS.labels(request.method, getattr(route, "path", "unmatched"),
-                                     str(response.status_code)).observe(time.perf_counter() - start)
+        metrics.HTTP_REQUESTS.labels(
+            request.method, getattr(route, "path", "unmatched"), str(response.status_code)
+        ).observe(time.perf_counter() - start)
         response.headers["X-Request-ID"] = rid
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"

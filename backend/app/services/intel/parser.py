@@ -74,8 +74,10 @@ def parse_junos_set(config: str) -> list[IndexObject]:
                     unit["addresses"].append(rest[3])
         elif t[0] == "protocols" and len(t) > 3 and t[1] == "bgp" and t[2] == "group":
             gname = t[3]
-            grp = groups.setdefault((ri, gname), {"routing_instance": ri, "type": None, "peer_as": None,
-                                                  "import": [], "export": [], "neighbors": 0})
+            grp = groups.setdefault(
+                (ri, gname),
+                {"routing_instance": ri, "type": None, "peer_as": None, "import": [], "export": [], "neighbors": 0},
+            )
             rest = t[4:]
             if rest[:1] == ["type"] and len(rest) > 1:
                 grp["type"] = rest[1]
@@ -85,8 +87,17 @@ def parse_junos_set(config: str) -> list[IndexObject]:
                 grp[rest[0]].extend(x for x in rest[1:] if x not in "[]")
             elif rest[:1] == ["neighbor"] and len(rest) > 1:
                 nkey = (ri, gname, rest[1])
-                nb = neighbors.setdefault(nkey, {"group": gname, "routing_instance": ri, "peer_as": None,
-                                                 "description": None, "import": [], "export": []})
+                nb = neighbors.setdefault(
+                    nkey,
+                    {
+                        "group": gname,
+                        "routing_instance": ri,
+                        "peer_as": None,
+                        "description": None,
+                        "import": [],
+                        "export": [],
+                    },
+                )
                 nrest = rest[2:]
                 if nrest[:1] == ["peer-as"] and len(nrest) > 1:
                     nb["peer_as"] = _int(nrest[1])
@@ -132,10 +143,10 @@ def parse_junos_set(config: str) -> list[IndexObject]:
         for unit, u in d["units"].items():
             if u["vlan"]:
                 out.append(IndexObject("vlan", str(u["vlan"]), {"interface": f"{name}.{unit}", **u}))
-    for (ri, gname, _addr) in neighbors:
+    for ri, gname, _addr in neighbors:
         if (ri, gname) in groups:
             groups[(ri, gname)]["neighbors"] += 1
-    for (ri, gname), g in groups.items():
+    for (_ri, gname), g in groups.items():
         out.append(IndexObject("bgp_group", gname, g))
     for (ri, gname, addr), nb in neighbors.items():
         if nb["peer_as"] is None:
@@ -197,7 +208,9 @@ def parse_ios_like(config: str) -> list[IndexObject]:
             continue
         if local_as is not None and (m := re.match(r"^vrf (\S+)", line)):
             vrf = m.group(1)
-        elif local_as is not None and (m := re.match(r"^neighbor (\S+) (remote-as|peer group|peer-group|description) ?(.*)$", line)):
+        elif local_as is not None and (
+            m := re.match(r"^neighbor (\S+) (remote-as|peer group|peer-group|description) ?(.*)$", line)
+        ):
             addr, attr, val = m.groups()
             if attr == "remote-as":
                 nb = neighbors.setdefault((vrf, addr), {"routing_instance": vrf, "local_as": local_as})
@@ -208,7 +221,7 @@ def parse_ios_like(config: str) -> list[IndexObject]:
                 neighbors.setdefault((vrf, addr), {"routing_instance": vrf, "local_as": local_as})["group"] = val
             elif attr == "description":
                 neighbors.setdefault((vrf, addr), {"routing_instance": vrf, "local_as": local_as})["description"] = val
-    for (vrf_, addr), nb in neighbors.items():
+    for (_vrf, addr), nb in neighbors.items():
         if addr in peer_groups:
             out.append(IndexObject("bgp_group", addr, nb))
         else:

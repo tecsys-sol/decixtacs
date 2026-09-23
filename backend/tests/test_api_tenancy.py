@@ -39,11 +39,15 @@ def test_abac_site_scoped_binding(admin, client):
     s1 = admin.post("/api/v1/sites", json={"name": "Bangalore", "slug": "blr"}).json()
     s2 = admin.post("/api/v1/sites", json={"name": "Mumbai", "slug": "bom"}).json()
     admin.post("/api/v1/devices", json={"hostname": "blr-r1", "management_ip": "10.0.0.1", "site_id": s1["id"]})
-    d2 = admin.post("/api/v1/devices", json={"hostname": "bom-r1", "management_ip": "10.0.0.2", "site_id": s2["id"]}).json()
+    d2 = admin.post(
+        "/api/v1/devices", json={"hostname": "bom-r1", "management_ip": "10.0.0.2", "site_id": s2["id"]}
+    ).json()
     roles = {r["name"]: r["id"] for r in admin.get("/api/v1/roles").json()}
     u = admin.post("/api/v1/users", json={"username": "blr-eng", "password": "Bangal0re-Eng!x"}).json()
-    r = admin.post("/api/v1/role-bindings", json={"role_id": roles["network-engineer"], "user_id": u["id"],
-                                                  "scope_type": "site", "scope_id": s1["id"]})
+    r = admin.post(
+        "/api/v1/role-bindings",
+        json={"role_id": roles["network-engineer"], "user_id": u["id"], "scope_type": "site", "scope_id": s1["id"]},
+    )
     assert r.status_code == 201
     c = as_user(client, "blr-eng", "Bangal0re-Eng!x")
     names = [d["hostname"] for d in c.get("/api/v1/devices").json()["items"]]

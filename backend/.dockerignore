@@ -1,0 +1,23 @@
+# Keep the build context small and never ship local secrets or state into the image.
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+tests/
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.log
+*.cfg.tmp

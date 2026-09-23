@@ -41,8 +41,17 @@ VENDORS = {"juniper", "cisco", "arista", "fortinet", "sophos", "mikrotik", "gene
 
 
 def _audit(ctx: Ctx, action: str, obj, name: str, **kw):
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action=action, actor=ctx.user, target_type=obj.__tablename__,
-                 target_id=obj.id, target_name=name, source_ip=ctx.ip, **kw)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action=action,
+        actor=ctx.user,
+        target_type=obj.__tablename__,
+        target_id=obj.id,
+        target_name=name,
+        source_ip=ctx.ip,
+        **kw,
+    )
 
 
 # --- servers ------------------------------------------------------------------------
@@ -125,7 +134,9 @@ class NasOut(ORM):
 
 @router.get("/devices", response_model=list[NasOut])
 def list_nas(ctx: Ctx = Depends(require("tacacs:read"))):
-    return ctx.db.scalars(select(TacacsDevice).where(TacacsDevice.tenant_id == ctx.tenant_id).order_by(TacacsDevice.name)).all()
+    return ctx.db.scalars(
+        select(TacacsDevice).where(TacacsDevice.tenant_id == ctx.tenant_id).order_by(TacacsDevice.name)
+    ).all()
 
 
 @router.post("/devices", response_model=NasOut, status_code=201)
@@ -135,8 +146,12 @@ def create_nas(body: NasIn, ctx: Ctx = Depends(require("tacacs:write"))):
     if body.device_group_id:
         get_owned(ctx, DeviceGroup, body.device_group_id, "device group")
     key = body.key or secrets.token_urlsafe(24)
-    n = TacacsDevice(tenant_id=ctx.tenant_id, key_enc=encrypt_secret(key), key_rotated_at=utcnow(),
-                     **body.model_dump(exclude={"key"}))
+    n = TacacsDevice(
+        tenant_id=ctx.tenant_id,
+        key_enc=encrypt_secret(key),
+        key_rotated_at=utcnow(),
+        **body.model_dump(exclude={"key"}),
+    )
     ctx.db.add(n)
     ctx.db.flush()
     _audit(ctx, "tacacs.device.create", n, n.name, after=body.model_dump(mode="json", exclude={"key"}))
@@ -156,13 +171,26 @@ def import_from_inventory(device_group_id: uuid.UUID | None = None, ctx: Ctx = D
         if d.id in have:
             continue
         vendor = d.vendor.slug if d.vendor and d.vendor.slug in VENDORS else "generic"
-        n = TacacsDevice(tenant_id=ctx.tenant_id, name=d.hostname, address=d.management_ip, device_id=d.id,
-                         vendor=vendor, key_enc=encrypt_secret(secrets.token_urlsafe(24)), key_rotated_at=utcnow())
+        n = TacacsDevice(
+            tenant_id=ctx.tenant_id,
+            name=d.hostname,
+            address=d.management_ip,
+            device_id=d.id,
+            vendor=vendor,
+            key_enc=encrypt_secret(secrets.token_urlsafe(24)),
+            key_rotated_at=utcnow(),
+        )
         ctx.db.add(n)
         created.append(n)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="tacacs.device.import", actor=ctx.user,
-                 after={"created": len(created)}, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="tacacs.device.import",
+        actor=ctx.user,
+        after={"created": len(created)},
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return created
 
@@ -268,8 +296,12 @@ def _apply_policy(ctx: Ctx, p: TacacsPolicy, body: PolicyIn) -> None:
 
 @router.get("/policies", response_model=list[PolicyOut])
 def list_policies(ctx: Ctx = Depends(require("tacacs:read"))):
-    return ctx.db.scalars(select(TacacsPolicy).where(TacacsPolicy.tenant_id == ctx.tenant_id)
-                          .options(selectinload(TacacsPolicy.command_rules)).order_by(TacacsPolicy.priority)).all()
+    return ctx.db.scalars(
+        select(TacacsPolicy)
+        .where(TacacsPolicy.tenant_id == ctx.tenant_id)
+        .options(selectinload(TacacsPolicy.command_rules))
+        .order_by(TacacsPolicy.priority)
+    ).all()
 
 
 @router.post("/policies", response_model=PolicyOut, status_code=201)
@@ -331,7 +363,10 @@ def _mapping_out(m: TacacsUserMapping) -> MappingOut:
 
 @router.get("/users", response_model=list[MappingOut])
 def list_mappings(ctx: Ctx = Depends(require("tacacs:read"))):
-    return [_mapping_out(m) for m in ctx.db.scalars(select(TacacsUserMapping).where(TacacsUserMapping.tenant_id == ctx.tenant_id))]
+    return [
+        _mapping_out(m)
+        for m in ctx.db.scalars(select(TacacsUserMapping).where(TacacsUserMapping.tenant_id == ctx.tenant_id))
+    ]
 
 
 @router.post("/users", response_model=MappingOut, status_code=201)
@@ -341,8 +376,14 @@ def create_mapping(body: MappingIn, ctx: Ctx = Depends(require("tacacs:write")))
     u = get_owned(ctx, User, body.user_id, "user")
     if body.auth_method not in ("crypt", "ldap"):
         raise HTTPException(422, "auth_method must be crypt or ldap")
-    m = TacacsUserMapping(tenant_id=ctx.tenant_id, user_id=u.id, tacacs_username=body.tacacs_username or u.username,
-                          auth_method=body.auth_method, enabled=body.enabled, valid_until=body.valid_until)
+    m = TacacsUserMapping(
+        tenant_id=ctx.tenant_id,
+        user_id=u.id,
+        tacacs_username=body.tacacs_username or u.username,
+        auth_method=body.auth_method,
+        enabled=body.enabled,
+        valid_until=body.valid_until,
+    )
     if body.password:
         try:
             validate_password_policy(body.password, u.username)
@@ -395,19 +436,30 @@ def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
     s = get_owned(ctx, TacacsServer, server_id, "server")
     r = render_for_tenant(ctx.db, ctx.tenant_id, s)
     if r.sha256 == s.config_sha256:
-        rev = ctx.db.scalar(select(TacacsConfigRevision).where(TacacsConfigRevision.server_id == s.id)
-                            .order_by(TacacsConfigRevision.version.desc()).limit(1))
+        rev = ctx.db.scalar(
+            select(TacacsConfigRevision)
+            .where(TacacsConfigRevision.server_id == s.id)
+            .order_by(TacacsConfigRevision.version.desc())
+            .limit(1)
+        )
         if rev:
             return rev
     s.config_version += 1
     s.config_sha256 = r.sha256
     s.last_deployed_at = utcnow()
-    rev = TacacsConfigRevision(tenant_id=ctx.tenant_id, server_id=s.id, version=s.config_version, sha256=r.sha256,
-                               content=redact_keys(r.content), generated_by=ctx.user.id)
+    rev = TacacsConfigRevision(
+        tenant_id=ctx.tenant_id,
+        server_id=s.id,
+        version=s.config_version,
+        sha256=r.sha256,
+        content=redact_keys(r.content),
+        generated_by=ctx.user.id,
+    )
     ctx.db.add(rev)
     ctx.db.flush()
-    _audit(ctx, "tacacs.deploy", s, s.name, after={"version": s.config_version, "sha256": r.sha256,
-                                                    "warnings": r.warnings})
+    _audit(
+        ctx, "tacacs.deploy", s, s.name, after={"version": s.config_version, "sha256": r.sha256, "warnings": r.warnings}
+    )
     ctx.db.commit()
     return rev
 
@@ -415,8 +467,12 @@ def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
 @router.get("/servers/{server_id}/revisions", response_model=list[RevisionOut])
 def revisions(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:read"))):
     get_owned(ctx, TacacsServer, server_id, "server")
-    return ctx.db.scalars(select(TacacsConfigRevision).where(TacacsConfigRevision.server_id == server_id)
-                          .order_by(TacacsConfigRevision.version.desc()).limit(100)).all()
+    return ctx.db.scalars(
+        select(TacacsConfigRevision)
+        .where(TacacsConfigRevision.server_id == server_id)
+        .order_by(TacacsConfigRevision.version.desc())
+        .limit(100)
+    ).all()
 
 
 # --- agent (runs next to tac_plus-ng) ---------------------------------------------------------
@@ -431,8 +487,11 @@ def _agent_server(db: Session, authorization: str | None) -> TacacsServer:
 
 
 @router.get("/agent/config", response_class=PlainTextResponse, include_in_schema=True)
-def agent_config(authorization: str | None = Header(default=None), if_none_match: str | None = Header(default=None),
-                 db: Session = Depends(get_db)):
+def agent_config(
+    authorization: str | None = Header(default=None),
+    if_none_match: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
     s = _agent_server(db, authorization)
     r = render_for_tenant(db, s.tenant_id, s)
     if s.config_sha256 is None:
@@ -458,9 +517,15 @@ def agent_heartbeat(body: HeartbeatIn, authorization: str | None = Header(defaul
     if body.status != "ok":
         from app.services.alerting import emit_event
 
-        emit_event(db, s.tenant_id, "tacacs_deploy_failed", severity="critical",
-                   title=f"tac_plus-ng on {s.name} rejected configuration", body=body.message,
-                   dedup_key=f"tacdeploy:{s.id}:{body.running_sha256}")
+        emit_event(
+            db,
+            s.tenant_id,
+            "tacacs_deploy_failed",
+            severity="critical",
+            title=f"tac_plus-ng on {s.name} rejected configuration",
+            body=body.message,
+            dedup_key=f"tacdeploy:{s.id}:{body.running_sha256}",
+        )
     db.commit()
 
 
@@ -479,9 +544,18 @@ class AuthEventOut(ORM):
 
 
 @router.get("/events", response_model=Page[AuthEventOut])
-def auth_events(username: str | None = None, result: str | None = None, limit: int = Query(100, le=1000),
-                offset: int = 0, ctx: Ctx = Depends(require("accounting:read"))):
-    stmt = select(TacacsAuthEvent).where(TacacsAuthEvent.tenant_id == ctx.tenant_id).order_by(TacacsAuthEvent.timestamp.desc())
+def auth_events(
+    username: str | None = None,
+    result: str | None = None,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("accounting:read")),
+):
+    stmt = (
+        select(TacacsAuthEvent)
+        .where(TacacsAuthEvent.tenant_id == ctx.tenant_id)
+        .order_by(TacacsAuthEvent.timestamp.desc())
+    )
     if username:
         stmt = stmt.where(TacacsAuthEvent.username == username)
     if result:

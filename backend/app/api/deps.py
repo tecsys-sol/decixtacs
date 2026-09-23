@@ -46,8 +46,9 @@ def get_principal(
     db: Session = Depends(get_db),
 ) -> Principal:
     if creds is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required",
-                            headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "authentication required", headers={"WWW-Authenticate": "Bearer"}
+        )
     token = creds.credentials
     if token.startswith("nomt_"):
         api = db.scalar(select(ApiToken).where(ApiToken.token_hash == sha256(token), ApiToken.revoked.is_(False)))
@@ -62,8 +63,9 @@ def get_principal(
     try:
         payload = decode_access_token(token)
     except jwt.PyJWTError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired token",
-                            headers={"WWW-Authenticate": "Bearer"}) from exc
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "invalid or expired token", headers={"WWW-Authenticate": "Bearer"}
+        ) from exc
     user = _load_user(db, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")
@@ -85,9 +87,13 @@ def get_ctx(
         if t is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "tenant not found")
         tenant_id = t.id
-    return Ctx(db=db, principal=principal, tenant_id=tenant_id,
-               ip=request.client.host if request.client else None,
-               request_id=request.headers.get("X-Request-ID"))
+    return Ctx(
+        db=db,
+        principal=principal,
+        tenant_id=tenant_id,
+        ip=request.client.host if request.client else None,
+        request_id=request.headers.get("X-Request-ID"),
+    )
 
 
 def require(*permissions: str) -> Callable[[Ctx], Ctx]:

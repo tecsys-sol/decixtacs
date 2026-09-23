@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -74,8 +75,11 @@ def search_commands(
     if device:
         stmt = stmt.where(or_(CommandLog.device_name == device, CommandLog.device_address == device))
     if command:
-        stmt = stmt.where(CommandLog.command.regexp_match(command[1:]) if command.startswith("~")
-                          else CommandLog.command.ilike(f"%{command}%"))
+        stmt = stmt.where(
+            CommandLog.command.regexp_match(command[1:])
+            if command.startswith("~")
+            else CommandLog.command.ilike(f"%{command}%")
+        )
     if result:
         stmt = stmt.where(CommandLog.result == result)
     if start:
@@ -112,13 +116,22 @@ def accounting_top(days: int = 7, ctx: Ctx = Depends(require("accounting:read"))
 
     since = utcnow() - timedelta(days=days)
     base = select().where(CommandLog.tenant_id == ctx.tenant_id, CommandLog.timestamp >= since)
-    users = ctx.db.execute(base.add_columns(CommandLog.username, func.count().label("n"))
-                           .group_by(CommandLog.username).order_by(func.count().desc()).limit(10)).all()
-    devices = ctx.db.execute(base.add_columns(func.coalesce(CommandLog.device_name, CommandLog.device_address),
-                                              func.count()).group_by(func.coalesce(CommandLog.device_name, CommandLog.device_address))
-                             .order_by(func.count().desc()).limit(10)).all()
-    return {"users": [{"user": u, "commands": n} for u, n in users],
-            "devices": [{"device": d, "commands": n} for d, n in devices]}
+    users = ctx.db.execute(
+        base.add_columns(CommandLog.username, func.count().label("n"))
+        .group_by(CommandLog.username)
+        .order_by(func.count().desc())
+        .limit(10)
+    ).all()
+    devices = ctx.db.execute(
+        base.add_columns(func.coalesce(CommandLog.device_name, CommandLog.device_address), func.count())
+        .group_by(func.coalesce(CommandLog.device_name, CommandLog.device_address))
+        .order_by(func.count().desc())
+        .limit(10)
+    ).all()
+    return {
+        "users": [{"user": u, "commands": n} for u, n in users],
+        "devices": [{"device": d, "commands": n} for d, n in devices],
+    }
 
 
 # --- session recordings -------------------------------------------------------------------
@@ -193,10 +206,19 @@ async def upload_recording(
     path.write_bytes(data)
     dev = db.scalar(select(Device).where(Device.tenant_id == server.tenant_id, Device.management_ip == device_address))
     ts = started_at or (datetime.fromtimestamp(header["timestamp"]) if header.get("timestamp") else None)
-    rec = SessionRecording(id=rid, tenant_id=server.tenant_id, username=username, device_id=dev.id if dev else None,
-                           device_address=device_address, source_address=source_address, duration_s=duration,
-                           storage_uri=f"file://{path}", size_bytes=len(data),
-                           sha256=hashlib.sha256(data).hexdigest(), commands=commands)
+    rec = SessionRecording(
+        id=rid,
+        tenant_id=server.tenant_id,
+        username=username,
+        device_id=dev.id if dev else None,
+        device_address=device_address,
+        source_address=source_address,
+        duration_s=duration,
+        storage_uri=f"file://{path}",
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        commands=commands,
+    )
     if ts:
         rec.started_at = ts
     db.add(rec)
@@ -205,11 +227,21 @@ async def upload_recording(
 
 
 @router.get("/sessions", response_model=Page[RecordingOut])
-def list_recordings(user: str | None = None, device_id: uuid.UUID | None = None, command: str | None = None,
-                    limit: int = Query(50, le=500), offset: int = 0, ctx: Ctx = Depends(require("sessions:read"))):
+def list_recordings(
+    user: str | None = None,
+    device_id: uuid.UUID | None = None,
+    command: str | None = None,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("sessions:read")),
+):
     from sqlalchemy import String, cast
 
-    stmt = select(SessionRecording).where(SessionRecording.tenant_id == ctx.tenant_id).order_by(SessionRecording.started_at.desc())
+    stmt = (
+        select(SessionRecording)
+        .where(SessionRecording.tenant_id == ctx.tenant_id)
+        .order_by(SessionRecording.started_at.desc())
+    )
     if user:
         stmt = stmt.where(SessionRecording.username == user)
     if device_id:
@@ -222,9 +254,16 @@ def list_recordings(user: str | None = None, device_id: uuid.UUID | None = None,
 @router.get("/sessions/{rec_id}/cast")
 def get_cast(rec_id: uuid.UUID, ctx: Ctx = Depends(require("sessions:read"))):
     rec = get_owned(ctx, SessionRecording, rec_id, "recording")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="session.replay", actor=ctx.user,
-                 target_type="session_recording", target_id=rec.id, target_name=f"{rec.username}@{rec.device_address}",
-                 source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="session.replay",
+        actor=ctx.user,
+        target_type="session_recording",
+        target_id=rec.id,
+        target_name=f"{rec.username}@{rec.device_address}",
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     if not rec.storage_uri.startswith("file://"):
         raise HTTPException(501, "object-storage backends are served via pre-signed URLs")
@@ -249,15 +288,24 @@ class AuditOut(ORM):
 
 
 @router.get("/audit", response_model=Page[AuditOut])
-def list_audit(actor: str | None = None, action: str | None = Query(None, description="exact or prefix*"),
-               target_type: str | None = None, target_id: str | None = None, start: datetime | None = None,
-               end: datetime | None = None, limit: int = Query(100, le=1000), offset: int = 0,
-               ctx: Ctx = Depends(require("audit:read"))):
+def list_audit(
+    actor: str | None = None,
+    action: str | None = Query(None, description="exact or prefix*"),
+    target_type: str | None = None,
+    target_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("audit:read")),
+):
     stmt = select(AuditEvent).where(AuditEvent.tenant_id == ctx.tenant_id).order_by(AuditEvent.timestamp.desc())
     if actor:
         stmt = stmt.where(AuditEvent.actor_name == actor)
     if action:
-        stmt = stmt.where(AuditEvent.action.like(action[:-1] + "%") if action.endswith("*") else AuditEvent.action == action)
+        stmt = stmt.where(
+            AuditEvent.action.like(action[:-1] + "%") if action.endswith("*") else AuditEvent.action == action
+        )
     if target_type:
         stmt = stmt.where(AuditEvent.target_type == target_type)
     if target_id:
@@ -324,8 +372,13 @@ class CommentIn(BaseModel):
 
 
 @router.get("/changes", response_model=Page[ChangeOut])
-def list_changes(state: str | None = None, q: str | None = None, limit: int = Query(50, le=500), offset: int = 0,
-                 ctx: Ctx = Depends(require("changes:read"))):
+def list_changes(
+    state: str | None = None,
+    q: str | None = None,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("changes:read")),
+):
     stmt = select(ChangeRequest).where(ChangeRequest.tenant_id == ctx.tenant_id).order_by(ChangeRequest.number.desc())
     if state:
         stmt = stmt.where(ChangeRequest.state == state)
@@ -341,13 +394,29 @@ def create_change(body: ChangeIn, ctx: Ctx = Depends(require("changes:write"))):
     if ctx.db.bind.dialect.name == "postgresql":
         # serialise numbering per tenant (FOR UPDATE is not allowed with aggregates)
         ctx.db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"chg:{ctx.tenant_id}"})
-    number = (ctx.db.scalar(select(func.max(ChangeRequest.number)).where(ChangeRequest.tenant_id == ctx.tenant_id)) or 0) + 1
-    cr = ChangeRequest(tenant_id=ctx.tenant_id, number=number, requested_by=ctx.user.id,
-                       **body.model_dump(exclude={"device_ids"}), device_ids=[str(d) for d in body.device_ids])
+    number = (
+        ctx.db.scalar(select(func.max(ChangeRequest.number)).where(ChangeRequest.tenant_id == ctx.tenant_id)) or 0
+    ) + 1
+    cr = ChangeRequest(
+        tenant_id=ctx.tenant_id,
+        number=number,
+        requested_by=ctx.user.id,
+        **body.model_dump(exclude={"device_ids"}),
+        device_ids=[str(d) for d in body.device_ids],
+    )
     ctx.db.add(cr)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="change.create", actor=ctx.user, target_type="change_request",
-                 target_id=cr.id, target_name=f"CHG-{cr.number}", after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="change.create",
+        actor=ctx.user,
+        target_type="change_request",
+        target_id=cr.id,
+        target_name=f"CHG-{cr.number}",
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return cr
 
@@ -355,15 +424,34 @@ def create_change(body: ChangeIn, ctx: Ctx = Depends(require("changes:write"))):
 @router.get("/changes/{change_id}")
 def get_change(change_id: uuid.UUID, ctx: Ctx = Depends(require("changes:read"))):
     cr = get_owned(ctx, ChangeRequest, change_id, "change request")
-    comments = ctx.db.scalars(select(ChangeRequestComment).where(ChangeRequestComment.change_request_id == cr.id)
-                              .order_by(ChangeRequestComment.created_at)).all()
+    comments = ctx.db.scalars(
+        select(ChangeRequestComment)
+        .where(ChangeRequestComment.change_request_id == cr.id)
+        .order_by(ChangeRequestComment.created_at)
+    ).all()
     backups = {b.id: b for b in ctx.db.scalars(select(ConfigBackup).where(ConfigBackup.change_request_id == cr.id))}
     return {
         "change": ChangeOut.model_validate(cr),
-        "comments": [{"id": str(c.id), "author_id": str(c.author_id) if c.author_id else None,
-                      "created_at": c.created_at, "body": c.body, "transition": c.transition} for c in comments],
-        "backups": [{"id": str(b.id), "device_id": str(b.device_id), "commit_sha": b.commit_sha,
-                     "collected_at": b.collected_at, "reason": b.reason} for b in backups.values()],
+        "comments": [
+            {
+                "id": str(c.id),
+                "author_id": str(c.author_id) if c.author_id else None,
+                "created_at": c.created_at,
+                "body": c.body,
+                "transition": c.transition,
+            }
+            for c in comments
+        ],
+        "backups": [
+            {
+                "id": str(b.id),
+                "device_id": str(b.device_id),
+                "commit_sha": b.commit_sha,
+                "collected_at": b.collected_at,
+                "reason": b.reason,
+            }
+            for b in backups.values()
+        ],
         "allowed_transitions": [t.name for t in TRANSITIONS.values() if cr.state in t.source],
     }
 
@@ -377,9 +465,18 @@ def update_change(change_id: uuid.UUID, body: ChangeIn, ctx: Ctx = Depends(requi
     for k, v in body.model_dump(exclude={"device_ids"}).items():
         setattr(cr, k, v)
     cr.device_ids = [str(d) for d in body.device_ids]
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="change.update", actor=ctx.user, target_type="change_request",
-                 target_id=cr.id, target_name=f"CHG-{cr.number}", before=before, after=body.model_dump(mode="json"),
-                 source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="change.update",
+        actor=ctx.user,
+        target_type="change_request",
+        target_id=cr.id,
+        target_name=f"CHG-{cr.number}",
+        before=before,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return cr
 
@@ -399,15 +496,38 @@ def transition_change(change_id: uuid.UUID, body: TransitionIn, ctx: Ctx = Depen
 
         kind = "pre" if body.transition == "approve" else "post"
         try:
-            backup_devices.delay(str(ctx.tenant_id), cr.device_ids, "change", f"CHG-{cr.number} {kind}-change snapshot",
-                                 str(cr.id), ctx.user.username, kind)
-        except Exception:  # noqa: BLE001 - broker down must not block the workflow
-            pass
-    ctx.db.add(ChangeRequestComment(tenant_id=ctx.tenant_id, change_request_id=cr.id, author_id=ctx.user.id,
-                                    body=body.comment or "", transition=f"{before_state}->{cr.state}"))
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action=f"change.{body.transition}", actor=ctx.user,
-                 target_type="change_request", target_id=cr.id, target_name=f"CHG-{cr.number}",
-                 before={"state": before_state}, after={"state": cr.state, "comment": body.comment}, source_ip=ctx.ip)
+            backup_devices.delay(
+                str(ctx.tenant_id),
+                cr.device_ids,
+                "change",
+                f"CHG-{cr.number} {kind}-change snapshot",
+                str(cr.id),
+                ctx.user.username,
+                kind,
+            )
+        except Exception:  # broker down must not block the workflow
+            logging.getLogger(__name__).warning("could not queue change snapshot backup", exc_info=True)
+    ctx.db.add(
+        ChangeRequestComment(
+            tenant_id=ctx.tenant_id,
+            change_request_id=cr.id,
+            author_id=ctx.user.id,
+            body=body.comment or "",
+            transition=f"{before_state}->{cr.state}",
+        )
+    )
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action=f"change.{body.transition}",
+        actor=ctx.user,
+        target_type="change_request",
+        target_id=cr.id,
+        target_name=f"CHG-{cr.number}",
+        before={"state": before_state},
+        after={"state": cr.state, "comment": body.comment},
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return cr
 

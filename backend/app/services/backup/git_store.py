@@ -96,7 +96,9 @@ class GitConfigStore:
             if not (self.path / relpath).exists():
                 return None
             self.repo.index.remove([relpath], working_tree=True)
-            commit = self.repo.index.commit(f"Remove {relpath}\n\nReason: {reason}\n", author=Actor(author, f"{author}@networkops.local"))
+            commit = self.repo.index.commit(
+                f"Remove {relpath}\n\nReason: {reason}\n", author=Actor(author, f"{author}@networkops.local")
+            )
             return commit.hexsha
 
     def last_commit(self, relpath: str) -> str | None:

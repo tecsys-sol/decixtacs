@@ -40,7 +40,7 @@ class RateLimiter:
                 count = int(pipe.execute()[0])
                 return count <= limit, max(limit - count, 0)
             except Exception:  # noqa: BLE001
-                pass
+                log.debug("rate limiter: redis error, falling back to memory", exc_info=True)
         b, count = self._mem[key]
         count = count + 1 if b == bucket else 1
         self._mem[key] = (bucket, count)
@@ -57,14 +57,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith(s.api_prefix):
             return await call_next(request)
-        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "?").split(",")[0].strip()
+        ip = (
+            request.headers.get("X-Forwarded-For", request.client.host if request.client else "?").split(",")[0].strip()
+        )
         sensitive = path.endswith(("/auth/login", "/auth/refresh", "/auth/mfa/verify"))
         limit = s.rate_limit_login if sensitive else s.rate_limit_api
         key = f"{'auth' if sensitive else 'api'}:{ip}"
         ok, remaining = self.limiter.hit(key, limit, s.rate_limit_window_seconds)
         if not ok:
-            return JSONResponse({"detail": "rate limit exceeded"}, status_code=429,
-                                headers={"Retry-After": str(s.rate_limit_window_seconds)})
+            return JSONResponse(
+                {"detail": "rate limit exceeded"},
+                status_code=429,
+                headers={"Retry-After": str(s.rate_limit_window_seconds)},
+            )
         resp = await call_next(request)
         resp.headers["X-RateLimit-Limit"] = str(limit)
         resp.headers["X-RateLimit-Remaining"] = str(remaining)

@@ -7,7 +7,9 @@ def test_login_me_and_refresh_rotation(client, tenant):
     tok = login(client)
     client.headers["Authorization"] = f"Bearer {tok['access_token']}"
     me = client.get("/api/v1/auth/me").json()
-    assert me["username"] == "admin" and "tacacs:write" in me["permissions"] and "tenants:admin" not in me["permissions"]
+    assert (
+        me["username"] == "admin" and "tacacs:write" in me["permissions"] and "tenants:admin" not in me["permissions"]
+    )
 
     r = client.post("/api/v1/auth/refresh", json={"refresh_token": tok["refresh_token"]})
     assert r.status_code == 200

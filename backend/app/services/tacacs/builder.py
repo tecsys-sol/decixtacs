@@ -16,9 +16,12 @@ from app.services.tacacs import generator as g
 def build_inputs(db: Session, tenant_id: uuid.UUID, server: TacacsServer | None = None):
     s = get_settings()
     groups = {gr.id: gr for gr in db.scalars(select(Group).where(Group.tenant_id == tenant_id))}
-    dgroups = {dg.id: dg for dg in db.scalars(
-        select(DeviceGroup).where(DeviceGroup.tenant_id == tenant_id).options(selectinload(DeviceGroup.devices))
-    )}
+    dgroups = {
+        dg.id: dg
+        for dg in db.scalars(
+            select(DeviceGroup).where(DeviceGroup.tenant_id == tenant_id).options(selectinload(DeviceGroup.devices))
+        )
+    }
     device_tags: dict[uuid.UUID, list[str]] = {}
     for dg in dgroups.values():
         for d in dg.devices:
@@ -84,9 +87,7 @@ def build_inputs(db: Session, tenant_id: uuid.UUID, server: TacacsServer | None 
             bind_dn=s.ldap_bind_dn,
             bind_password=s.ldap_bind_password,
         )
-    settings = g.ServerSettings(
-        listen_port=server.port if server else 49, acct_log=s.tacacs_accounting_log, ldap=ldap
-    )
+    settings = g.ServerSettings(listen_port=server.port if server else 49, acct_log=s.tacacs_accounting_log, ldap=ldap)
     return nas, profiles, users, settings
 
 

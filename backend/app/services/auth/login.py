@@ -37,10 +37,30 @@ class TokenPair:
     expires_in: int
 
 
-def _history(db: Session, user: User | None, tenant_id: uuid.UUID, username: str, ok: bool, method: str,
-             ip: str | None, ua: str | None, reason: str | None = None) -> None:
-    db.add(LoginHistory(tenant_id=tenant_id, user_id=user.id if user else None, username=username, success=ok,
-                        method=method, source_ip=ip, user_agent=(ua or "")[:512], reason=reason, timestamp=utcnow()))
+def _history(
+    db: Session,
+    user: User | None,
+    tenant_id: uuid.UUID,
+    username: str,
+    ok: bool,
+    method: str,
+    ip: str | None,
+    ua: str | None,
+    reason: str | None = None,
+) -> None:
+    db.add(
+        LoginHistory(
+            tenant_id=tenant_id,
+            user_id=user.id if user else None,
+            username=username,
+            success=ok,
+            method=method,
+            source_ip=ip,
+            user_agent=(ua or "")[:512],
+            reason=reason,
+            timestamp=utcnow(),
+        )
+    )
     if ok:
         metrics.USER_LOGINS.labels(method=method).inc()
     else:
@@ -64,8 +84,15 @@ def sync_ldap_groups(db: Session, user: User, group_names: list[str]) -> None:
     user.groups = keep + [g for g in groups if g.name.lower() in wanted]
 
 
-def password_login(db: Session, tenant_slug: str | None, username: str, password: str, otp: str | None,
-                   ip: str | None = None, ua: str | None = None) -> TokenPair:
+def password_login(
+    db: Session,
+    tenant_slug: str | None,
+    username: str,
+    password: str,
+    otp: str | None,
+    ip: str | None = None,
+    ua: str | None = None,
+) -> TokenPair:
     s = get_settings()
     tenant = resolve_tenant(db, tenant_slug)
     user = db.scalar(select(User).where(User.tenant_id == tenant.id, User.username == username))
@@ -99,8 +126,9 @@ def password_login(db: Session, tenant_slug: str | None, username: str, password
             if user.failed_logins >= s.max_failed_logins:
                 user.locked_until = now + timedelta(minutes=s.lockout_minutes)
         _history(db, user, tenant.id, username, False, method, ip, ua, "bad credentials")
-        audit.record(db, tenant_id=tenant.id, action="auth.login_failed", actor_name=username, source_ip=ip,
-                     outcome="failure")
+        audit.record(
+            db, tenant_id=tenant.id, action="auth.login_failed", actor_name=username, source_ip=ip, outcome="failure"
+        )
         db.commit()
         raise AuthError("invalid username or password")
 
@@ -126,8 +154,14 @@ def password_login(db: Session, tenant_slug: str | None, username: str, password
 def issue_tokens(db: Session, user: User, family_id: uuid.UUID | None = None) -> TokenPair:
     s = get_settings()
     raw, digest = new_opaque_token("nomr")
-    db.add(RefreshToken(user_id=user.id, token_hash=digest, family_id=family_id or uuid.uuid4(),
-                        expires_at=utcnow() + timedelta(days=s.refresh_token_ttl_days)))
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token_hash=digest,
+            family_id=family_id or uuid.uuid4(),
+            expires_at=utcnow() + timedelta(days=s.refresh_token_ttl_days),
+        )
+    )
     access = create_access_token(user.id, user.tenant_id)
     return TokenPair(access, raw, s.access_token_ttl_minutes * 60)
 
@@ -139,8 +173,11 @@ def refresh(db: Session, raw_token: str) -> TokenPair:
         raise AuthError("invalid refresh token")
     if rt.revoked_at is not None:
         # Reuse of a rotated token => likely theft: revoke the whole family.
-        db.execute(update(RefreshToken).where(RefreshToken.family_id == rt.family_id, RefreshToken.revoked_at.is_(None))
-                   .values(revoked_at=now))
+        db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == rt.family_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
         db.commit()
         raise AuthError("refresh token reuse detected - session revoked", "token_reuse")
     if aware(rt.expires_at) < now:
@@ -158,8 +195,11 @@ def refresh(db: Session, raw_token: str) -> TokenPair:
 def logout(db: Session, raw_token: str) -> None:
     rt = db.scalar(select(RefreshToken).where(RefreshToken.token_hash == sha256(raw_token)))
     if rt:
-        db.execute(update(RefreshToken).where(RefreshToken.family_id == rt.family_id, RefreshToken.revoked_at.is_(None))
-                   .values(revoked_at=utcnow()))
+        db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == rt.family_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=utcnow())
+        )
         user = db.get(User, rt.user_id)
         if user:
             audit.record(db, tenant_id=user.tenant_id, action="auth.logout", actor=user)

@@ -35,7 +35,10 @@ def compare_golden(config: str, golden: str, mode: str, ignore: list[str] | None
         d = diffsvc.unified(golden_f, config_f, "golden", "actual")
         return DriftResult(bool(d), d, [])
     present = {ln.strip() for ln in config_f.splitlines()}
-    missing = [ln.strip() for ln in golden_f.splitlines() if ln.strip() and not ln.strip().startswith(("#", "!"))
-               and ln.strip() not in present]
+    missing = [
+        ln.strip()
+        for ln in golden_f.splitlines()
+        if ln.strip() and not ln.strip().startswith(("#", "!")) and ln.strip() not in present
+    ]
     d = "\n".join(f"- {m}" for m in missing)
     return DriftResult(bool(missing), d, missing)

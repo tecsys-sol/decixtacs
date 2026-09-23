@@ -6,7 +6,9 @@ USER_LOGINS = Counter("nom_user_logins_total", "Successful portal logins", ["met
 LOGIN_FAILURES = Counter("nom_login_failures_total", "Failed logins", ["source"])
 BACKUPS = Counter("nom_config_backups_total", "Configuration backup attempts", ["status", "platform"])
 BACKUP_DURATION = Histogram(
-    "nom_config_backup_duration_seconds", "Config collection duration", ["platform"],
+    "nom_config_backup_duration_seconds",
+    "Config collection duration",
+    ["platform"],
     buckets=(0.5, 1, 2, 5, 10, 20, 40, 60, 120),
 )
 COMPLIANCE_FAILURES = Counter("nom_compliance_failures_total", "Failed compliance checks", ["severity"])
@@ -17,6 +19,8 @@ DRIFT_EVENTS = Counter("nom_config_drift_total", "Configuration drift detections
 ALERTS = Counter("nom_alerts_total", "Alerts raised", ["event_type", "severity"])
 SYNC_RUNS = Counter("nom_integration_sync_total", "Integration sync runs", ["kind", "status"])
 HTTP_REQUESTS = Histogram(
-    "nom_http_request_duration_seconds", "API latency", ["method", "route", "status"],
+    "nom_http_request_duration_seconds",
+    "API latency",
+    ["method", "route", "status"],
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
 )

@@ -49,8 +49,19 @@ def test_side_by_side_context_skip():
 
 
 def test_compliance_rules():
-    rules = [Rule(str(i), r["name"], r["rule_type"], r["pattern"], r["severity"], r.get("block_start"),
-                  r.get("min_count", 1), tuple(r.get("platforms", []))) for i, r in enumerate(DEFAULT_RULES)]
+    rules = [
+        Rule(
+            str(i),
+            r["name"],
+            r["rule_type"],
+            r["pattern"],
+            r["severity"],
+            r.get("block_start"),
+            r.get("min_count", 1),
+            tuple(r.get("platforms", [])),
+        )
+        for i, r in enumerate(DEFAULT_RULES)
+    ]
     results, score = evaluate(rules, JUNOS, "junos")
     by_name = {rules[int(r.rule_id)].name: r for r in results}
     assert not by_name["SNMP community must not be public"].passed
@@ -75,8 +86,10 @@ def test_intel_junos_and_ios():
     assert nb.key == "10.0.0.2" and nb.attributes["peer_as"] == 13335
     assert any(o.kind == "community_value" and o.key == "65000:100" for o in objs)
     assert any(o.kind == "vlan" and o.key == "446" for o in objs)
-    ios = "router bgp 65000\n neighbor 192.0.2.1 remote-as 13335\n neighbor 192.0.2.1 description CF\n" \
-          "ip prefix-list XYZ seq 5 permit 10.0.0.0/8\nip community-list standard IX permit 65000:100\n"
+    ios = (
+        "router bgp 65000\n neighbor 192.0.2.1 remote-as 13335\n neighbor 192.0.2.1 description CF\n"
+        "ip prefix-list XYZ seq 5 permit 10.0.0.0/8\nip community-list standard IX permit 65000:100\n"
+    )
     objs = parse(ios, "eos")
     assert any(o.kind == "bgp_neighbor" and o.attributes["peer_as"] == 13335 for o in objs)
     assert any(o.kind == "prefix_list" and o.key == "XYZ" for o in objs)
@@ -91,8 +104,9 @@ def test_risk_analysis():
 
 
 def test_drift():
-    assert compare_golden(JUNOS, "set system ntp server 10.0.0.10\nset system ntp server 9.9.9.9\n", "snippet").missing_lines \
-        == ["set system ntp server 9.9.9.9"]
+    assert compare_golden(
+        JUNOS, "set system ntp server 10.0.0.10\nset system ntp server 9.9.9.9\n", "snippet"
+    ).missing_lines == ["set system ntp server 9.9.9.9"]
     assert not compare_running("a\nb\n", "a\nb\n").drifted
     assert compare_running("a\nc\n", "a\nb\n").drifted
 

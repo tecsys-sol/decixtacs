@@ -1,32 +1,49 @@
-from tests.conftest import as_user
-
-
 def _setup(admin):
     grp = admin.post("/api/v1/groups", json={"name": "noc"}).json()
     dg = admin.post("/api/v1/device-groups", json={"name": "core-routers", "kind": "core-routers"}).json()
     platforms = {p["slug"]: p["id"] for p in admin.get("/api/v1/platforms").json()}
-    dev = admin.post("/api/v1/devices", json={"hostname": "mx204-blr", "management_ip": "10.0.0.1",
-                                              "platform_id": platforms["junos"], "group_ids": [dg["id"]]}).json()
+    dev = admin.post(
+        "/api/v1/devices",
+        json={
+            "hostname": "mx204-blr",
+            "management_ip": "10.0.0.1",
+            "platform_id": platforms["junos"],
+            "group_ids": [dg["id"]],
+        },
+    ).json()
     return grp, dg, dev
 
 
 def test_tacacs_end_to_end(admin, client):
     grp, dg, dev = _setup(admin)
-    user = admin.post("/api/v1/users", json={"username": "shashank", "password": "Shash-Pass-2026!",
-                                             "group_ids": [grp["id"]]}).json()
+    user = admin.post(
+        "/api/v1/users", json={"username": "shashank", "password": "Shash-Pass-2026!", "group_ids": [grp["id"]]}
+    ).json()
     srv = admin.post("/api/v1/tacacs/servers", json={"name": "tac1", "address": "10.0.0.5"}).json()
     agent_token = srv["agent_token"]
 
     r = admin.post("/api/v1/tacacs/devices/import-inventory")
     assert r.status_code == 200 and [n["name"] for n in r.json()] == ["mx204-blr"]
     assert r.json()[0]["vendor"] == "juniper"
-    pol = admin.post("/api/v1/tacacs/policies", json={
-        "name": "noc-ro", "group_id": grp["id"], "device_group_id": dg["id"], "privilege_level": 1,
-        "junos_class": "remote-ro",
-        "command_rules": [{"action": "permit", "pattern": "^show "}, {"action": "deny", "pattern": "^request "}]})
+    pol = admin.post(
+        "/api/v1/tacacs/policies",
+        json={
+            "name": "noc-ro",
+            "group_id": grp["id"],
+            "device_group_id": dg["id"],
+            "privilege_level": 1,
+            "junos_class": "remote-ro",
+            "command_rules": [{"action": "permit", "pattern": "^show "}, {"action": "deny", "pattern": "^request "}],
+        },
+    )
     assert pol.status_code == 201, pol.text
-    assert admin.post("/api/v1/tacacs/policies", json={"name": "bad", "group_id": grp["id"],
-                                                       "command_rules": [{"action": "permit", "pattern": "("}]}).status_code == 422
+    assert (
+        admin.post(
+            "/api/v1/tacacs/policies",
+            json={"name": "bad", "group_id": grp["id"], "command_rules": [{"action": "permit", "pattern": "("}]},
+        ).status_code
+        == 422
+    )
     m = admin.post("/api/v1/tacacs/users", json={"user_id": user["id"], "password": "Tacacs-Pass-2026!"})
     assert m.status_code == 201 and m.json()["has_password"]
 
@@ -46,8 +63,9 @@ def test_tacacs_end_to_end(admin, client):
     # idempotent deploy
     assert admin.post(f"/api/v1/tacacs/servers/{srv['id']}/deploy").json()["version"] == 1
     # changing policy without deploying: agent refuses to serve an unapproved render
-    admin.put(f"/api/v1/tacacs/policies/{pol.json()['id']}", json={**pol.json(), "privilege_level": 5,
-                                                                    "command_rules": []})
+    admin.put(
+        f"/api/v1/tacacs/policies/{pol.json()['id']}", json={**pol.json(), "privilege_level": 5, "command_rules": []}
+    )
     assert agent.get("/api/v1/tacacs/agent/config").status_code == 409
     assert admin.post(f"/api/v1/tacacs/servers/{srv['id']}/deploy").json()["version"] == 2
 
@@ -80,7 +98,10 @@ def test_rotate_nas_key(admin):
     k1 = admin.post(f"/api/v1/tacacs/devices/{n['id']}/rotate-key").json()["key"]
     k2 = admin.post(f"/api/v1/tacacs/devices/{n['id']}/rotate-key").json()["key"]
     assert k1 != k2 and len(k1) > 20
-    assert admin.post("/api/v1/tacacs/devices", json={"name": "x", "address": "1.1.1.1", "vendor": "nope"}).status_code == 422
+    assert (
+        admin.post("/api/v1/tacacs/devices", json={"name": "x", "address": "1.1.1.1", "vendor": "nope"}).status_code
+        == 422
+    )
 
 
 def as_agent(client, token):

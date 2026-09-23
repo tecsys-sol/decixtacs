@@ -21,8 +21,10 @@ celery_app.conf.update(
     },
     beat_schedule={
         "backups-hourly": {"task": "app.workers.tasks.run_backup_schedule", "schedule": crontab(minute=5)},
-        "integrations-sync": {"task": "app.workers.tasks.sync_all_integrations",
-                              "schedule": s.netbox_sync_minutes * 60.0},
+        "integrations-sync": {
+            "task": "app.workers.tasks.sync_all_integrations",
+            "schedule": s.netbox_sync_minutes * 60.0,
+        },
         "compliance-daily": {"task": "app.workers.tasks.run_compliance_all", "schedule": crontab(hour=2, minute=30)},
         "retention-daily": {"task": "app.workers.tasks.apply_retention", "schedule": crontab(hour=3, minute=15)},
         "partitions-daily": {"task": "app.workers.tasks.ensure_partitions", "schedule": crontab(hour=0, minute=10)},

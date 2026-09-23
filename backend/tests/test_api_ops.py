@@ -1,0 +1,295 @@
+import io
+import json
+
+import httpx
+import respx
+from openpyxl import load_workbook
+from sqlalchemy import text
+
+from app.db.session import engine
+from tests.test_api_tacacs import as_agent
+
+NB = "https://netbox.example.net"
+
+
+def _nb_page(results):
+    return httpx.Response(200, json={"count": len(results), "next": None, "results": results})
+
+
+@respx.mock
+def test_netbox_sync(admin):
+    respx.get(f"{NB}/api/dcim/sites/").mock(
+        return_value=_nb_page([{"id": 1, "name": "Bangalore", "slug": "blr", "latitude": 12.9, "longitude": 77.6}])
+    )
+    respx.get(f"{NB}/api/dcim/racks/").mock(
+        return_value=_nb_page([{"id": 5, "name": "R01", "site": {"id": 1}, "u_height": 42}])
+    )
+    devices = [
+        {
+            "id": 10,
+            "name": "mx204-blr",
+            "primary_ip4": {"address": "10.0.0.1/32"},
+            "site": {"id": 1},
+            "rack": {"id": 5},
+            "device_type": {"model": "MX204", "manufacturer": {"slug": "juniper", "name": "Juniper"}},
+            "platform": {"slug": "juniper-junos", "name": "Junos"},
+            "serial": "ABC123",
+            "role": {"slug": "core"},
+            "status": {"value": "active"},
+            "tags": [{"slug": "ixp"}],
+            "custom_fields": {},
+        },
+        {"id": 11, "name": "no-ip-device", "primary_ip4": None, "site": {"id": 1}},
+        {
+            "id": 12,
+            "name": "eos-sw1",
+            "primary_ip4": {"address": "10.0.0.2/32"},
+            "site": {"id": 1},
+            "device_type": {"model": "7280R3", "manufacturer": {"slug": "arista", "name": "Arista"}},
+            "platform": {"slug": "arista-eos"},
+            "status": {"value": "active"},
+            "tags": [],
+        },
+    ]
+    respx.get(f"{NB}/api/dcim/devices/").mock(return_value=_nb_page(devices))
+    respx.get(f"{NB}/api/dcim/cables/").mock(
+        return_value=_nb_page(
+            [
+                {
+                    "status": {"value": "connected"},
+                    "a_terminations": [{"object": {"name": "et-0/0/0", "device": {"name": "mx204-blr"}}}],
+                    "b_terminations": [{"object": {"name": "Ethernet1", "device": {"name": "eos-sw1"}}}],
+                }
+            ]
+        )
+    )
+    respx.get(f"{NB}/api/ipam/vlans/").mock(return_value=_nb_page([{"id": 446, "display": "IX-LAN (446)", "vid": 446}]))
+    for path in ("prefixes", "ip-addresses", "vrfs", "asns"):
+        respx.get(f"{NB}/api/ipam/{path}/").mock(return_value=_nb_page([]))
+    respx.get(f"{NB}/api/tenancy/contacts/").mock(return_value=_nb_page([]))
+
+    i = admin.post("/api/v1/integrations", json={"kind": "netbox", "name": "nb", "base_url": NB, "token": "t0k"}).json()
+    stats = admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False}).json()
+    assert stats["devices"] == 2 and stats["links"] == 1 and stats["vlan"] == 1
+    devs = {d["hostname"]: d for d in admin.get("/api/v1/devices").json()["items"]}
+    assert devs["mx204-blr"]["platform"]["slug"] == "junos" and devs["eos-sw1"]["platform"]["slug"] == "eos"
+    assert devs["mx204-blr"]["serial"] == "ABC123" and devs["mx204-blr"]["site"]["name"] == "Bangalore"
+    topo = admin.get("/api/v1/topology").json()
+    assert len(topo["nodes"]) == 2 and topo["edges"][0]["label"] == "et-0/0/0 - Ethernet1"
+    assert admin.get("/api/v1/external-objects", params={"object_type": "vlan"}).json()[0]["display"] == "IX-LAN (446)"
+    # idempotent
+    admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False})
+    assert admin.get("/api/v1/devices").json()["total"] == 2
+    # auth header sent
+    assert respx.calls[0].request.headers["Authorization"] == "Token t0k"
+
+
+@respx.mock
+def test_ixpmanager_and_birdseye(admin):
+    ixp_url, rs_url = "https://ixp.example.net", "https://rs1.example.net"
+    respx.get(f"{ixp_url}/api/v4/member-export/ixf/1.0").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ixp_list": [{"switch": [{"id": 1, "name": "sw1-blr"}], "vlan": [{"id": 1, "name": "Peering LAN"}]}],
+                "member_list": [
+                    {
+                        "asnum": 13335,
+                        "name": "Cloudflare",
+                        "peering_policy": "open",
+                        "member_type": "peering",
+                        "connection_list": [
+                            {
+                                "state": "active",
+                                "if_list": [{"switch_id": 1, "if_speed": 100000}],
+                                "vlan_list": [
+                                    {
+                                        "vlan_id": 1,
+                                        "ipv4": {
+                                            "address": "185.1.1.10",
+                                            "routeserver": True,
+                                            "as_macro": "AS-CLOUDFLARE",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+    )
+    respx.get(f"{rs_url}/api/protocols/bgp").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "protocols": {
+                    "pb_0001_as13335": {
+                        "neighbor_address": "185.1.1.10",
+                        "neighbor_as": 13335,
+                        "state": "up",
+                        "routes": {"imported": 1200, "filtered": 3, "exported": 90000},
+                    }
+                }
+            },
+        )
+    )
+    respx.get(f"{rs_url}/api/routes/filtered/pb_0001_as13335").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {"bgp": {"large_communities": [[65000, 1101, 9]]}},
+                    {"bgp": {"large_communities": [[65000, 1101, 12]]}},
+                    {"bgp": {"large_communities": [[65000, 1000, 1]]}},
+                ]
+            },
+        )
+    )
+    ixp = admin.post(
+        "/api/v1/integrations", json={"kind": "ixpmanager", "name": "ixpm", "base_url": ixp_url, "token": "k"}
+    ).json()
+    rs = admin.post(
+        "/api/v1/integrations",
+        json={
+            "kind": "birdseye",
+            "name": "rs1-v4",
+            "base_url": rs_url,
+            "options": {"rs_asn": 65000, "filter_reasons": True},
+        },
+    ).json()
+    assert admin.post(f"/api/v1/integrations/{ixp['id']}/sync", params={"run_async": False}).json() == {"members": 1}
+    admin.post(f"/api/v1/integrations/{rs['id']}/sync", params={"run_async": False})
+    m = admin.get("/api/v1/ixp/members").json()[0]
+    assert m["asn"] == 13335 and m["connections"][0]["ports"][0]["switch"] == "sw1-blr"
+    assert m["connections"][0]["vlans"][0]["rs_client_v4"] is True
+    c = admin.get("/api/v1/ixp/route-server-clients", params={"only_problems": True}).json()[0]
+    assert c["member"] == "Cloudflare" and c["accepted"] == 1200 and c["filtered"] == 3
+    assert c["irr_filtered"] == 1 and c["rpki_invalid"] == 1 and c["irr_status"] == "filtered"
+    assert [s["type"] for s in admin.get("/api/v1/search", params={"q": "AS13335"}).json()] == ["ixp_member"]
+    assert respx.calls[0].request.headers["X-IXP-Manager-API-Key"] == "k"
+
+
+@respx.mock
+def test_failed_sync_marks_integration_and_alerts(admin):
+    respx.get("https://nb.bad/api/dcim/sites/").mock(return_value=httpx.Response(500))
+    i = admin.post(
+        "/api/v1/integrations", json={"kind": "netbox", "name": "bad", "base_url": "https://nb.bad", "token": "x"}
+    ).json()
+    try:
+        admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False})
+    except httpx.HTTPStatusError:
+        pass
+    got = admin.get("/api/v1/integrations").json()[0]
+    assert got["last_sync_status"] == "failed"
+    assert admin.get("/api/v1/alerts", params={"event_type": "sync_failed"}).json()["total"] == 1
+
+
+def test_reports_all_formats(admin):
+    admin.post("/api/v1/devices", json={"hostname": "r1", "management_ip": "10.0.0.1"})
+    for rt in ("device_changes", "config_changes", "user_activity", "compliance", "tacacs"):
+        r = admin.get(f"/api/v1/reports/{rt}", params={"period": "weekly"})
+        assert r.status_code == 200 and r.json()["columns"]
+    ua = admin.get("/api/v1/reports/user_activity").json()
+    assert ["admin", 1, 0, 0] == ua["rows"][0][:4]
+    csv = admin.get("/api/v1/reports/user_activity", params={"fmt": "csv"})
+    assert csv.headers["content-type"].startswith("text/csv") and csv.text.startswith("User,")
+    xlsx = admin.get("/api/v1/reports/user_activity", params={"fmt": "xlsx"})
+    assert load_workbook(io.BytesIO(xlsx.content)).active["A4"].value == "User"
+    pdf = admin.get("/api/v1/reports/tacacs", params={"fmt": "pdf", "period": "monthly"})
+    assert pdf.content.startswith(b"%PDF")
+    assert admin.get("/api/v1/reports/nope").status_code == 422
+
+
+def test_session_recording_upload_and_replay(admin):
+    srv = admin.post("/api/v1/tacacs/servers", json={"name": "tac1", "address": "10.0.0.5"}).json()
+    admin.post("/api/v1/devices", json={"hostname": "mx204-blr", "management_ip": "10.0.0.1"})
+    cast = (
+        "\n".join(
+            [
+                json.dumps({"version": 2, "width": 120, "height": 40, "timestamp": 1790000000}),
+                json.dumps([0.5, "o", "mx204-blr> "]),
+                json.dumps([1.0, "i", "show bgp summ"]),
+                json.dumps([1.1, "i", "\x7fmary\r"]),
+                json.dumps([2.0, "o", "Groups: 3"]),
+                json.dumps([3.0, "i", "exit\r"]),
+            ]
+        )
+        + "\n"
+    )
+    agent = as_agent(admin, srv["agent_token"])
+    r = agent.post(
+        "/api/v1/sessions",
+        files={"file": ("s.cast", cast.encode(), "application/x-asciicast")},
+        data={"username": "shashank", "device_address": "10.0.0.1"},
+    )
+    assert r.status_code == 201, r.text
+    rec = r.json()
+    assert [c["cmd"] for c in rec["commands"]] == ["show bgp summary", "exit"] and rec["device_id"]
+    assert admin.get("/api/v1/sessions", params={"command": "bgp"}).json()["total"] == 1
+    replay = admin.get(f"/api/v1/sessions/{rec['id']}/cast")
+    assert replay.status_code == 200 and replay.text == cast
+    assert admin.get("/api/v1/audit", params={"action": "session.replay"}).json()["total"] == 1
+    bad = agent.post(
+        "/api/v1/sessions",
+        files={"file": ("x", b"nope", "text/plain")},
+        data={"username": "x", "device_address": "1.1.1.1"},
+    )
+    assert bad.status_code == 422
+
+
+def test_audit_append_only_and_tamper_detection(admin):
+    admin.post("/api/v1/devices", json={"hostname": "r1", "management_ip": "10.0.0.1"})
+    assert admin.get("/api/v1/audit/verify").json()["intact"]
+    import pytest
+    from sqlalchemy.exc import DBAPIError
+
+    with pytest.raises(DBAPIError, match="append-only"):
+        with engine.begin() as c:
+            c.execute(text("UPDATE audit_events SET actor_name = 'mallory'"))
+    with engine.begin() as c:  # a DBA bypassing the guard is still caught by the hash chain
+        c.execute(text("SET LOCAL nom.allow_audit_purge = 'on'"))
+        c.execute(text("UPDATE audit_events SET actor_name = 'mallory' WHERE action = 'device.create'"))
+    assert admin.get("/api/v1/audit/verify").json()["intact"] is False
+
+
+def test_partition_helpers():
+    with engine.begin() as c:
+        parts = c.execute(
+            text(
+                "SELECT count(*) FROM pg_inherits i JOIN pg_class p ON p.oid=i.inhparent WHERE p.relname='command_logs'"
+            )
+        ).scalar()
+        assert parts >= 5  # last month .. +3 months + default
+        c.execute(
+            text(
+                "CREATE TABLE command_logs_y2001m01 PARTITION OF command_logs "
+                "FOR VALUES FROM ('2001-01-01') TO ('2001-02-01')"
+            )
+        )
+        assert c.execute(text("SELECT nom_drop_old_partitions('command_logs', 365)")).scalar() == 1
+        assert c.execute(text("SELECT to_regclass('command_logs_y2001m01')")).scalar() is None
+
+
+def test_alert_channel_delivery(admin):
+    with respx.mock:
+        hook = respx.post("https://hooks.slack.test/x").mock(return_value=httpx.Response(200))
+        ch = admin.post(
+            "/api/v1/alerts/channels", json={"name": "noc", "kind": "slack", "target": "https://hooks.slack.test/x"}
+        ).json()
+        assert (
+            admin.post(
+                "/api/v1/alerts/rules", json={"name": "r", "event_type": "backup_failed", "channel_ids": [ch["id"]]}
+            ).status_code
+            == 201
+        )
+        assert (
+            admin.post(
+                "/api/v1/alerts/rules", json={"name": "r", "event_type": "nope", "channel_ids": [ch["id"]]}
+            ).status_code
+            == 422
+        )
+        admin.post("/api/v1/devices", json={"hostname": "r1", "management_ip": "10.0.0.1"})
+        admin.post("/api/v1/backups/run", json={"run_async": False})  # no credential -> backup_failed
+        assert hook.called
+        assert "Backup failed: r1" in hook.calls[0].request.content.decode()

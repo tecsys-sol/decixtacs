@@ -72,9 +72,15 @@ def _tok(p: login_svc.TokenPair) -> TokenOut:
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     try:
-        pair = login_svc.password_login(db, body.tenant, body.username, body.password, body.otp,
-                                        request.client.host if request.client else None,
-                                        request.headers.get("user-agent"))
+        pair = login_svc.password_login(
+            db,
+            body.tenant,
+            body.username,
+            body.password,
+            body.otp,
+            request.client.host if request.client else None,
+            request.headers.get("user-agent"),
+        )
     except login_svc.AuthError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, {"code": e.code, "message": str(e)}) from e
     return _tok(pair)
@@ -114,8 +120,16 @@ def change_password(body: PasswordChangeIn, ctx: Ctx = Depends(get_ctx)):
     if not verify_password(body.current_password, u.password_hash):
         raise HTTPException(400, "current password is incorrect")
     set_password(u, body.new_password)
-    audit.record(ctx.db, tenant_id=u.tenant_id, action="user.password_change", actor=u, target_type="user",
-                 target_id=u.id, target_name=u.username, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=u.tenant_id,
+        action="user.password_change",
+        actor=u,
+        target_type="user",
+        target_id=u.id,
+        target_name=u.username,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
 
 
@@ -126,9 +140,9 @@ def set_password(user: User, new_password: str) -> None:
     except PasswordPolicyError as e:
         raise HTTPException(422, str(e)) from e
     previous = [*(user.password_history or []), *([user.password_hash] if user.password_hash else [])]
-    if any(verify_password(new_password, h) for h in previous[-s.password_history:]):
+    if any(verify_password(new_password, h) for h in previous[-s.password_history :]):
         raise HTTPException(422, f"password was used recently (last {s.password_history} are remembered)")
-    user.password_history = previous[-s.password_history:]
+    user.password_history = previous[-s.password_history :]
     user.password_hash = hash_password(new_password)
     user.password_changed_at = utcnow()
 
@@ -161,8 +175,16 @@ def mfa_verify(body: OtpIn, ctx: Ctx = Depends(get_ctx)):
     if not secret or not pyotp.TOTP(secret).verify(body.otp, valid_window=1):
         raise HTTPException(400, "invalid one-time password")
     ctx.user.mfa_enabled = True
-    audit.record(ctx.db, tenant_id=ctx.user.tenant_id, action="user.mfa_enabled", actor=ctx.user,
-                 target_type="user", target_id=ctx.user.id, target_name=ctx.user.username, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.user.tenant_id,
+        action="user.mfa_enabled",
+        actor=ctx.user,
+        target_type="user",
+        target_id=ctx.user.id,
+        target_name=ctx.user.username,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
 
 
@@ -201,8 +223,16 @@ def oidc_callback(code: str, state: str, request: Request, db: Session = Depends
     user.groups = [g for g in user.groups if g.source != "oidc"] + [g for g in oidc_groups if g.name in groups]
     user.last_login_at = utcnow()
     db.flush()
-    login_svc._history(db, user, tenant.id, username, True, "oidc", request.client.host if request.client else None,
-                       request.headers.get("user-agent"))
+    login_svc._history(
+        db,
+        user,
+        tenant.id,
+        username,
+        True,
+        "oidc",
+        request.client.host if request.client else None,
+        request.headers.get("user-agent"),
+    )
     audit.record(db, tenant_id=tenant.id, action="auth.login", actor=user, after={"method": "oidc"})
     pair = login_svc.issue_tokens(db, user)
     db.commit()
@@ -235,7 +265,9 @@ class ApiTokenCreated(ApiTokenOut):
 
 @router.get("/tokens", response_model=list[ApiTokenOut])
 def list_tokens(ctx: Ctx = Depends(get_ctx)):
-    return ctx.db.scalars(select(ApiToken).where(ApiToken.user_id == ctx.user.id).order_by(ApiToken.created_at.desc())).all()
+    return ctx.db.scalars(
+        select(ApiToken).where(ApiToken.user_id == ctx.user.id).order_by(ApiToken.created_at.desc())
+    ).all()
 
 
 @router.post("/tokens", response_model=ApiTokenCreated, status_code=201)
@@ -244,12 +276,27 @@ def create_token(body: ApiTokenIn, ctx: Ctx = Depends(get_ctx)):
     if bad:
         raise HTTPException(403, f"cannot delegate permissions you do not hold: {', '.join(sorted(bad))}")
     raw, digest = new_opaque_token("nomt")
-    t = ApiToken(tenant_id=ctx.user.tenant_id, user_id=ctx.user.id, name=body.name, token_prefix=raw[:12],
-                 token_hash=digest, scopes=body.scopes, expires_at=body.expires_at)
+    t = ApiToken(
+        tenant_id=ctx.user.tenant_id,
+        user_id=ctx.user.id,
+        name=body.name,
+        token_prefix=raw[:12],
+        token_hash=digest,
+        scopes=body.scopes,
+        expires_at=body.expires_at,
+    )
     ctx.db.add(t)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.user.tenant_id, action="api_token.create", actor=ctx.user,
-                 target_type="api_token", target_id=t.id, target_name=t.name, after={"scopes": body.scopes})
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.user.tenant_id,
+        action="api_token.create",
+        actor=ctx.user,
+        target_type="api_token",
+        target_id=t.id,
+        target_name=t.name,
+        after={"scopes": body.scopes},
+    )
     ctx.db.commit()
     out = ApiTokenCreated.model_validate({**ApiTokenOut.model_validate(t).model_dump(), "token": raw})
     return out
@@ -261,6 +308,13 @@ def revoke_token(token_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     if t is None or t.user_id != ctx.user.id:
         raise HTTPException(404, "token not found")
     t.revoked = True
-    audit.record(ctx.db, tenant_id=ctx.user.tenant_id, action="api_token.revoke", actor=ctx.user,
-                 target_type="api_token", target_id=t.id, target_name=t.name)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.user.tenant_id,
+        action="api_token.revoke",
+        actor=ctx.user,
+        target_type="api_token",
+        target_id=t.id,
+        target_name=t.name,
+    )
     ctx.db.commit()

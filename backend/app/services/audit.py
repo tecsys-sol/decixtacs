@@ -14,8 +14,21 @@ from sqlalchemy.orm import Session
 from app.db.base import utcnow
 from app.models import AuditEvent, User
 
-SENSITIVE_KEYS = {"password", "password_hash", "key", "key_enc", "secret", "token", "mfa_secret_enc",
-                  "password_enc", "ssh_key_enc", "enable_secret_enc", "token_enc", "target_enc", "password_crypt"}
+SENSITIVE_KEYS = {
+    "password",
+    "password_hash",
+    "key",
+    "key_enc",
+    "secret",
+    "token",
+    "mfa_secret_enc",
+    "password_enc",
+    "ssh_key_enc",
+    "enable_secret_enc",
+    "token_enc",
+    "target_enc",
+    "password_crypt",
+}
 
 
 def redact(data: dict[str, Any] | None) -> dict[str, Any] | None:

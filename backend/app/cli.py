@@ -37,8 +37,13 @@ def cmd_rotate_secrets(_args) -> None:
     from app.core.security import rotate_secret
     from app.models import AlertChannel, Credential, Integration, TacacsDevice, User
 
-    fields = {Credential: ["password_enc", "ssh_key_enc", "enable_secret_enc"], TacacsDevice: ["key_enc"],
-              Integration: ["token_enc"], AlertChannel: ["target_enc"], User: ["mfa_secret_enc"]}
+    fields = {
+        Credential: ["password_enc", "ssh_key_enc", "enable_secret_enc"],
+        TacacsDevice: ["key_enc"],
+        Integration: ["token_enc"],
+        AlertChannel: ["target_enc"],
+        User: ["mfa_secret_enc"],
+    }
     n = 0
     with SessionLocal() as db:
         for model, cols in fields.items():

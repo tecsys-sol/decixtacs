@@ -5,12 +5,21 @@ from app.services.tacacs.ingest import normalize_result
 
 
 def _render(**kw):
-    nas = [g.NasEntry("mx204-blr", "10.0.0.1", 's3cr"et', "juniper", ["core-routers"]),
-           g.NasEntry("fw1", "10.0.1.1", "k2", "fortinet"),
-           g.NasEntry("mt1", "10.0.0.9", "x", "mikrotik")]
-    profiles = [g.Profile("noc-ro", "noc", privilege_level=1, device_tags=["core-routers"],
-                          commands=[g.CommandRule("permit", "^show "), g.CommandRule("deny", "^request system reboot", 5)]),
-                g.Profile("admins", "neteng", priority=10, privilege_level=15, default_action="permit")]
+    nas = [
+        g.NasEntry("mx204-blr", "10.0.0.1", 's3cr"et', "juniper", ["core-routers"]),
+        g.NasEntry("fw1", "10.0.1.1", "k2", "fortinet"),
+        g.NasEntry("mt1", "10.0.0.9", "x", "mikrotik"),
+    ]
+    profiles = [
+        g.Profile(
+            "noc-ro",
+            "noc",
+            privilege_level=1,
+            device_tags=["core-routers"],
+            commands=[g.CommandRule("permit", "^show "), g.CommandRule("deny", "^request system reboot", 5)],
+        ),
+        g.Profile("admins", "neteng", priority=10, privilege_level=15, default_action="permit"),
+    ]
     users = [g.TacUser("shashank", ["noc"], password_crypt="$6$abc$def"), g.TacUser("ldapuser", ["neteng"], "ldap")]
     return g.render(nas, profiles, users, **kw)
 
@@ -78,14 +87,18 @@ def test_parse_accounting_tab_format():
 
 
 def test_parse_authz_and_authen():
-    r = parse_line("2026-09-23 10:01:02 +0000\t10.0.0.1\tbob\tssh\t192.0.2.10\tdeny\tservice=shell\tcmd=request system reboot")
+    r = parse_line(
+        "2026-09-23 10:01:02 +0000\t10.0.0.1\tbob\tssh\t192.0.2.10\tdeny\tservice=shell\tcmd=request system reboot"
+    )
     assert r.kind == "author" and normalize_result(r.record_type) == "deny"
     r = parse_line("2026-09-23 10:01:02 +0000\t10.0.0.1\tbob\tssh\t192.0.2.10\tshell login failed")
     assert r.kind == "authen" and normalize_result(r.record_type) == "fail"
 
 
 def test_parse_json_and_garbage():
-    r = parse_line('{"timestamp":"2026-09-23T10:00:00+00:00","user":"a","device":"10.0.0.1","type":"stop","cmd":"show bgp summary"}')
+    r = parse_line(
+        '{"timestamp":"2026-09-23T10:00:00+00:00","user":"a","device":"10.0.0.1","type":"stop","cmd":"show bgp summary"}'
+    )
     assert r.command == "show bgp summary" and r.kind == "acct"
     assert parse_line("") is None
     assert parse_line("not\ta\tvalid") is None

@@ -28,9 +28,13 @@ def authorize_url(state: str) -> tuple[str, str]:
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {
-        "response_type": "code", "client_id": s.oidc_client_id, "redirect_uri": s.oidc_redirect_uri,
-        "scope": "openid profile email groups", "state": state,
-        "code_challenge": challenge, "code_challenge_method": "S256",
+        "response_type": "code",
+        "client_id": s.oidc_client_id,
+        "redirect_uri": s.oidc_redirect_uri,
+        "scope": "openid profile email groups",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
     }
     return f"{discovery()['authorization_endpoint']}?{urlencode(params)}", verifier
 
@@ -39,12 +43,21 @@ def exchange_code(code: str, verifier: str) -> dict:
     """Exchange the code and return validated ID-token claims."""
     s = get_settings()
     d = discovery()
-    r = httpx.post(d["token_endpoint"], data={
-        "grant_type": "authorization_code", "code": code, "redirect_uri": s.oidc_redirect_uri,
-        "client_id": s.oidc_client_id, "client_secret": s.oidc_client_secret, "code_verifier": verifier,
-    }, timeout=10)
+    r = httpx.post(
+        d["token_endpoint"],
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": s.oidc_redirect_uri,
+            "client_id": s.oidc_client_id,
+            "client_secret": s.oidc_client_secret,
+            "code_verifier": verifier,
+        },
+        timeout=10,
+    )
     r.raise_for_status()
     id_token = r.json()["id_token"]
     key = jwt.PyJWKClient(d["jwks_uri"]).get_signing_key_from_jwt(id_token)
-    return jwt.decode(id_token, key.key, algorithms=["RS256", "ES256", "PS256"], audience=s.oidc_client_id,
-                      issuer=d["issuer"])
+    return jwt.decode(
+        id_token, key.key, algorithms=["RS256", "ES256", "PS256"], audience=s.oidc_client_id, issuer=d["issuer"]
+    )

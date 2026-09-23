@@ -110,7 +110,9 @@ class Alert(UUIDPk, TenantScoped, Base):
 class ReportSchedule(UUIDPk, Timestamps, TenantScoped, Base):
     __tablename__ = "report_schedules"
     name: Mapped[str] = mapped_column(String(128))
-    report_type: Mapped[str] = mapped_column(String(32))  # device_changes|user_activity|config_changes|compliance|tacacs
+    report_type: Mapped[str] = mapped_column(
+        String(32)
+    )  # device_changes|user_activity|config_changes|compliance|tacacs
     period: Mapped[str] = mapped_column(String(16))  # daily|weekly|monthly
     fmt: Mapped[str] = mapped_column(String(8), default="pdf")
     recipients: Mapped[list] = mapped_column(JSONType, default=list)

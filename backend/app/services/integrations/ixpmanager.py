@@ -27,10 +27,20 @@ from app.services import metrics
 log = logging.getLogger(__name__)
 
 FILTER_CODES = {
-    1: "prefix length too long", 2: "prefix length too short", 3: "bogon prefix", 4: "bogon ASN in path",
-    5: "AS path too long", 6: "AS path too short", 7: "first AS != peer AS", 8: "next hop != peer IP",
-    9: "IRR: prefix not in origin AS set", 10: "IRR: origin AS not in AS-SET", 11: "RPKI unknown",
-    12: "RPKI invalid", 13: "transit-free ASN in path", 14: "too many communities",
+    1: "prefix length too long",
+    2: "prefix length too short",
+    3: "bogon prefix",
+    4: "bogon ASN in path",
+    5: "AS path too long",
+    6: "AS path too short",
+    7: "first AS != peer AS",
+    8: "next hop != peer IP",
+    9: "IRR: prefix not in origin AS set",
+    10: "IRR: origin AS not in AS-SET",
+    11: "RPKI unknown",
+    12: "RPKI invalid",
+    13: "transit-free ASN in path",
+    14: "too many communities",
 }
 IRR_CODES = {9, 10}
 RPKI_CODES = {1: "valid", 2: "unknown", 3: "not_checked"}
@@ -38,8 +48,9 @@ RPKI_CODES = {1: "valid", 2: "unknown", 3: "not_checked"}
 
 class IxpManagerClient:
     def __init__(self, base_url: str, api_key: str, timeout: float = 60):
-        self.http = httpx.Client(base_url=base_url.rstrip("/"), headers={"X-IXP-Manager-API-Key": api_key},
-                                 timeout=timeout)
+        self.http = httpx.Client(
+            base_url=base_url.rstrip("/"), headers={"X-IXP-Manager-API-Key": api_key}, timeout=timeout
+        )
 
     def ixf_export(self) -> dict:
         r = self.http.get("/api/v4/member-export/ixf/1.0")
@@ -90,21 +101,32 @@ def sync_members(db: Session, integration: Integration, client: IxpManagerClient
         m.contacts = mem.get("contact_email", [])
         conns = []
         for c in mem.get("connection_list", []):
-            conns.append({
-                "state": c.get("state"),
-                "ports": [{"switch": switches.get(i.get("switch_id"), i.get("switch_id")),
-                           "speed_mbps": i.get("if_speed")} for i in c.get("if_list", [])],
-                "vlans": [{
-                    "vlan_id": v.get("vlan_id"), "vlan": vlans.get(v.get("vlan_id")),
-                    "ipv4": (v.get("ipv4") or {}).get("address"),
-                    "ipv6": (v.get("ipv6") or {}).get("address"),
-                    "rs_client_v4": bool((v.get("ipv4") or {}).get("routeserver")),
-                    "rs_client_v6": bool((v.get("ipv6") or {}).get("routeserver")),
-                    "as_macro": (v.get("ipv4") or {}).get("as_macro") or (v.get("ipv6") or {}).get("as_macro"),
-                    "max_prefix_v4": (v.get("ipv4") or {}).get("max_prefix"),
-                    "max_prefix_v6": (v.get("ipv6") or {}).get("max_prefix"),
-                } for v in c.get("vlan_list", [])],
-            })
+            conns.append(
+                {
+                    "state": c.get("state"),
+                    "ports": [
+                        {
+                            "switch": switches.get(i.get("switch_id"), i.get("switch_id")),
+                            "speed_mbps": i.get("if_speed"),
+                        }
+                        for i in c.get("if_list", [])
+                    ],
+                    "vlans": [
+                        {
+                            "vlan_id": v.get("vlan_id"),
+                            "vlan": vlans.get(v.get("vlan_id")),
+                            "ipv4": (v.get("ipv4") or {}).get("address"),
+                            "ipv6": (v.get("ipv6") or {}).get("address"),
+                            "rs_client_v4": bool((v.get("ipv4") or {}).get("routeserver")),
+                            "rs_client_v6": bool((v.get("ipv6") or {}).get("routeserver")),
+                            "as_macro": (v.get("ipv4") or {}).get("as_macro") or (v.get("ipv6") or {}).get("as_macro"),
+                            "max_prefix_v4": (v.get("ipv4") or {}).get("max_prefix"),
+                            "max_prefix_v6": (v.get("ipv6") or {}).get("max_prefix"),
+                        }
+                        for v in c.get("vlan_list", [])
+                    ],
+                }
+            )
         m.connections = conns
         n += 1
     integration.last_sync_at = utcnow()
@@ -136,18 +158,29 @@ def sync_route_server(db: Session, integration: Integration, client: BirdseyeCli
     rs_name = opts.get("name") or integration.name
     client = client or BirdseyeClient(integration.base_url)
     protos = client.bgp_protocols()
-    existing = {c.protocol_name: c for c in db.scalars(select(RouteServerClient).where(
-        RouteServerClient.tenant_id == integration.tenant_id, RouteServerClient.route_server == rs_name))}
+    existing = {
+        c.protocol_name: c
+        for c in db.scalars(
+            select(RouteServerClient).where(
+                RouteServerClient.tenant_id == integration.tenant_id, RouteServerClient.route_server == rs_name
+            )
+        )
+    }
     for pname, p in protos.items():
         asn = p.get("neighbor_as")
         if not asn:
             continue
         c = existing.get(pname)
         if c is None:
-            c = RouteServerClient(tenant_id=integration.tenant_id, route_server=rs_name, protocol_name=pname,
-                                  asn=asn, neighbor_address=p.get("neighbor_address", ""),
-                                  address_family="ipv6" if ":" in str(p.get("neighbor_address", "")) else "ipv4",
-                                  state="unknown")
+            c = RouteServerClient(
+                tenant_id=integration.tenant_id,
+                route_server=rs_name,
+                protocol_name=pname,
+                asn=asn,
+                neighbor_address=p.get("neighbor_address", ""),
+                address_family="ipv6" if ":" in str(p.get("neighbor_address", "")) else "ipv4",
+                state="unknown",
+            )
             db.add(c)
         routes = p.get("routes") or {}
         c.asn = asn

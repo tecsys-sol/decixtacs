@@ -46,15 +46,41 @@ PERMISSIONS: dict[str, str] = {
 BUILTIN_ROLES: dict[str, list[str]] = {
     "admin": list(PERMISSIONS),
     "network-engineer": [
-        "devices:read", "devices:write", "tacacs:read", "configs:read", "configs:backup",
-        "configs:restore", "compliance:read", "accounting:read", "sessions:read", "changes:read",
-        "changes:write", "reports:read",
+        "devices:read",
+        "devices:write",
+        "tacacs:read",
+        "configs:read",
+        "configs:backup",
+        "configs:restore",
+        "compliance:read",
+        "accounting:read",
+        "sessions:read",
+        "changes:read",
+        "changes:write",
+        "reports:read",
     ],
-    "change-manager": ["devices:read", "configs:read", "changes:read", "changes:write", "changes:approve",
-                       "audit:read", "reports:read"],
+    "change-manager": [
+        "devices:read",
+        "configs:read",
+        "changes:read",
+        "changes:write",
+        "changes:approve",
+        "audit:read",
+        "reports:read",
+    ],
     "noc": ["devices:read", "configs:read", "compliance:read", "accounting:read", "changes:read"],
-    "auditor": ["devices:read", "configs:read", "compliance:read", "accounting:read", "sessions:read",
-                "audit:read", "changes:read", "tacacs:read", "reports:read", "users:read"],
+    "auditor": [
+        "devices:read",
+        "configs:read",
+        "compliance:read",
+        "accounting:read",
+        "sessions:read",
+        "audit:read",
+        "changes:read",
+        "tacacs:read",
+        "reports:read",
+        "users:read",
+    ],
     "read-only": ["devices:read", "configs:read", "compliance:read", "changes:read"],
 }
 BUILTIN_ROLES["admin"] = [p for p in PERMISSIONS if p != "tenants:admin"]
@@ -85,7 +111,9 @@ class Principal:
         """True if the permission is granted anywhere (possibly only on a scope)."""
         if self.user.is_superuser and (self.token_scopes is None or permission in self.token_scopes):
             return True
-        return any(g.permission == permission and self._visible(g) and _conditions_ok(g.conditions) for g in self.grants)
+        return any(
+            g.permission == permission and self._visible(g) and _conditions_ok(g.conditions) for g in self.grants
+        )
 
     def has_global(self, permission: str) -> bool:
         if self.user.is_superuser and (self.token_scopes is None or permission in self.token_scopes):

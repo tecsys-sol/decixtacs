@@ -12,11 +12,19 @@ import re
 VOLATILE: dict[str, list[str]] = {
     "junos": [r"^## Last (commit|changed):.*$", r"^# Last (commit|changed):.*$"],
     "eos": [r"^! Time:.*$", r"^! Startup-config last modified.*$", r"^! device: .*uptime.*$"],
-    "ios": [r"^! Last configuration change.*$", r"^! NVRAM config last updated.*$", r"^ntp clock-period .*$",
-            r"^Building configuration.*$", r"^Current configuration : \d+ bytes$"],
+    "ios": [
+        r"^! Last configuration change.*$",
+        r"^! NVRAM config last updated.*$",
+        r"^ntp clock-period .*$",
+        r"^Building configuration.*$",
+        r"^Current configuration : \d+ bytes$",
+    ],
     "nxos": [r"^!Time:.*$", r"^!Running configuration last done at:.*$"],
     "fortios": [r"^#conf_file_ver=.*$", r"^#buildno=.*$"],
-    "routeros": [r"^# \w{3}/\d{2}/\d{4} \d{2}:\d{2}:\d{2} by RouterOS.*$", r"^# \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} by RouterOS.*$"],
+    "routeros": [
+        r"^# \w{3}/\d{2}/\d{4} \d{2}:\d{2}:\d{2} by RouterOS.*$",
+        r"^# \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} by RouterOS.*$",
+    ],
     "vyos": [],
     "sfos": [],
     "linux": [],
@@ -24,7 +32,10 @@ VOLATILE: dict[str, list[str]] = {
 
 SECRETS: dict[str, list[tuple[str, str]]] = {
     "junos": [
-        (r'((?:encrypted-password|authentication-key|secret|pre-shared-key ascii-text|hash) )"?[^";\s]+"?', r'\1"<removed>"'),
+        (
+            r'((?:encrypted-password|authentication-key|secret|pre-shared-key ascii-text|hash) )"?[^";\s]+"?',
+            r'\1"<removed>"',
+        ),
         (r"(\bkey )\"?\$9\$[^\";\s]+\"?", r'\1"<removed>"'),
     ],
     "eos": [

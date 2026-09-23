@@ -63,11 +63,16 @@ class UserOut(ORM):
 
 
 @router.get("/users", response_model=Page[UserOut])
-def list_users(q: str | None = None, limit: int = Query(50, le=500), offset: int = 0,
-               ctx: Ctx = Depends(require("users:read"))):
-    stmt = select(User).where(User.tenant_id == ctx.tenant_id).options(selectinload(User.groups)).order_by(User.username)
+def list_users(
+    q: str | None = None, limit: int = Query(50, le=500), offset: int = 0, ctx: Ctx = Depends(require("users:read"))
+):
+    stmt = (
+        select(User).where(User.tenant_id == ctx.tenant_id).options(selectinload(User.groups)).order_by(User.username)
+    )
     if q:
-        stmt = stmt.where(or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"), User.full_name.ilike(f"%{q}%")))
+        stmt = stmt.where(
+            or_(User.username.ilike(f"%{q}%"), User.email.ilike(f"%{q}%"), User.full_name.ilike(f"%{q}%"))
+        )
     return paginate(ctx.db, stmt, UserOut, limit, offset)
 
 
@@ -82,8 +87,14 @@ def _groups(ctx: Ctx, ids: list[uuid.UUID]) -> list[Group]:
 def create_user(body: UserIn, ctx: Ctx = Depends(require("users:write"))):
     if ctx.db.scalar(select(User.id).where(User.tenant_id == ctx.tenant_id, User.username == body.username)):
         raise HTTPException(409, "username already exists")
-    u = User(tenant_id=ctx.tenant_id, username=body.username, email=body.email, full_name=body.full_name,
-             auth_source=body.auth_source, is_active=body.is_active)
+    u = User(
+        tenant_id=ctx.tenant_id,
+        username=body.username,
+        email=body.email,
+        full_name=body.full_name,
+        auth_source=body.auth_source,
+        is_active=body.is_active,
+    )
     if body.auth_source == "local":
         if not body.password:
             raise HTTPException(422, "password required for local users")
@@ -91,8 +102,17 @@ def create_user(body: UserIn, ctx: Ctx = Depends(require("users:write"))):
     u.groups = _groups(ctx, body.group_ids)
     ctx.db.add(u)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="user.create", actor=ctx.user, target_type="user",
-                 target_id=u.id, target_name=u.username, after=model_snapshot(u, USER_FIELDS), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="user.create",
+        actor=ctx.user,
+        target_type="user",
+        target_id=u.id,
+        target_name=u.username,
+        after=model_snapshot(u, USER_FIELDS),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return u
 
@@ -118,8 +138,18 @@ def update_user(user_id: uuid.UUID, body: UserPatch, ctx: Ctx = Depends(require(
     if body.unlock:
         u.failed_logins, u.locked_until = 0, None
     after = model_snapshot(u, USER_FIELDS) | {"groups": sorted(g.name for g in u.groups)}
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="user.update", actor=ctx.user, target_type="user",
-                 target_id=u.id, target_name=u.username, before=before, after=after, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="user.update",
+        actor=ctx.user,
+        target_type="user",
+        target_id=u.id,
+        target_name=u.username,
+        before=before,
+        after=after,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return u
 
@@ -129,8 +159,17 @@ def delete_user(user_id: uuid.UUID, ctx: Ctx = Depends(require("users:write"))):
     u = get_owned(ctx, User, user_id, "user")
     if u.id == ctx.user.id:
         raise HTTPException(400, "you cannot delete yourself")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="user.delete", actor=ctx.user, target_type="user",
-                 target_id=u.id, target_name=u.username, before=model_snapshot(u, USER_FIELDS), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="user.delete",
+        actor=ctx.user,
+        target_type="user",
+        target_id=u.id,
+        target_name=u.username,
+        before=model_snapshot(u, USER_FIELDS),
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(u)
     ctx.db.commit()
 
@@ -164,8 +203,17 @@ def create_group(body: GroupIn, ctx: Ctx = Depends(require("users:write"))):
     g = Group(tenant_id=ctx.tenant_id, **body.model_dump())
     ctx.db.add(g)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="group.create", actor=ctx.user, target_type="group",
-                 target_id=g.id, target_name=g.name, after=body.model_dump(), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="group.create",
+        actor=ctx.user,
+        target_type="group",
+        target_id=g.id,
+        target_name=g.name,
+        after=body.model_dump(),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return g
 
@@ -176,8 +224,18 @@ def update_group(group_id: uuid.UUID, body: GroupIn, ctx: Ctx = Depends(require(
     before = model_snapshot(g, list(GroupIn.model_fields))
     for k, v in body.model_dump().items():
         setattr(g, k, v)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="group.update", actor=ctx.user, target_type="group",
-                 target_id=g.id, target_name=g.name, before=before, after=body.model_dump(), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="group.update",
+        actor=ctx.user,
+        target_type="group",
+        target_id=g.id,
+        target_name=g.name,
+        before=before,
+        after=body.model_dump(),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return g
 
@@ -185,8 +243,16 @@ def update_group(group_id: uuid.UUID, body: GroupIn, ctx: Ctx = Depends(require(
 @router.delete("/groups/{group_id}", status_code=204)
 def delete_group(group_id: uuid.UUID, ctx: Ctx = Depends(require("users:write"))):
     g = get_owned(ctx, Group, group_id, "group")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="group.delete", actor=ctx.user, target_type="group",
-                 target_id=g.id, target_name=g.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="group.delete",
+        actor=ctx.user,
+        target_type="group",
+        target_id=g.id,
+        target_name=g.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(g)
     ctx.db.commit()
 
@@ -220,8 +286,12 @@ def list_permissions(ctx: Ctx = Depends(require("users:read"))):
 
 @router.get("/roles", response_model=list[RoleOut])
 def list_roles(ctx: Ctx = Depends(require("users:read"))):
-    return ctx.db.scalars(select(Role).where(or_(Role.tenant_id.is_(None), Role.tenant_id == ctx.tenant_id))
-                          .options(selectinload(Role.permissions)).order_by(Role.name)).all()
+    return ctx.db.scalars(
+        select(Role)
+        .where(or_(Role.tenant_id.is_(None), Role.tenant_id == ctx.tenant_id))
+        .options(selectinload(Role.permissions))
+        .order_by(Role.name)
+    ).all()
 
 
 @router.post("/roles", response_model=RoleOut, status_code=201)
@@ -234,8 +304,17 @@ def create_role(body: RoleIn, ctx: Ctx = Depends(require("users:write"))):
     r = Role(tenant_id=ctx.tenant_id, name=body.name, description=body.description, permissions=perms)
     ctx.db.add(r)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="role.create", actor=ctx.user, target_type="role",
-                 target_id=r.id, target_name=r.name, after=body.model_dump(), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="role.create",
+        actor=ctx.user,
+        target_type="role",
+        target_id=r.id,
+        target_name=r.name,
+        after=body.model_dump(),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return r
 
@@ -283,8 +362,17 @@ def create_binding(body: BindingIn, ctx: Ctx = Depends(require("users:write"))):
     b = RoleBinding(tenant_id=ctx.tenant_id, **body.model_dump())
     ctx.db.add(b)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="role.bind", actor=ctx.user, target_type="role_binding",
-                 target_id=b.id, target_name=role.name, after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="role.bind",
+        actor=ctx.user,
+        target_type="role_binding",
+        target_id=b.id,
+        target_name=role.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return b
 
@@ -292,9 +380,17 @@ def create_binding(body: BindingIn, ctx: Ctx = Depends(require("users:write"))):
 @router.delete("/role-bindings/{binding_id}", status_code=204)
 def delete_binding(binding_id: uuid.UUID, ctx: Ctx = Depends(require("users:write"))):
     b = get_owned(ctx, RoleBinding, binding_id, "binding")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="role.unbind", actor=ctx.user, target_type="role_binding",
-                 target_id=b.id, target_name=b.role.name,
-                 before={"user_id": str(b.user_id), "group_id": str(b.group_id)}, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="role.unbind",
+        actor=ctx.user,
+        target_type="role_binding",
+        target_id=b.id,
+        target_name=b.role.name,
+        before={"user_id": str(b.user_id), "group_id": str(b.group_id)},
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(b)
     ctx.db.commit()
 
@@ -310,8 +406,13 @@ class LoginOut(ORM):
 
 
 @router.get("/login-history", response_model=Page[LoginOut])
-def login_history(username: str | None = None, success: bool | None = None, limit: int = Query(100, le=1000),
-                  offset: int = 0, ctx: Ctx = Depends(require("audit:read"))):
+def login_history(
+    username: str | None = None,
+    success: bool | None = None,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("audit:read")),
+):
     stmt = select(LoginHistory).where(LoginHistory.tenant_id == ctx.tenant_id).order_by(LoginHistory.timestamp.desc())
     if username:
         stmt = stmt.where(LoginHistory.username == username)
@@ -354,9 +455,15 @@ def create_tenant(body: TenantIn, ctx: Ctx = Depends(require("tenants:admin"))):
         t = svc_create(ctx.db, body.name, body.slug, body.admin_username, body.admin_password, body.admin_email)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    audit.record(ctx.db, tenant_id=ctx.principal.tenant_id, action="tenant.create", actor=ctx.user,
-                 target_type="tenant", target_id=t.id, target_name=t.slug, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.principal.tenant_id,
+        action="tenant.create",
+        actor=ctx.user,
+        target_type="tenant",
+        target_id=t.id,
+        target_name=t.slug,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return t
-
-

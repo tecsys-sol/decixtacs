@@ -39,9 +39,7 @@ class TacacsDevice(UUIDPk, Timestamps, TenantScoped, Base):
     address: Mapped[str] = mapped_column(String(64))  # IP or CIDR
     key_enc: Mapped[str] = mapped_column(Text)
     vendor: Mapped[str] = mapped_column(String(32))  # juniper|cisco|arista|fortinet|sophos|mikrotik|generic
-    device_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("device_groups.id", ondelete="SET NULL")
-    )
+    device_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("device_groups.id", ondelete="SET NULL"))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     key_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -58,9 +56,7 @@ class TacacsPolicy(UUIDPk, Timestamps, TenantScoped, Base):
     description: Mapped[str | None] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, default=100)  # lower = evaluated first
     group_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("groups.id", ondelete="CASCADE"))
-    device_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("device_groups.id", ondelete="CASCADE")
-    )
+    device_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("device_groups.id", ondelete="CASCADE"))
     privilege_level: Mapped[int] = mapped_column(Integer, default=1)
     junos_class: Mapped[str | None] = mapped_column(String(64))  # local-user-name template on Junos
     fortigate_profile: Mapped[str | None] = mapped_column(String(64))  # admin_prof

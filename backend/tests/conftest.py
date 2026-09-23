@@ -17,11 +17,11 @@ os.environ.setdefault("NOM_JWT_SECRET", "test-secret-test-secret-test-secret-123
 os.environ["NOM_RATE_LIMIT_LOGIN"] = "1000"
 
 import pytest  # noqa: E402
-from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from alembic import command  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.workers.celery_app import celery_app  # noqa: E402
@@ -78,7 +78,9 @@ def client():
 
 
 def login(client, username="admin", password=ADMIN_PW, tenant="decix", otp=None) -> dict:
-    r = client.post("/api/v1/auth/login", json={"username": username, "password": password, "tenant": tenant, "otp": otp})
+    r = client.post(
+        "/api/v1/auth/login", json={"username": username, "password": password, "tenant": tenant, "otp": otp}
+    )
     assert r.status_code == 200, r.text
     return r.json()
 

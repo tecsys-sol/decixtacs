@@ -79,7 +79,10 @@ BEGIN
     IF coalesce(current_setting('nom.allow_audit_purge', true), 'off') <> 'on' THEN
         RAISE EXCEPTION 'audit_events is append-only';
     END IF;
-    RETURN OLD;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
 END $$;
 CREATE TRIGGER audit_events_append_only BEFORE UPDATE OR DELETE ON audit_events
     FOR EACH ROW EXECUTE FUNCTION nom_audit_append_only();
@@ -94,7 +97,9 @@ def upgrade() -> None:
     op.execute(AUDIT_GUARD)
     # Trigram index for fast substring search over command history (optional extension).
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_command_logs_command_trgm ON command_logs USING gin (command gin_trgm_ops)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_command_logs_command_trgm ON command_logs USING gin (command gin_trgm_ops)"
+    )
     op.execute("CREATE INDEX IF NOT EXISTS ix_config_index_attrs ON config_index USING gin (attributes jsonb_path_ops)")
 
 

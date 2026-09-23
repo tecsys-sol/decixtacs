@@ -43,15 +43,27 @@ def session():
 
 
 @celery_app.task(name="app.workers.tasks.backup_devices")
-def backup_devices(tenant_id: str, device_ids: list[str], trigger: str = "manual", reason: str | None = None,
-                   change_request_id: str | None = None, requested_by: str | None = None,
-                   phase: str | None = None) -> dict:
+def backup_devices(
+    tenant_id: str,
+    device_ids: list[str],
+    trigger: str = "manual",
+    reason: str | None = None,
+    change_request_id: str | None = None,
+    requested_by: str | None = None,
+    phase: str | None = None,
+) -> dict:
     from app.services.backup.engine import run_backups
 
     with session() as db:
-        backups = run_backups(db, uuid.UUID(tenant_id), [uuid.UUID(d) for d in device_ids] or None, trigger=trigger,
-                              reason=reason, change_request_id=uuid.UUID(change_request_id) if change_request_id else None,
-                              requested_by=requested_by)
+        backups = run_backups(
+            db,
+            uuid.UUID(tenant_id),
+            [uuid.UUID(d) for d in device_ids] or None,
+            trigger=trigger,
+            reason=reason,
+            change_request_id=uuid.UUID(change_request_id) if change_request_id else None,
+            requested_by=requested_by,
+        )
         if change_request_id and phase in ("pre", "post"):
             cr = db.get(ChangeRequest, uuid.UUID(change_request_id))
             ids = [str(b.id) for b in backups]
@@ -59,8 +71,11 @@ def backup_devices(tenant_id: str, device_ids: list[str], trigger: str = "manual
                 cr.pre_backup_ids = [*cr.pre_backup_ids, *ids]
             else:
                 cr.post_backup_ids = [*cr.post_backup_ids, *ids]
-        return {"total": len(backups), "failed": sum(b.status == "failed" for b in backups),
-                "changed": sum(b.changed for b in backups)}
+        return {
+            "total": len(backups),
+            "failed": sum(b.status == "failed" for b in backups),
+            "changed": sum(b.changed for b in backups),
+        }
 
 
 @celery_app.task(name="app.workers.tasks.run_backup_schedule")
@@ -69,10 +84,16 @@ def run_backup_schedule(chunk_size: int = 250) -> int:
     n = 0
     with session() as db:
         for tenant in db.scalars(select(Tenant).where(Tenant.is_active)):
-            ids = [str(i) for i in db.scalars(select(Device.id).where(Device.tenant_id == tenant.id,
-                                                                     Device.backup_enabled, Device.status == "active"))]
+            ids = [
+                str(i)
+                for i in db.scalars(
+                    select(Device.id).where(
+                        Device.tenant_id == tenant.id, Device.backup_enabled, Device.status == "active"
+                    )
+                )
+            ]
             for i in range(0, len(ids), chunk_size):
-                backup_devices.delay(str(tenant.id), ids[i:i + chunk_size], "schedule")
+                backup_devices.delay(str(tenant.id), ids[i : i + chunk_size], "schedule")
                 n += 1
     return n
 
@@ -96,9 +117,15 @@ def run_integration_sync(db, integration: Integration) -> dict:
         integration.last_sync_at, integration.last_sync_status = utcnow(), "failed"
         integration.last_sync_detail = {"error": str(exc)[:500]}
         metrics.SYNC_RUNS.labels(kind=integration.kind, status="failed").inc()
-        emit_event(db, integration.tenant_id, "sync_failed", severity="medium",
-                   title=f"{integration.kind} sync '{integration.name}' failed", body=str(exc)[:2000],
-                   dedup_key=f"sync:{integration.id}")
+        emit_event(
+            db,
+            integration.tenant_id,
+            "sync_failed",
+            severity="medium",
+            title=f"{integration.kind} sync '{integration.name}' failed",
+            body=str(exc)[:2000],
+            dedup_key=f"sync:{integration.id}",
+        )
         db.commit()
         raise
 
@@ -146,10 +173,14 @@ def apply_retention() -> dict:
     out = {}
     with session() as db:
         if db.bind.dialect.name == "postgresql":
-            for table, days in (("command_logs", s.retention_command_logs_days),
-                                ("audit_events", s.retention_audit_days),
-                                ("tacacs_auth_events", s.retention_command_logs_days)):
-                out[table] = db.execute(text("SELECT nom_drop_old_partitions(:t, :d)"), {"t": table, "d": days}).scalar()
+            for table, days in (
+                ("command_logs", s.retention_command_logs_days),
+                ("audit_events", s.retention_audit_days),
+                ("tacacs_auth_events", s.retention_command_logs_days),
+            ):
+                out[table] = db.execute(
+                    text("SELECT nom_drop_old_partitions(:t, :d)"), {"t": table, "d": days}
+                ).scalar()
         else:
             cutoff = utcnow() - timedelta(days=s.retention_command_logs_days)
             out["command_logs"] = db.execute(delete(CommandLog).where(CommandLog.timestamp < cutoff)).rowcount
@@ -169,10 +200,10 @@ def ensure_partitions(months_ahead: int = 3) -> None:
 
 @celery_app.task(name="app.workers.tasks.run_report_schedules")
 def run_report_schedules() -> int:
-    from app.services import reports
-
     import smtplib
     from email.message import EmailMessage
+
+    from app.services import reports
 
     s = get_settings()
     due_after = {"daily": timedelta(days=1), "weekly": timedelta(days=7), "monthly": timedelta(days=30)}

@@ -48,8 +48,15 @@ def side_by_side(old: str, new: str, context: int | None = 3) -> list[dict]:
             skipped = False
             for k in span:
                 if k in keep:
-                    rows.append({"type": "equal", "left_no": i1 + k + 1, "left": a[i1 + k],
-                                 "right_no": j1 + k + 1, "right": b[j1 + k]})
+                    rows.append(
+                        {
+                            "type": "equal",
+                            "left_no": i1 + k + 1,
+                            "left": a[i1 + k],
+                            "right_no": j1 + k + 1,
+                            "right": b[j1 + k],
+                        }
+                    )
                 elif not skipped:
                     rows.append({"type": "skip", "count": len(span) - len(keep)})
                     skipped = True
@@ -59,9 +66,18 @@ def side_by_side(old: str, new: str, context: int | None = 3) -> list[dict]:
                 li, rj = i1 + k, j1 + k
                 left = a[li] if li < i2 else None
                 right = b[rj] if rj < j2 else None
-                typ = "modified" if left is not None and right is not None else ("removed" if right is None else "added")
-                rows.append({"type": typ, "left_no": li + 1 if left is not None else None, "left": left,
-                             "right_no": rj + 1 if right is not None else None, "right": right})
+                typ = (
+                    "modified" if left is not None and right is not None else ("removed" if right is None else "added")
+                )
+                rows.append(
+                    {
+                        "type": typ,
+                        "left_no": li + 1 if left is not None else None,
+                        "left": left,
+                        "right_no": rj + 1 if right is not None else None,
+                        "right": right,
+                    }
+                )
         elif tag == "delete":
             for k in range(i1, i2):
                 rows.append({"type": "removed", "left_no": k + 1, "left": a[k], "right_no": None, "right": None})

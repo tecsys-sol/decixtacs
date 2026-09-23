@@ -22,10 +22,23 @@ from app.services import metrics
 
 log = logging.getLogger(__name__)
 
-PLATFORM_HINTS = [("junos", "junos"), ("eos", "eos"), ("arista", "eos"), ("nxos", "nxos"), ("nx-os", "nxos"),
-                  ("ios", "ios"), ("fortios", "fortios"), ("forti", "fortios"), ("sfos", "sfos"),
-                  ("sophos", "sfos"), ("routeros", "routeros"), ("mikrotik", "routeros"), ("vyos", "vyos"),
-                  ("linux", "linux"), ("bird", "linux")]
+PLATFORM_HINTS = [
+    ("junos", "junos"),
+    ("eos", "eos"),
+    ("arista", "eos"),
+    ("nxos", "nxos"),
+    ("nx-os", "nxos"),
+    ("ios", "ios"),
+    ("fortios", "fortios"),
+    ("forti", "fortios"),
+    ("sfos", "sfos"),
+    ("sophos", "sfos"),
+    ("routeros", "routeros"),
+    ("mikrotik", "routeros"),
+    ("vyos", "vyos"),
+    ("linux", "linux"),
+    ("bird", "linux"),
+]
 
 MIRRORED = {
     "vlan": "/api/ipam/vlans/",
@@ -79,13 +92,16 @@ def _strip_prefix(addr: str | None) -> str | None:
 def sync(db: Session, integration: Integration, client: NetBoxClient | None = None) -> dict[str, Any]:
     tenant_id = integration.tenant_id
     opts = integration.options or {}
-    client = client or NetBoxClient(integration.base_url, decrypt_secret(integration.token_enc) or "",
-                                    verify=opts.get("verify_tls", True))
+    client = client or NetBoxClient(
+        integration.base_url, decrypt_secret(integration.token_enc) or "", verify=opts.get("verify_tls", True)
+    )
     filters = opts.get("filters", {})  # e.g. {"tenant": "decix", "status": "active"}
     stats: dict[str, int] = {}
 
     # --- sites & racks -----------------------------------------------------
-    sites = {s.netbox_id: s for s in db.scalars(select(Site).where(Site.tenant_id == tenant_id, Site.netbox_id.is_not(None)))}
+    sites = {
+        s.netbox_id: s for s in db.scalars(select(Site).where(Site.tenant_id == tenant_id, Site.netbox_id.is_not(None)))
+    }
     for nb in client.paginate("/api/dcim/sites/", filters.get("sites")):
         s = sites.get(nb["id"]) or db.scalar(select(Site).where(Site.tenant_id == tenant_id, Site.slug == nb["slug"]))
         if s is None:
@@ -98,7 +114,9 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
     db.flush()
     stats["sites"] = len(sites)
 
-    racks = {r.netbox_id: r for r in db.scalars(select(Rack).where(Rack.tenant_id == tenant_id, Rack.netbox_id.is_not(None)))}
+    racks = {
+        r.netbox_id: r for r in db.scalars(select(Rack).where(Rack.tenant_id == tenant_id, Rack.netbox_id.is_not(None)))
+    }
     for nb in client.paginate("/api/dcim/racks/", filters.get("racks")):
         site = sites.get((nb.get("site") or {}).get("id"))
         if site is None:
@@ -115,14 +133,19 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
     # --- devices -----------------------------------------------------------
     platforms = {p.slug: p for p in db.scalars(select(Platform))}
     vendors = {v.slug: v for v in db.scalars(select(Vendor))}
-    by_nb = {d.netbox_id: d for d in db.scalars(select(Device).where(Device.tenant_id == tenant_id, Device.netbox_id.is_not(None)))}
+    by_nb = {
+        d.netbox_id: d
+        for d in db.scalars(select(Device).where(Device.tenant_id == tenant_id, Device.netbox_id.is_not(None)))
+    }
     by_name = {d.hostname: d for d in db.scalars(select(Device).where(Device.tenant_id == tenant_id))}
     seen = 0
     for nb in client.paginate("/api/dcim/devices/", filters.get("devices")):
-        ip = _strip_prefix((nb.get("primary_ip4") or nb.get("primary_ip6") or nb.get("primary_ip") or {}).get("address"))
+        ip = _strip_prefix(
+            (nb.get("primary_ip4") or nb.get("primary_ip6") or nb.get("primary_ip") or {}).get("address")
+        )
         if not nb.get("name") or not ip:
             continue
-        manu = ((nb.get("device_type") or {}).get("manufacturer") or {})
+        manu = (nb.get("device_type") or {}).get("manufacturer") or {}
         vendor = vendors.get(manu.get("slug", ""))
         if vendor is None and manu.get("slug"):
             vendor = Vendor(slug=manu["slug"], name=manu.get("name") or manu["slug"])
@@ -163,8 +186,10 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
     # --- cables -> links (topology) ----------------------------------------
     if opts.get("sync_cables", True):
         name_to_dev = {d.hostname: d for d in by_nb.values()}
-        existing = {(l.a_device_id, l.a_interface, l.b_device_id, l.b_interface): l
-                    for l in db.scalars(select(Link).where(Link.tenant_id == tenant_id, Link.source == "netbox"))}
+        existing = {
+            (lk.a_device_id, lk.a_interface, lk.b_device_id, lk.b_interface): lk
+            for lk in db.scalars(select(Link).where(Link.tenant_id == tenant_id, Link.source == "netbox"))
+        }
         keep = set()
         for cable in client.paginate("/api/dcim/cables/", filters.get("cables")):
             a = (cable.get("a_terminations") or [{}])[0].get("object") or {}
@@ -175,8 +200,14 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
                 continue
             key = (da.id, a.get("name", "?"), dbv.id, b.get("name", "?"))
             if key not in existing:
-                existing[key] = Link(tenant_id=tenant_id, a_device_id=da.id, a_interface=key[1],
-                                     b_device_id=dbv.id, b_interface=key[3], source="netbox")
+                existing[key] = Link(
+                    tenant_id=tenant_id,
+                    a_device_id=da.id,
+                    a_interface=key[1],
+                    b_device_id=dbv.id,
+                    b_interface=key[3],
+                    source="netbox",
+                )
                 db.add(existing[key])
             existing[key].status = "up" if (cable.get("status") or {}).get("value") == "connected" else "planned"
             keep.add(key)
@@ -192,9 +223,14 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
         n = 0
         for nb in client.paginate(path, filters.get(otype)):
             eid = str(nb["id"])
-            row = db.scalar(select(ExternalObject).where(
-                ExternalObject.tenant_id == tenant_id, ExternalObject.source == "netbox",
-                ExternalObject.object_type == otype, ExternalObject.external_id == eid))
+            row = db.scalar(
+                select(ExternalObject).where(
+                    ExternalObject.tenant_id == tenant_id,
+                    ExternalObject.source == "netbox",
+                    ExternalObject.object_type == otype,
+                    ExternalObject.external_id == eid,
+                )
+            )
             if row is None:
                 row = ExternalObject(tenant_id=tenant_id, source="netbox", object_type=otype, external_id=eid)
                 db.add(row)

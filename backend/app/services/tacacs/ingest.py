@@ -92,17 +92,29 @@ def _store_auth(db: Session, tenant_id: uuid.UUID, rec: ParsedRecord, dev: Devic
         # Keep denied commands in the searchable command log as well
         db.add(
             CommandLog(
-                tenant_id=tenant_id, timestamp=rec.timestamp, username=rec.username,
-                device_id=dev.id if dev else None, device_address=rec.device_address,
-                device_name=dev.hostname if dev else None, source_address=rec.source_address,
-                port=rec.port, service=rec.service, record_type="author", command=rec.command,
-                result="denied", raw=rec.raw,
+                tenant_id=tenant_id,
+                timestamp=rec.timestamp,
+                username=rec.username,
+                device_id=dev.id if dev else None,
+                device_address=rec.device_address,
+                device_name=dev.hostname if dev else None,
+                source_address=rec.source_address,
+                port=rec.port,
+                service=rec.service,
+                record_type="author",
+                command=rec.command,
+                result="denied",
+                raw=rec.raw,
             )
         )
         emit_event(
-            db, tenant_id, "unauthorized_command", severity="high",
+            db,
+            tenant_id,
+            "unauthorized_command",
+            severity="high",
             title=f"Denied command by {rec.username} on {dev.hostname if dev else rec.device_address}",
-            body=rec.command, device_id=dev.id if dev else None,
+            body=rec.command,
+            device_id=dev.id if dev else None,
             dedup_key=f"unauth:{rec.username}:{rec.device_address}:{rec.command}",
         )
     if rec.kind == "authen" and result == "fail":

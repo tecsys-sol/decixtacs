@@ -7,7 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import Ctx, get_owned, require
@@ -20,8 +20,20 @@ from app.services.audit import model_snapshot
 
 router = APIRouter(tags=["inventory"])
 
-DEVICE_FIELDS = ["hostname", "management_ip", "site_id", "platform_id", "vendor_id", "role", "status",
-                 "backup_enabled", "credential_id", "serial", "os_version", "tags"]
+DEVICE_FIELDS = [
+    "hostname",
+    "management_ip",
+    "site_id",
+    "platform_id",
+    "vendor_id",
+    "role",
+    "status",
+    "backup_enabled",
+    "credential_id",
+    "serial",
+    "os_version",
+    "tags",
+]
 
 
 # --- sites / regions / racks ----------------------------------------------------------
@@ -77,8 +89,11 @@ def create_region(body: RegionIn, ctx: Ctx = Depends(require("devices:write"))):
 
 @router.get("/sites", response_model=list[SiteOut])
 def list_sites(ctx: Ctx = Depends(require("devices:read"))):
-    counts = dict(ctx.db.execute(select(Device.site_id, func.count()).where(Device.tenant_id == ctx.tenant_id)
-                                 .group_by(Device.site_id)).all())
+    counts = dict(
+        ctx.db.execute(
+            select(Device.site_id, func.count()).where(Device.tenant_id == ctx.tenant_id).group_by(Device.site_id)
+        ).all()
+    )
     out = []
     for s in ctx.db.scalars(select(Site).where(Site.tenant_id == ctx.tenant_id).order_by(Site.name)):
         o = SiteOut.model_validate(s)
@@ -92,8 +107,17 @@ def create_site(body: SiteIn, ctx: Ctx = Depends(require("devices:write"))):
     s = Site(tenant_id=ctx.tenant_id, **body.model_dump())
     ctx.db.add(s)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="site.create", actor=ctx.user, target_type="site",
-                 target_id=s.id, target_name=s.name, after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="site.create",
+        actor=ctx.user,
+        target_type="site",
+        target_id=s.id,
+        target_name=s.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return s
 
@@ -103,8 +127,17 @@ def update_site(site_id: uuid.UUID, body: SiteIn, ctx: Ctx = Depends(require("de
     s = get_owned(ctx, Site, site_id, "site")
     for k, v in body.model_dump().items():
         setattr(s, k, v)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="site.update", actor=ctx.user, target_type="site",
-                 target_id=s.id, target_name=s.name, after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="site.update",
+        actor=ctx.user,
+        target_type="site",
+        target_id=s.id,
+        target_name=s.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return s
 
@@ -112,8 +145,16 @@ def update_site(site_id: uuid.UUID, body: SiteIn, ctx: Ctx = Depends(require("de
 @router.delete("/sites/{site_id}", status_code=204)
 def delete_site(site_id: uuid.UUID, ctx: Ctx = Depends(require("devices:write"))):
     s = get_owned(ctx, Site, site_id, "site")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="site.delete", actor=ctx.user, target_type="site",
-                 target_id=s.id, target_name=s.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="site.delete",
+        actor=ctx.user,
+        target_type="site",
+        target_id=s.id,
+        target_name=s.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(s)
     ctx.db.commit()
 
@@ -199,13 +240,27 @@ def list_credentials(ctx: Ctx = Depends(require("devices:read"))):
 
 @router.post("/credentials", response_model=CredentialOut, status_code=201)
 def create_credential(body: CredentialIn, ctx: Ctx = Depends(require("credentials:write"))):
-    c = Credential(tenant_id=ctx.tenant_id, name=body.name, username=body.username,
-                   password_enc=encrypt_secret(body.password), ssh_key_enc=encrypt_secret(body.ssh_key),
-                   enable_secret_enc=encrypt_secret(body.enable_secret), rotated_at=utcnow())
+    c = Credential(
+        tenant_id=ctx.tenant_id,
+        name=body.name,
+        username=body.username,
+        password_enc=encrypt_secret(body.password),
+        ssh_key_enc=encrypt_secret(body.ssh_key),
+        enable_secret_enc=encrypt_secret(body.enable_secret),
+        rotated_at=utcnow(),
+    )
     ctx.db.add(c)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="credential.create", actor=ctx.user,
-                 target_type="credential", target_id=c.id, target_name=c.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="credential.create",
+        actor=ctx.user,
+        target_type="credential",
+        target_id=c.id,
+        target_name=c.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return _cred_out(c)
 
@@ -221,8 +276,16 @@ def rotate_credential(cred_id: uuid.UUID, body: CredentialIn, ctx: Ctx = Depends
     if body.enable_secret is not None:
         c.enable_secret_enc = encrypt_secret(body.enable_secret)
     c.rotated_at = utcnow()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="credential.rotate", actor=ctx.user,
-                 target_type="credential", target_id=c.id, target_name=c.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="credential.rotate",
+        actor=ctx.user,
+        target_type="credential",
+        target_id=c.id,
+        target_name=c.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return _cred_out(c)
 
@@ -297,9 +360,16 @@ class DeviceOut(ORM):
 
 
 def _device_query(ctx: Ctx):
-    return select(Device).where(Device.tenant_id == ctx.tenant_id).options(
-        selectinload(Device.site), selectinload(Device.platform), selectinload(Device.vendor),
-        selectinload(Device.groups))
+    return (
+        select(Device)
+        .where(Device.tenant_id == ctx.tenant_id)
+        .options(
+            selectinload(Device.site),
+            selectinload(Device.platform),
+            selectinload(Device.vendor),
+            selectinload(Device.groups),
+        )
+    )
 
 
 def visible_devices_filter(ctx: Ctx, stmt, permission: str = "devices:read"):
@@ -307,13 +377,15 @@ def visible_devices_filter(ctx: Ctx, stmt, permission: str = "devices:read"):
     if ctx.principal.has_global(permission):
         return stmt
     site_ids = [g.scope_id for g in ctx.principal.grants if g.permission == permission and g.scope_type == "site"]
-    group_ids = [g.scope_id for g in ctx.principal.grants if g.permission == permission and g.scope_type == "device_group"]
+    group_ids = [
+        g.scope_id for g in ctx.principal.grants if g.permission == permission and g.scope_type == "device_group"
+    ]
     conds = []
     if site_ids:
         conds.append(Device.site_id.in_(site_ids))
     if group_ids:
         conds.append(Device.groups.any(DeviceGroup.id.in_(group_ids)))
-    return stmt.where(or_(*conds)) if conds else stmt.where(False)
+    return stmt.where(or_(*conds)) if conds else stmt.where(false())
 
 
 @router.get("/devices", response_model=Page[DeviceOut])
@@ -332,8 +404,9 @@ def list_devices(
 ):
     stmt = visible_devices_filter(ctx, _device_query(ctx)).order_by(Device.hostname)
     if q:
-        stmt = stmt.where(or_(Device.hostname.ilike(f"%{q}%"), Device.management_ip.ilike(f"{q}%"),
-                              Device.serial.ilike(f"%{q}%")))
+        stmt = stmt.where(
+            or_(Device.hostname.ilike(f"%{q}%"), Device.management_ip.ilike(f"{q}%"), Device.serial.ilike(f"%{q}%"))
+        )
     if site_id:
         stmt = stmt.where(Device.site_id == site_id)
     if platform:
@@ -352,7 +425,9 @@ def list_devices(
 
 
 def _device_groups(ctx: Ctx, ids: list[uuid.UUID]) -> list[DeviceGroup]:
-    groups = list(ctx.db.scalars(select(DeviceGroup).where(DeviceGroup.tenant_id == ctx.tenant_id, DeviceGroup.id.in_(ids))))
+    groups = list(
+        ctx.db.scalars(select(DeviceGroup).where(DeviceGroup.tenant_id == ctx.tenant_id, DeviceGroup.id.in_(ids)))
+    )
     if len(groups) != len(set(ids)):
         raise HTTPException(422, "unknown device group")
     return groups
@@ -378,8 +453,17 @@ def create_device(body: DeviceIn, ctx: Ctx = Depends(require("devices:write"))):
     d.groups = _device_groups(ctx, body.group_ids)
     ctx.db.add(d)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device.create", actor=ctx.user, target_type="device",
-                 target_id=d.id, target_name=d.hostname, after=model_snapshot(d, DEVICE_FIELDS), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device.create",
+        actor=ctx.user,
+        target_type="device",
+        target_id=d.id,
+        target_name=d.hostname,
+        after=model_snapshot(d, DEVICE_FIELDS),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return ctx.db.scalar(_device_query(ctx).where(Device.id == d.id))
 
@@ -404,9 +488,18 @@ def update_device(device_id: uuid.UUID, body: DevicePatch, ctx: Ctx = Depends(re
         setattr(d, k, v)
     if body.group_ids is not None:
         d.groups = _device_groups(ctx, body.group_ids)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device.update", actor=ctx.user, target_type="device",
-                 target_id=d.id, target_name=d.hostname, before=before, after=model_snapshot(d, DEVICE_FIELDS),
-                 source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device.update",
+        actor=ctx.user,
+        target_type="device",
+        target_id=d.id,
+        target_name=d.hostname,
+        before=before,
+        after=model_snapshot(d, DEVICE_FIELDS),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return d
 
@@ -416,8 +509,17 @@ def delete_device(device_id: uuid.UUID, ctx: Ctx = Depends(require("devices:writ
     d = get_owned(ctx, Device, device_id, "device")
     if not ctx.principal.can_on_device("devices:write", d):
         raise HTTPException(403, "not allowed on this device")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device.delete", actor=ctx.user, target_type="device",
-                 target_id=d.id, target_name=d.hostname, before=model_snapshot(d, DEVICE_FIELDS), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device.delete",
+        actor=ctx.user,
+        target_type="device",
+        target_id=d.id,
+        target_name=d.hostname,
+        before=model_snapshot(d, DEVICE_FIELDS),
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(d)
     ctx.db.commit()
 
@@ -468,21 +570,37 @@ def _group_out(g: DeviceGroup) -> DeviceGroupOut:
 
 @router.get("/device-groups", response_model=list[DeviceGroupOut])
 def list_device_groups(ctx: Ctx = Depends(require("devices:read"))):
-    return [_group_out(g) for g in ctx.db.scalars(
-        select(DeviceGroup).where(DeviceGroup.tenant_id == ctx.tenant_id).options(selectinload(DeviceGroup.devices))
-        .order_by(DeviceGroup.name))]
+    return [
+        _group_out(g)
+        for g in ctx.db.scalars(
+            select(DeviceGroup)
+            .where(DeviceGroup.tenant_id == ctx.tenant_id)
+            .options(selectinload(DeviceGroup.devices))
+            .order_by(DeviceGroup.name)
+        )
+    ]
 
 
 @router.post("/device-groups", response_model=DeviceGroupOut, status_code=201)
 def create_device_group(body: DeviceGroupIn, ctx: Ctx = Depends(require("devices:write"))):
     g = DeviceGroup(tenant_id=ctx.tenant_id, **body.model_dump(exclude={"device_ids"}))
-    g.devices = list(ctx.db.scalars(select(Device).where(Device.tenant_id == ctx.tenant_id, Device.id.in_(body.device_ids))))
+    g.devices = list(
+        ctx.db.scalars(select(Device).where(Device.tenant_id == ctx.tenant_id, Device.id.in_(body.device_ids)))
+    )
     apply_dynamic_membership(ctx, g)
     ctx.db.add(g)
     ctx.db.flush()
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device_group.create", actor=ctx.user,
-                 target_type="device_group", target_id=g.id, target_name=g.name,
-                 after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device_group.create",
+        actor=ctx.user,
+        target_type="device_group",
+        target_id=g.id,
+        target_name=g.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return _group_out(g)
 
@@ -492,11 +610,21 @@ def update_device_group(group_id: uuid.UUID, body: DeviceGroupIn, ctx: Ctx = Dep
     g = get_owned(ctx, DeviceGroup, group_id, "device group")
     for k, v in body.model_dump(exclude={"device_ids"}).items():
         setattr(g, k, v)
-    g.devices = list(ctx.db.scalars(select(Device).where(Device.tenant_id == ctx.tenant_id, Device.id.in_(body.device_ids))))
+    g.devices = list(
+        ctx.db.scalars(select(Device).where(Device.tenant_id == ctx.tenant_id, Device.id.in_(body.device_ids)))
+    )
     apply_dynamic_membership(ctx, g)
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device_group.update", actor=ctx.user,
-                 target_type="device_group", target_id=g.id, target_name=g.name,
-                 after=body.model_dump(mode="json"), source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device_group.update",
+        actor=ctx.user,
+        target_type="device_group",
+        target_id=g.id,
+        target_name=g.name,
+        after=body.model_dump(mode="json"),
+        source_ip=ctx.ip,
+    )
     ctx.db.commit()
     return _group_out(g)
 
@@ -504,8 +632,16 @@ def update_device_group(group_id: uuid.UUID, body: DeviceGroupIn, ctx: Ctx = Dep
 @router.delete("/device-groups/{group_id}", status_code=204)
 def delete_device_group(group_id: uuid.UUID, ctx: Ctx = Depends(require("devices:write"))):
     g = get_owned(ctx, DeviceGroup, group_id, "device group")
-    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="device_group.delete", actor=ctx.user,
-                 target_type="device_group", target_id=g.id, target_name=g.name, source_ip=ctx.ip)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="device_group.delete",
+        actor=ctx.user,
+        target_type="device_group",
+        target_id=g.id,
+        target_name=g.name,
+        source_ip=ctx.ip,
+    )
     ctx.db.delete(g)
     ctx.db.commit()
 
@@ -521,16 +657,36 @@ def topology(site_id: uuid.UUID | None = None, ctx: Ctx = Depends(require("devic
         stmt = stmt.where(Device.site_id == site_id)
     devices = list(ctx.db.scalars(stmt))
     ids = {d.id for d in devices}
-    links = ctx.db.scalars(select(Link).where(Link.tenant_id == ctx.tenant_id,
-                                              Link.a_device_id.in_(ids), Link.b_device_id.in_(ids)))
+    links = ctx.db.scalars(
+        select(Link).where(Link.tenant_id == ctx.tenant_id, Link.a_device_id.in_(ids), Link.b_device_id.in_(ids))
+    )
     sites = {d.site.id: d.site for d in devices if d.site}
     return {
-        "sites": [{"id": str(s.id), "name": s.name, "kind": s.kind, "lat": s.latitude, "lon": s.longitude}
-                  for s in sites.values()],
-        "nodes": [{"id": str(d.id), "label": d.hostname, "site_id": str(d.site_id) if d.site_id else None,
-                   "role": d.role, "platform": d.platform.slug if d.platform else None,
-                   "status": d.reachability, "backup": d.last_backup_status} for d in devices],
-        "edges": [{"id": str(l.id), "source": str(l.a_device_id), "target": str(l.b_device_id),
-                   "label": f"{l.a_interface} - {l.b_interface}", "speed_mbps": l.speed_mbps, "status": l.status}
-                  for l in links],
+        "sites": [
+            {"id": str(s.id), "name": s.name, "kind": s.kind, "lat": s.latitude, "lon": s.longitude}
+            for s in sites.values()
+        ],
+        "nodes": [
+            {
+                "id": str(d.id),
+                "label": d.hostname,
+                "site_id": str(d.site_id) if d.site_id else None,
+                "role": d.role,
+                "platform": d.platform.slug if d.platform else None,
+                "status": d.reachability,
+                "backup": d.last_backup_status,
+            }
+            for d in devices
+        ],
+        "edges": [
+            {
+                "id": str(link.id),
+                "source": str(link.a_device_id),
+                "target": str(link.b_device_id),
+                "label": f"{link.a_interface} - {link.b_interface}",
+                "speed_mbps": link.speed_mbps,
+                "status": link.status,
+            }
+            for link in links
+        ],
     }

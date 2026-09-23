@@ -39,8 +39,12 @@ def scrapli_cfg_push(target, config: str, dry_run: bool) -> PushOutcome:
     if platform is None:
         return PushOutcome(False, "", f"config replace not supported on platform {target.platform}")
     conn_args = {
-        "host": target.host, "port": target.port, "auth_username": target.username,
-        "auth_password": target.password, "auth_strict_key": False, "platform": platform,
+        "host": target.host,
+        "port": target.port,
+        "auth_username": target.username,
+        "auth_password": target.password,
+        "auth_strict_key": False,
+        "platform": platform,
         "timeout_ops": 120,
     }
     if target.ssh_key:

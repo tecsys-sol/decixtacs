@@ -44,9 +44,7 @@ class GoldenConfig(UUIDPk, Timestamps, TenantScoped, Base):
     __tablename__ = "golden_configs"
     name: Mapped[str] = mapped_column(String(128))
     device_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="CASCADE"))
-    device_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("device_groups.id", ondelete="CASCADE")
-    )
+    device_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("device_groups.id", ondelete="CASCADE"))
     # "full" = entire config must match; "snippet" = these lines must be present
     mode: Mapped[str] = mapped_column(String(16), default="snippet")
     content: Mapped[str] = mapped_column(Text)
@@ -72,9 +70,7 @@ class ComplianceRule(UUIDPk, Timestamps, TenantScoped, Base):
     block_start: Mapped[str | None] = mapped_column(String(512))  # regex opening a config block
     min_count: Mapped[int] = mapped_column(Integer, default=1)
     platforms: Mapped[list] = mapped_column(JSONType, default=list)  # empty = all
-    device_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("device_groups.id", ondelete="CASCADE")
-    )
+    device_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("device_groups.id", ondelete="CASCADE"))
     severity: Mapped[str] = mapped_column(String(16), default="medium")  # low|medium|high|critical
     remediation: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
