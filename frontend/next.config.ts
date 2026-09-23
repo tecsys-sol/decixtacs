@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
+  // do not generate AGENTS.md / CLAUDE.md into the project on `next dev`
+  agentRules: false,
   async rewrites() {
     if (!proxyTarget) return [];
     return [{ source: "/api/:path*", destination: `${proxyTarget.replace(/\/$/, "")}/api/:path*` }];
