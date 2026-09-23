@@ -1,19 +1,26 @@
 import { cn } from "@/lib/utils";
 
-export function Logo({ collapsed, className }: { collapsed?: boolean; className?: string }) {
+export function LogoMark({ className }: { className?: string }) {
   return (
-    <div className={cn("flex items-center gap-2", className)}>
-      <svg viewBox="0 0 32 32" className="h-7 w-7 shrink-0" aria-hidden>
-        <rect width="32" height="32" rx="7" className="fill-primary" />
-        <path d="M9 10L16 23L23 10Z" fill="none" stroke="white" strokeWidth="2" strokeLinejoin="round" />
-        <circle cx="9" cy="10" r="3" fill="white" />
-        <circle cx="23" cy="10" r="3" fill="white" />
-        <circle cx="16" cy="23" r="3" fill="white" />
+    <span className={cn("flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] bg-[#5b4ee6]", className)} aria-hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="5" cy="12" r="2.5" />
+        <circle cx="19" cy="5" r="2.5" />
+        <circle cx="19" cy="19" r="2.5" />
+        <path d="M7.3 11 16.7 6M7.3 13l9.4 5" />
       </svg>
+    </span>
+  );
+}
+
+export function Logo({ collapsed, className, subtitle = "Manager" }: { collapsed?: boolean; className?: string; subtitle?: string }) {
+  return (
+    <div className={cn("flex items-center gap-2.5", className)}>
+      <LogoMark />
       {collapsed ? null : (
-        <div className="leading-tight">
-          <p className="text-sm font-semibold tracking-tight">NetworkOps</p>
-          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Manager</p>
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="font-display text-[15px] font-bold text-foreground">NetworkOps</span>
+          <span className="truncate text-[11.5px] text-muted-foreground">{subtitle}</span>
         </div>
       )}
     </div>

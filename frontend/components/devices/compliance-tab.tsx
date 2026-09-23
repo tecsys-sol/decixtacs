@@ -4,6 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { CheckCircle2, ClipboardCheck } from "lucide-react";
 
+import * as React from "react";
+
+import { Chart, useChartMode } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { RelativeTime } from "@/components/common/relative-time";
@@ -12,9 +15,39 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
+import { donutOption, gaugeOption, STATUS } from "@/lib/charts";
 import { scoreColor } from "@/lib/status";
 import type { ComplianceRun, ComplianceRunDetail, Device } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+function DeviceGauges({ score, fleet }: { score: { score: number; passed: number; failed: number }; fleet: number | null }) {
+  const mode = useChartMode();
+  const gauge = React.useMemo(
+    () => gaugeOption({ value: Math.round(score.score * 10) / 10, label: fleet == null ? "device score" : `${score.score >= fleet ? "+" : "−"}${Math.abs(score.score - fleet).toFixed(1)} vs fleet`, gradient: true }, mode),
+    [score, fleet, mode],
+  );
+  const checks = React.useMemo(
+    () =>
+      donutOption(
+        {
+          items: [
+            { name: "Passed", value: score.passed, color: STATUS[mode].success },
+            { name: "Failed", value: score.failed, color: STATUS[mode].danger },
+          ],
+          centerValue: String(score.passed + score.failed),
+          centerLabel: "checks",
+        },
+        mode,
+      ),
+    [score, mode],
+  );
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2">
+      <Chart option={gauge} height={180} ariaLabel={`Device compliance score ${score.score.toFixed(1)}`} />
+      <Chart option={checks} height={180} ariaLabel="Passed and failed checks" />
+    </div>
+  );
+}
 
 export function ComplianceTab({ device }: { device: Device }) {
   const latest = useQuery({
@@ -35,6 +68,7 @@ export function ComplianceTab({ device }: { device: Device }) {
   }
   const score = detail.data.devices.find((d) => d.device_id === device.id);
   const failures = detail.data.failures.filter((f) => f.device === device.hostname);
+  const fleet = detail.data.devices.length ? detail.data.devices.reduce((a, d) => a + d.score, 0) / detail.data.devices.length : null;
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -49,9 +83,10 @@ export function ComplianceTab({ device }: { device: Device }) {
         <CardContent>
           {score ? (
             <>
-              <p className={cn("text-4xl font-semibold tabular", scoreColor(score.score))}>{score.score.toFixed(1)}%</p>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <DeviceGauges score={score} fleet={fleet} />
+              <p className={cn("mt-1 text-center text-xs font-semibold", scoreColor(score.score))}>
                 {score.passed} passed · {score.failed} failed
+                {fleet != null ? <span className="font-normal text-ink-3"> · fleet average {fleet.toFixed(1)}%</span> : null}
               </p>
             </>
           ) : (
@@ -86,7 +121,7 @@ export function ComplianceTab({ device }: { device: Device }) {
               </TableBody>
             </Table>
           ) : (
-            <EmptyState icon={CheckCircle2} title="All rules passed" />
+            <EmptyState icon={CheckCircle2} art="success" title="All rules passed" />
           )}
         </CardContent>
       </Card>

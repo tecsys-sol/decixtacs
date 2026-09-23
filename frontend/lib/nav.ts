@@ -20,6 +20,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+export type NavBadge = "devices" | "backups" | "changes" | "alerts";
+
 export interface NavItem {
   title: string;
   href: string;
@@ -29,6 +31,8 @@ export interface NavItem {
   /** keyboard shortcut (shown in the palette / help) */
   shortcut?: string;
   keywords?: string[];
+  /** live counter shown next to the item (from the dashboard summary) */
+  badge?: NavBadge;
 }
 
 export interface NavGroup {
@@ -41,16 +45,18 @@ export const NAV: NavGroup[] = [
     title: "Overview",
     items: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "devices:read", shortcut: "g d" },
+      { title: "Devices", href: "/devices", icon: Server, permission: "devices:read", shortcut: "g v", keywords: ["inventory"], badge: "devices" },
       { title: "Network map", href: "/map", icon: Waypoints, permission: "devices:read", keywords: ["topology"] },
+      { title: "Alerts", href: "/alerts", icon: Bell, permission: "devices:read", badge: "alerts" },
     ],
   },
   {
     title: "Configuration",
     items: [
-      { title: "Devices", href: "/devices", icon: Server, permission: "devices:read", shortcut: "g v", keywords: ["inventory"] },
-      { title: "Backups", href: "/backups", icon: GitCompare, permission: "configs:read", shortcut: "g b", keywords: ["git", "diff"] },
+      { title: "Backups", href: "/backups", icon: GitCompare, permission: "configs:read", shortcut: "g b", keywords: ["git", "diff"], badge: "backups" },
       { title: "Compliance", href: "/compliance", icon: ClipboardCheck, permission: "compliance:read", keywords: ["rules"] },
-      { title: "Changes", href: "/changes", icon: Workflow, permission: "changes:read", shortcut: "g c", keywords: ["change request", "CHG"] },
+      { title: "Changes", href: "/changes", icon: Workflow, permission: "changes:read", shortcut: "g c", keywords: ["change request", "CHG"], badge: "changes" },
+      { title: "Reports", href: "/reports", icon: FileBarChart, permission: "reports:read" },
     ],
   },
   {
@@ -63,19 +69,14 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    title: "Peering",
-    items: [{ title: "IXP", href: "/ixp", icon: Network, permission: "devices:read", keywords: ["members", "route server", "rpki"] }],
-  },
-  {
-    title: "Operations",
+    title: "Integrations",
     items: [
-      { title: "Alerts", href: "/alerts", icon: Bell, permission: "devices:read" },
-      { title: "Reports", href: "/reports", icon: FileBarChart, permission: "reports:read" },
+      { title: "IXP", href: "/ixp", icon: Network, permission: "devices:read", keywords: ["members", "route server", "rpki"] },
       { title: "Integrations", href: "/integrations", icon: PlugZap, permission: "devices:read", keywords: ["netbox", "ixp manager", "birdseye"] },
     ],
   },
   {
-    title: "Administration",
+    title: "Admin",
     items: [
       { title: "Users & roles", href: "/users", icon: Users, permission: "users:read", keywords: ["groups", "rbac"] },
       { title: "Login history", href: "/users?tab=logins", icon: FileClock, permission: "users:read" },

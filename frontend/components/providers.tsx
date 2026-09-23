@@ -42,7 +42,7 @@ function makeQueryClient() {
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(makeQueryClient);
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={client}>
         {children}
         <Toaster />

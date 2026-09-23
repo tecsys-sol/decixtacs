@@ -55,20 +55,20 @@ export function CodeViewer({
   };
 
   return (
-    <div className={cn("overflow-hidden rounded-lg border bg-card", className)}>
+    <div className={cn("overflow-hidden rounded-xl border bg-card", className)}>
       {toolbar ? (
-        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-2 py-1.5">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-3 py-2">
           <div className="relative w-full max-w-xs">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Find in file"
-              className="h-7 pl-7 text-xs"
+              className="h-8 pl-7 text-xs"
               aria-label="Find in file"
             />
           </div>
-          {q ? <span className="text-xs text-muted-foreground">{matches} matching line(s)</span> : null}
+          {q ? <span className="text-xs font-semibold text-ink-3">{matches} matching line(s)</span> : null}
           <span className="ml-auto text-xs text-muted-foreground tabular">{lines.length} lines</span>
           <Button variant="ghost" size="icon-sm" onClick={() => setWrap((w) => !w)} aria-pressed={wrap} aria-label="Toggle line wrap">
             <WrapText />
@@ -82,17 +82,17 @@ export function CodeViewer({
         </div>
       ) : null}
       <div className="overflow-auto scrollbar-thin" style={{ maxHeight }}>
-        <table className="w-full border-collapse font-mono text-xs leading-5">
+        <table className="w-full border-collapse font-mono text-[12.5px] leading-[1.75]">
           <tbody>
             {lines.map((line, i) => {
               const hit = q && line.toLowerCase().includes(q);
               return (
                 <tr
                   key={i}
-                  className={cn(hit && "bg-warning/15", highlightLines?.has(i + 1) && "bg-primary/10")}
+                  className={cn(hit && "bg-diff-mod-bg", highlightLines?.has(i + 1) && "bg-accent")}
                 >
                   <td
-                    className="select-none border-r bg-muted/30 px-2 text-right align-top text-muted-foreground/70"
+                    className="select-none pl-3 pr-2.5 text-right align-top text-label"
                     style={{ width: `${width + 2}ch` }}
                   >
                     {i + 1}

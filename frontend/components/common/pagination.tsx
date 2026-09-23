@@ -20,7 +20,7 @@ export function Pagination({
   const from = offset + 1;
   const to = Math.min(offset + limit, total);
   return (
-    <div className="flex items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+    <div className="flex items-center justify-between gap-2 border-t border-border/80 px-4 py-2.5 text-xs font-semibold text-ink-3">
       <span className="tabular">
         {formatNumber(from)}–{formatNumber(to)} of {formatNumber(total)}
       </span>

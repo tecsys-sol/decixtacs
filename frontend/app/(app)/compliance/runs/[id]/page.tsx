@@ -6,7 +6,9 @@ import { useParams } from "next/navigation";
 import { CheckCircle2, ChevronDown, ChevronRight, Search } from "lucide-react";
 import * as React from "react";
 
+import { Chart, useChartMode } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
+import { RunCharts } from "@/components/compliance/run-charts";
 import { ErrorState } from "@/components/common/error-state";
 import { KeyValue } from "@/components/common/field";
 import { PageHeader } from "@/components/common/page-header";
@@ -17,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { scoreColor } from "@/lib/status";
+import { gaugeOption } from "@/lib/charts";
 import type { ComplianceRunDetail } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 
@@ -24,6 +27,7 @@ const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low
 
 export default function ComplianceRunPage() {
   const { id } = useParams<{ id: string }>();
+  const mode = useChartMode();
   const [filter, setFilter] = React.useState("");
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const q = useQuery({ queryKey: ["compliance", "run", id], queryFn: () => api.get<ComplianceRunDetail>(`/compliance/runs/${id}`) });
@@ -37,6 +41,11 @@ export default function ComplianceRunPage() {
     }
     return [...m.values()].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9) || b.items.length - a.items.length);
   }, [q.data]);
+
+  const gauge = React.useMemo(
+    () => gaugeOption({ value: q.data?.run.score == null ? null : Math.round(q.data.run.score * 10) / 10, label: `${q.data?.run.devices_checked ?? 0} devices`, gradient: true }, mode),
+    [q.data, mode],
+  );
 
   if (q.isLoading) return <Skeleton className="h-96" />;
   if (q.error || !q.data) return <ErrorState error={q.error} onRetry={() => void q.refetch()} />;
@@ -58,13 +67,14 @@ export default function ComplianceRunPage() {
         title={`Compliance run · ${formatDateTime(run.started_at)}`}
         description={`${run.devices_checked} devices checked · ${q.data.failures.length} failed checks`}
       />
-      <div className="grid gap-4 lg:grid-cols-3">
+      <RunCharts detail={q.data} mode={mode} />
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>Summary</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <p className={cn("text-5xl font-semibold tabular", scoreColor(run.score))}>{run.score == null ? "—" : `${run.score.toFixed(1)}%`}</p>
+            <Chart option={gauge} height={190} ariaLabel={`Run score ${run.score?.toFixed(1) ?? ""}`} />
             <KeyValue
               items={[
                 ["Started", formatDateTime(run.started_at)],
@@ -88,14 +98,14 @@ export default function ComplianceRunPage() {
                   const open = expanded.has(g.rule);
                   return (
                     <li key={g.rule}>
-                      <button type="button" className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm hover:bg-muted/40" onClick={() => toggle(g.rule)} aria-expanded={open}>
+                      <button type="button" className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm hover:bg-row-hover" onClick={() => toggle(g.rule)} aria-expanded={open}>
                         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         <span className="flex-1 font-medium">{g.rule}</span>
                         <StatusBadge status={g.severity} dot={false} />
                         <span className="w-20 text-right text-xs text-muted-foreground tabular">{g.items.length} device(s)</span>
                       </button>
                       {open ? (
-                        <ul className="border-t bg-muted/20 px-10 py-2 text-xs">
+                        <ul className="border-t bg-secondary/60 px-10 py-2 text-xs">
                           {g.items.map((f, i) => (
                             <li key={i} className="flex gap-3 py-0.5">
                               <span className="w-44 shrink-0 truncate font-mono">{f.device}</span>
@@ -109,7 +119,7 @@ export default function ComplianceRunPage() {
                 })}
               </ul>
             ) : (
-              <EmptyState icon={CheckCircle2} title="No failures" description="Every device passed every rule." />
+              <EmptyState icon={CheckCircle2} art="success" title="No failures" description="Every device passed every rule." />
             )}
           </CardContent>
         </Card>
@@ -141,8 +151,8 @@ export default function ComplianceRunPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <div className="h-1.5 w-40 rounded-full bg-muted">
-                        <div className="h-full rounded-full" style={{ width: `${d.score}%`, background: "var(--series-1)" }} />
+                      <div className="h-1.5 w-40 rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${d.score}%` }} />
                       </div>
                       <span className={cn("text-sm font-medium tabular", scoreColor(d.score))}>{d.score.toFixed(1)}%</span>
                     </div>

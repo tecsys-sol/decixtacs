@@ -5,6 +5,8 @@ import Link from "next/link";
 import { DatabaseBackup, GitCompare, Play, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { Chart, useChartMode } from "@/components/charts/chart";
+import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { ConfirmDialog, useConfirm } from "@/components/common/confirm-dialog";
 import { EmptyState } from "@/components/common/empty-state";
 import { Field } from "@/components/common/field";
@@ -31,15 +33,19 @@ import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/hooks/use-auth";
+import { useRecentBackups } from "@/hooks/use-backup-stats";
+import { useNow } from "@/hooks/use-now";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useDeviceNames } from "@/hooks/use-lookups";
 import { toast } from "@/hooks/use-toast";
 import { useOnOpen } from "@/hooks/use-reset";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
+import { countBy, dailySeries } from "@/lib/aggregate";
+import { barOption, divergingBarOption, donutOption, palette, STATUS } from "@/lib/charts";
 import { BACKUP_STATUSES, PAGE_SIZE } from "@/lib/constants";
 import type { Backup, BackupRunResult, Change, Page } from "@/lib/types";
-import { formatBytes, humanize, shortSha } from "@/lib/utils";
+import { formatBytes, formatNumber, humanize, shortSha } from "@/lib/utils";
 
 function RunBackupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const qc = useQueryClient();
@@ -147,6 +153,8 @@ export default function BackupsPage() {
   const { can } = useAuth();
   const qc = useQueryClient();
   const devices = useDeviceNames();
+  const mode = useChartMode();
+  const now = useNow();
   const [filters, setFilters] = useUrlState({ changed_only: "", status: "", author: "", device: "", offset: "0" });
   const [author, setAuthor] = React.useState(filters.author);
   const debouncedAuthor = useDebounce(author, 400);
@@ -183,6 +191,32 @@ export default function BackupsPage() {
   });
 
   const items = q.data?.items ?? [];
+  const stats = useRecentBackups(30, {
+    device_id: filters.device || undefined,
+    status: filters.status || undefined,
+    author: filters.author || undefined,
+    changed_only: filters.changed_only === "1",
+  });
+  const charts = React.useMemo(() => {
+    const rows = stats.data?.items ?? [];
+    const statusItems = countBy(rows, (b) => (b.status === "failed" ? "failed" : b.changed ? "changed" : "unchanged"));
+    const colors: Record<string, string> = { changed: palette(mode)[0], unchanged: STATUS[mode].neutral, failed: STATUS[mode].danger };
+    const changed = rows.filter((b) => b.changed);
+    const perDay = dailySeries(changed, (b) => b.collected_at, 30, now);
+    const added = dailySeries(changed, (b) => b.collected_at, 30, now, (b) => b.lines_added);
+    const removed = dailySeries(changed, (b) => b.collected_at, 30, now, (b) => b.lines_removed);
+    return {
+      n: rows.length,
+      changed: changed.length,
+      status: donutOption(
+        { items: statusItems.map((i) => ({ name: humanize(i.name), value: i.value, color: colors[i.name] })), centerValue: formatNumber(rows.length), centerLabel: "backups" },
+        mode,
+      ),
+      perDay: barOption({ categories: perDay.labels, series: [{ name: "Config changes", data: perDay.data }], barWidth: 12, axisLabelInterval: 4 }, mode),
+      lines: divergingBarOption({ categories: added.labels, added: added.data, removed: removed.data, showCategoryLabels: true }, mode),
+    };
+  }, [stats.data, now, mode]);
+  const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${stats.data.items.length} of ${formatNumber(stats.data.total)}` : "";
 
   return (
     <>
@@ -197,6 +231,23 @@ export default function BackupsPage() {
           ) : null
         }
       />
+      <div className="mb-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <ChartCard title="Backup outcomes" description={`Last 30 days, matching the filters${statsNote}`}>
+          <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.n} emptyTitle="No backups in 30 days" emptyIcon={DatabaseBackup} emptyArt="default" height={240}>
+            <Chart option={charts.status} height={240} ariaLabel="Backup outcomes" />
+          </ChartBody>
+        </ChartCard>
+        <ChartCard title="Changes per day" description="Collections that changed the stored config" delay={1}>
+          <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.changed} emptyTitle="No config changes in 30 days" emptyIcon={GitCompare} height={240}>
+            <Chart option={charts.perDay} height={240} ariaLabel="Config changes per day" />
+          </ChartBody>
+        </ChartCard>
+        <ChartCard title="Lines added and removed" description="Per day · added above, removed below the line" delay={2} className="lg:col-span-2 xl:col-span-1">
+          <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.changed} emptyTitle="No config changes in 30 days" emptyIcon={GitCompare} height={240}>
+            <Chart option={charts.lines} height={240} ariaLabel="Lines added and removed per day" />
+          </ChartBody>
+        </ChartCard>
+      </div>
       <Card>
         <FilterBar>
           <SimpleSelect
@@ -265,7 +316,7 @@ export default function BackupsPage() {
                 <TableCell>
                   <StatusBadge status={b.status} dot={false} />
                   {b.error ? (
-                    <p className="mt-0.5 max-w-[240px] truncate text-[11px] text-destructive" title={b.error}>
+                    <p className="mt-0.5 max-w-[240px] truncate text-[11px] text-danger" title={b.error}>
                       {b.error}
                     </p>
                   ) : null}
@@ -274,7 +325,7 @@ export default function BackupsPage() {
                 <TableCell className="whitespace-nowrap text-xs tabular">
                   {b.changed ? (
                     <>
-                      <span className="text-diff-add-fg">+{b.lines_added}</span> <span className="text-diff-del-fg">−{b.lines_removed}</span>
+                      <span className="font-mono text-success">+{b.lines_added}</span> <span className="font-mono text-danger">−{b.lines_removed}</span>
                     </>
                   ) : (
                     <span className="text-muted-foreground">no change</span>

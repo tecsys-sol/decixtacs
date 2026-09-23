@@ -16,7 +16,7 @@ export function RiskBadge({ score, level, className }: { score: number | null | 
   const lvl = level ?? (score >= 70 ? "critical" : score >= 40 ? "high" : score >= 15 ? "medium" : "low");
   const Icon = lvl === "low" ? ShieldCheck : lvl === "medium" ? AlertTriangle : ShieldAlert;
   return (
-    <Badge variant={LEVEL_VARIANT[lvl] ?? "secondary"} className={cn(lvl === "critical" && "ring-1 ring-destructive/50", className)}>
+    <Badge variant={LEVEL_VARIANT[lvl] ?? "secondary"} className={cn(lvl === "critical" && "ring-1 ring-danger/50", className)}>
       <Icon /> Risk {score} · {lvl}
     </Badge>
   );
@@ -24,10 +24,10 @@ export function RiskBadge({ score, level, className }: { score: number | null | 
 
 export function RiskPanel({ risk, className }: { risk: RiskReport; className?: string }) {
   return (
-    <div className={cn("rounded-lg border bg-card p-3", className)} data-testid="risk-panel">
+    <div className={cn("rounded-xl border bg-card p-4", className)} data-testid="risk-panel">
       <div className="flex flex-wrap items-center gap-2">
         <RiskBadge score={risk.score} level={risk.level} />
-        <p className="text-sm text-muted-foreground">{risk.summary}</p>
+        <p className="text-sm text-ink-3">{risk.summary}</p>
       </div>
       {risk.findings.length ? (
         <ul className="mt-2 grid gap-1">
@@ -37,17 +37,17 @@ export function RiskPanel({ risk, className }: { risk: RiskReport; className?: s
             const tail = idx > 0 ? f.slice(idx + 1).trim() : "";
             return (
               <li key={i} className="flex items-start gap-2 text-xs">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-label="Finding" />
                 <span>
                   <span className="font-medium">{head}</span>
-                  {tail ? <code className="ml-1.5 break-all rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{tail}</code> : null}
+                  {tail ? <code className="ml-1.5 break-all rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-[11px]">{tail}</code> : null}
                 </span>
               </li>
             );
           })}
         </ul>
       ) : (
-        <p className="mt-2 text-xs text-muted-foreground">No risky patterns detected.</p>
+        <p className="mt-2 text-xs text-ink-3">No risky patterns detected.</p>
       )}
     </div>
   );

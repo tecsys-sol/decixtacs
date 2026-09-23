@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Download, FileBarChart, FileSpreadsheet, FileText, Plus } from "lucide-react";
 import * as React from "react";
 
+import { Chart, useChartMode } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { Field } from "@/components/common/field";
@@ -31,6 +32,8 @@ import { toast } from "@/hooks/use-toast";
 import { useOnOpen } from "@/hooks/use-reset";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
+import { barOption } from "@/lib/charts";
+import { reportPreview } from "@/lib/report-preview";
 import { REPORT_PERIODS, REPORT_TYPES, type ReportJson, type ReportSchedule } from "@/lib/types";
 import { formatDateTime, humanize } from "@/lib/utils";
 
@@ -131,6 +134,18 @@ export default function ReportsPage() {
   };
 
   const data = report.data;
+  const mode = useChartMode();
+  const preview = React.useMemo(() => (data ? reportPreview(data) : null), [data]);
+  const previewOption = React.useMemo(
+    () =>
+      preview
+        ? barOption(
+            { categories: preview.items.map((i) => i.name), series: [{ name: preview.valueLabel, data: preview.items.map((i) => i.value) }], horizontal: true, valueLabels: true, labelWidth: 160 },
+            mode,
+          )
+        : null,
+    [preview, mode],
+  );
   return (
     <>
       <PageHeader
@@ -160,7 +175,7 @@ export default function ReportsPage() {
               <Input id="rend" type="date" value={f.end} onChange={(e) => setF({ end: e.target.value })} />
             </Field>
             <div className="grid gap-2 pt-2">
-              <p className="text-xs font-medium text-muted-foreground">Download</p>
+              <p className="section-label">Download</p>
               <div className="grid grid-cols-3 gap-2">
                 <Button variant="outline" size="sm" onClick={() => void download("csv")} loading={downloading === "csv"}>
                   <FileText /> CSV
@@ -183,6 +198,15 @@ export default function ReportsPage() {
               {data ? `${formatDateTime(data.start)} → ${formatDateTime(data.end)} · ${data.rows.length} row(s)` : "Preview"}
             </CardDescription>
           </CardHeader>
+          {preview && previewOption ? (
+            <div className="border-b border-border/70 px-5 pb-4">
+              <p className="section-label mb-1">
+                {preview.valueLabel} by {preview.categoryLabel}
+                {preview.folded ? " · top 12" : ""}
+              </p>
+              <Chart option={previewOption} height={Math.max(140, preview.items.length * 28 + 24)} ariaLabel={`${preview.valueLabel} by ${preview.categoryLabel}`} />
+            </div>
+          ) : null}
           {report.isLoading ? (
             <CardContent>
               <Skeleton className="h-64" />
@@ -213,7 +237,7 @@ export default function ReportsPage() {
               </Table>
             </div>
           ) : (
-            <EmptyState icon={FileBarChart} title="No data for this period" />
+            <EmptyState icon={FileBarChart} art="chart" title="No data for this period" description="Pick another period or report type." />
           )}
         </Card>
       </div>

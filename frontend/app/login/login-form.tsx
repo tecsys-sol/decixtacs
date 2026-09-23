@@ -7,7 +7,6 @@ import * as React from "react";
 import { Field } from "@/components/common/field";
 import { Logo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, ApiError, errorMessage } from "@/lib/api";
 
@@ -78,10 +77,10 @@ export function LoginForm() {
   }
 
   return (
-    <Card className="relative w-full max-w-sm p-6 shadow-xl">
-      <Logo className="mb-6" />
-      <h1 className="text-lg font-semibold">{mfa ? "Two-factor authentication" : "Sign in"}</h1>
-      <p className="mb-5 text-sm text-muted-foreground">
+    <div className="rise relative w-full max-w-sm">
+      <Logo className="mb-8" subtitle="Network access & configuration" />
+      <h1 className="font-display text-2xl font-bold tracking-[-0.02em]">{mfa ? "Two-factor authentication" : "Sign in"}</h1>
+      <p className="mb-6 mt-1 text-sm text-ink-3">
         {mfa ? "Enter the 6-digit code from your authenticator app." : "Network access & configuration management"}
       </p>
       <form onSubmit={submit} className="grid gap-4" noValidate>
@@ -130,7 +129,7 @@ export function LoginForm() {
             ) : (
               <button
                 type="button"
-                className="-mt-2 justify-self-start text-xs text-muted-foreground hover:text-foreground"
+                className="-mt-2 justify-self-start rounded-sm text-xs font-semibold text-accent-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setShowTenant(true)}
               >
                 Sign in to a specific organisation
@@ -139,7 +138,7 @@ export function LoginForm() {
           </>
         )}
         {error ? (
-          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <p role="alert" className="rounded-md border border-danger/20 bg-danger-soft px-3 py-2 text-xs font-semibold text-danger">
             {error}
           </p>
         ) : null}
@@ -165,7 +164,7 @@ export function LoginForm() {
           </Button>
         ) : (
           <>
-            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-label">
               <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />
             </div>
             <Button type="button" variant="outline" onClick={sso} loading={ssoLoading}>
@@ -174,6 +173,6 @@ export function LoginForm() {
           </>
         )}
       </form>
-    </Card>
+    </div>
   );
 }

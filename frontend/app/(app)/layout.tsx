@@ -13,17 +13,18 @@ import { api, ApiError } from "@/lib/api";
 function FullPageLoader() {
   return (
     <div className="flex min-h-screen">
-      <div className="hidden w-60 flex-col gap-3 border-r bg-sidebar p-3 lg:flex">
-        <Logo />
+      <div className="hidden w-[244px] flex-col gap-3 border-r bg-sidebar px-4 py-[22px] lg:flex">
+        <Logo className="mb-3 px-2" />
         {Array.from({ length: 10 }).map((_, i) => (
-          <Skeleton key={i} className="h-6" />
+          <Skeleton key={i} className="h-8" />
         ))}
       </div>
-      <div className="flex-1 p-6">
-        <Skeleton className="mb-6 h-8 w-64" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="flex-1 px-4 py-6 sm:px-8">
+        <Skeleton className="mb-6 h-[68px] w-full" />
+        <Skeleton className="mb-5 h-40 w-full rounded-2xl" />
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24" />
+            <Skeleton key={i} className="h-32 rounded-xl" />
           ))}
         </div>
       </div>

@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, ExternalLink, Network, RadioTower } from "lucide-react";
 import * as React from "react";
 
+import { Chart, useChartMode } from "@/components/charts/chart";
+import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
 import { PageHeader } from "@/components/common/page-header";
@@ -18,8 +20,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
+import { countBy } from "@/lib/aggregate";
+import { barOption, compact, donutOption, palette, STATUS } from "@/lib/charts";
 import type { IxpMember, RouteServerClient } from "@/lib/types";
-import { cn, formatNumber } from "@/lib/utils";
+import { cn, formatNumber, humanize } from "@/lib/utils";
+
+function speedValue(label: string): number {
+  const m = /^(\d+(?:\.\d+)?)([GM])$/.exec(label);
+  return m ? Number(m[1]) * (m[2] === "G" ? 1000 : 1) : Number.MAX_SAFE_INTEGER;
+}
 
 function speed(mbps: number | null) {
   if (!mbps) return "—";
@@ -85,7 +94,22 @@ function MemberConnections({ member }: { member: IxpMember }) {
 function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
   const [open, setOpen] = React.useState<Set<string>>(new Set());
   const members = useQuery({ queryKey: ["ixp", "members", q], queryFn: () => api.get<IxpMember[]>("/ixp/members", { q }) });
-  const list = members.data ?? [];
+  const list = React.useMemo(() => members.data ?? [], [members.data]);
+  const mode = useChartMode();
+  const charts = React.useMemo(() => {
+    const policy = countBy(list, (m) => humanize(m.peering_policy ?? "unknown"), 5);
+    const types = countBy(list, (m) => humanize(m.member_type ?? "unknown"), 5);
+    const speeds = countBy(
+      list.flatMap((m) => (m.connections ?? []).flatMap((c) => c.ports)),
+      (p) => speed(p.speed_mbps),
+    ).sort((a, b) => speedValue(a.name) - speedValue(b.name));
+    return {
+      policy: donutOption({ items: policy, centerValue: formatNumber(list.length), centerLabel: "members" }, mode),
+      types: donutOption({ items: types, centerValue: String(types.length), centerLabel: types.length === 1 ? "type" : "types" }, mode),
+      speeds: barOption({ categories: speeds.map((x) => x.name), series: [{ name: "Ports", data: speeds.map((x) => x.value), color: palette(mode)[2] }], barWidth: 26 }, mode),
+      nSpeeds: speeds.length,
+    };
+  }, [list, mode]);
   const toggle = (id: string) =>
     setOpen((s) => {
       const n = new Set(s);
@@ -96,6 +120,24 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
 
 
   return (
+    <div className="grid gap-4">
+    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+      <ChartCard title="Members by peering policy" description="From IXP Manager">
+        <ChartBody loading={members.isLoading} error={members.error} empty={!list.length} emptyTitle="No IXP members" emptyIcon={Network} emptyArt="network" height={240}>
+          <Chart option={charts.policy} height={240} ariaLabel="Members by peering policy" />
+        </ChartBody>
+      </ChartCard>
+      <ChartCard title="Member types" description="Share of members per type" delay={1}>
+        <ChartBody loading={members.isLoading} error={members.error} empty={!list.length} emptyTitle="No IXP members" emptyIcon={Network} emptyArt="network" height={240}>
+          <Chart option={charts.types} height={240} ariaLabel="Member types" />
+        </ChartBody>
+      </ChartCard>
+      <ChartCard title="Port speeds" description="Member-facing ports by speed" delay={2} className="lg:col-span-2 xl:col-span-1">
+        <ChartBody loading={members.isLoading} error={members.error} empty={!charts.nSpeeds} emptyTitle="No ports recorded" emptyIcon={Network} height={240}>
+          <Chart option={charts.speeds} height={240} ariaLabel="Ports by speed" />
+        </ChartBody>
+      </ChartCard>
+    </div>
     <Card>
       <FilterBar>
         <TextFilter value={q} onCommit={setQ} placeholder="Name or ASN (e.g. AS13335)" className="w-72" aria-label="Search members" />
@@ -142,7 +184,7 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
                 </TableRow>
                 {isOpen ? (
                   <TableRow className="hover:bg-transparent">
-                    <TableCell colSpan={7} className="bg-muted/20 p-0">
+                    <TableCell colSpan={7} className="bg-secondary/60 p-0">
                       <MemberConnections member={m} />
                       {m.contacts?.length ? <p className="px-4 pb-3 text-xs text-muted-foreground">Contacts: {m.contacts.join(", ")}</p> : null}
                     </TableCell>
@@ -154,6 +196,7 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
         </TableBody>
       </Table>
     </Card>
+    </div>
   );
 }
 
@@ -164,8 +207,73 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
     queryKey: ["ixp", "rs", asnNum, problems],
     queryFn: () => api.get<RouteServerClient[]>("/ixp/route-server-clients", { asn: /^\d+$/.test(asnNum) ? Number(asnNum) : undefined, only_problems: problems || undefined }),
   });
-  const list = q.data ?? [];
+  const list = React.useMemo(() => q.data ?? [], [q.data]);
+  const mode = useChartMode();
+  const charts = React.useMemo(() => {
+    const top = [...list].sort((a, b) => (b.accepted ?? 0) + (b.filtered ?? 0) - ((a.accepted ?? 0) + (a.filtered ?? 0))).slice(0, 15);
+    const cats = top.map((c) => `AS${c.asn} ${c.afi}${c.member ? ` · ${c.member}` : ""}`);
+    // RPKI: routes per origin-validation state summed over sessions (or sessions per status string)
+    const rpkiSums = new Map<string, number>();
+    for (const c of list) {
+      if (c.rpki && typeof c.rpki === "object") {
+        for (const [k, v] of Object.entries(c.rpki)) rpkiSums.set(humanize(k), (rpkiSums.get(humanize(k)) ?? 0) + (Number(v) || 0));
+      } else {
+        const k = humanize(c.rpki ?? "unknown");
+        rpkiSums.set(k, (rpkiSums.get(k) ?? 0) + 1);
+      }
+    }
+    const rpkiUnit = list.some((c) => c.rpki && typeof c.rpki === "object") ? "routes" : "sessions";
+    const rpki = [...rpkiSums.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    const rpkiTotal = rpki.reduce((a, b) => a + b.value, 0);
+    const irr = countBy(list, (c) => humanize(c.irr_status ?? "unknown"));
+    const tone = (name: string) => {
+      const k = name.toLowerCase();
+      return ["valid", "ok", "pass", "accepted"].some((x) => k.includes(x)) && !k.includes("invalid")
+        ? STATUS[mode].success
+        : ["invalid", "fail", "filtered", "reject"].some((x) => k.includes(x))
+          ? STATUS[mode].danger
+          : k.includes("not") || k.includes("unknown")
+            ? STATUS[mode].neutral
+            : STATUS[mode].warning;
+    };
+    return {
+      n: top.length,
+      prefixes: barOption(
+        {
+          categories: cats,
+          series: [
+            { name: "Accepted", data: top.map((c) => c.accepted ?? 0), stack: "p", color: palette(mode)[0] },
+            { name: "Filtered", data: top.map((c) => c.filtered ?? 0), stack: "p", color: palette(mode)[1] },
+          ],
+          horizontal: true,
+          labelWidth: 170,
+        },
+        mode,
+      ),
+      rpki: donutOption({ items: rpki.map((r) => ({ ...r, color: tone(r.name) })), centerValue: compact(rpkiTotal), centerLabel: rpkiUnit }, mode),
+      rpkiUnit,
+      irr: donutOption({ items: irr.map((r) => ({ ...r, color: tone(r.name) })), centerValue: formatNumber(list.length), centerLabel: "sessions" }, mode),
+    };
+  }, [list, mode]);
   return (
+    <div className="grid gap-4">
+    <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[1.6fr_1fr_1fr]">
+      <ChartCard title="Prefixes per session" description="Accepted vs filtered, top 15 sessions" className="lg:col-span-2 xl:col-span-1">
+        <ChartBody loading={q.isLoading} error={q.error} empty={!charts.n} emptyTitle="No route-server sessions" emptyIcon={RadioTower} height={280}>
+          <Chart option={charts.prefixes} height={Math.max(220, charts.n * 26 + 50)} ariaLabel="Accepted and filtered prefixes per session" />
+        </ChartBody>
+      </ChartCard>
+      <ChartCard title="RPKI" description={`Origin validation of received ${charts.rpkiUnit}`} delay={1}>
+        <ChartBody loading={q.isLoading} error={q.error} empty={!list.length} emptyTitle="No sessions" emptyIcon={RadioTower} emptyArt="network" height={260}>
+          <Chart option={charts.rpki} height={260} ariaLabel="RPKI status breakdown" />
+        </ChartBody>
+      </ChartCard>
+      <ChartCard title="IRR" description="IRR filter status per session" delay={2}>
+        <ChartBody loading={q.isLoading} error={q.error} empty={!list.length} emptyTitle="No sessions" emptyIcon={RadioTower} emptyArt="network" height={260}>
+          <Chart option={charts.irr} height={260} ariaLabel="IRR status breakdown" />
+        </ChartBody>
+      </ChartCard>
+    </div>
     <Card>
       <FilterBar>
         <TextFilter value={asn} onCommit={setAsn} placeholder="ASN" className="w-40 font-mono" aria-label="ASN" />
@@ -186,14 +294,14 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
             <TableHead className="text-right">Filtered</TableHead>
             <TableHead className="text-right">Exported</TableHead>
             <TableHead>IRR</TableHead>
-            <TableHead>RPKI</TableHead>
+            <TableHead title="valid / invalid / unknown routes">RPKI V/I/U</TableHead>
             <TableHead>Since</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableState cols={11} isLoading={q.isLoading} error={q.error} onRetry={() => void q.refetch()} isEmpty={list.length === 0} empty={<EmptyState icon={RadioTower} title="No route-server sessions" description="Sync a birdseye integration to import route-server state." />} />
           {list.map((c) => (
-            <TableRow key={c.id} className={cn(c.state !== "up" && "bg-destructive/5")}>
+            <TableRow key={c.id} className={cn(c.state !== "up" && "bg-danger-soft/50")}>
               <TableCell className="whitespace-nowrap text-xs">
                 {c.route_server}
                 <span className="ml-1 text-muted-foreground">{c.protocol}</span>
@@ -207,7 +315,7 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
                 <StatusBadge status={c.state} />
               </TableCell>
               <TableCell className="text-right tabular">{formatNumber(c.accepted)}</TableCell>
-              <TableCell className={cn("text-right tabular", (c.filtered ?? 0) > 0 && "font-medium text-warning")}>
+              <TableCell className={cn("text-right tabular", (c.filtered ?? 0) > 0 && "font-bold text-warning")}>
                 {formatNumber(c.filtered)}
                 {(c.irr_filtered ?? 0) || (c.rpki_invalid ?? 0) ? (
                   <p className="text-[10px] font-normal text-muted-foreground">
@@ -217,7 +325,19 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
               </TableCell>
               <TableCell className="text-right tabular">{formatNumber(c.exported)}</TableCell>
               <TableCell>{c.irr_status ? <StatusBadge status={c.irr_status} dot={false} /> : "—"}</TableCell>
-              <TableCell>{c.rpki ? <StatusBadge status={c.rpki} dot={false} /> : "—"}</TableCell>
+              <TableCell>
+                {c.rpki && typeof c.rpki === "object" ? (
+                  <span className="whitespace-nowrap text-xs tabular" title="valid / invalid / unknown routes">
+                    <span className="text-success">{formatNumber(c.rpki.valid ?? 0)}</span> /{" "}
+                    <span className={cn((c.rpki.invalid ?? 0) > 0 ? "font-bold text-danger" : "text-ink-3")}>{formatNumber(c.rpki.invalid ?? 0)}</span> /{" "}
+                    <span className="text-ink-3">{formatNumber(c.rpki.unknown ?? 0)}</span>
+                  </span>
+                ) : c.rpki ? (
+                  <StatusBadge status={c.rpki} dot={false} />
+                ) : (
+                  "—"
+                )}
+              </TableCell>
               <TableCell className="whitespace-nowrap text-xs">
                 <RelativeTime value={c.since} />
               </TableCell>
@@ -226,6 +346,7 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
         </TableBody>
       </Table>
     </Card>
+    </div>
   );
 }
 

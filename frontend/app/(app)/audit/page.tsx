@@ -4,6 +4,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, History, ShieldAlert, ShieldCheck } from "lucide-react";
 import * as React from "react";
 
+import { Chart, useChartMode } from "@/components/charts/chart";
+import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
 import { JsonView } from "@/components/common/json-view";
@@ -17,9 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Segmented } from "@/components/ui/tabs";
+import { useNow } from "@/hooks/use-now";
+import { useTimeRange } from "@/hooks/use-time-range";
 import { toast } from "@/hooks/use-toast";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
+import { bucketSeries, countBy, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
+import { barOption } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { AuditEvent, AuditVerify, Page } from "@/lib/types";
 import { cn, formatDateTime, formatNumber, localInputToIso } from "@/lib/utils";
@@ -28,6 +35,9 @@ const DEFAULTS = { actor: "", action: "", target_type: "", start: "", end: "", o
 
 export default function AuditPage() {
   const [f, setF] = useUrlState(DEFAULTS);
+  const mode = useChartMode();
+  const now = useNow();
+  const { range, setRange } = useTimeRange();
   const offset = Number(f.offset) || 0;
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [verify, setVerify] = React.useState<AuditVerify | null>(null);
@@ -59,6 +69,44 @@ export default function AuditPage() {
   });
 
   const items = q.data?.items ?? [];
+  const stats = useQuery({
+    queryKey: ["audit", "stats", { ...f, offset: undefined }],
+    queryFn: () =>
+      api.get<Page<AuditEvent>>("/audit", {
+        actor: f.actor,
+        action: f.action,
+        target_type: f.target_type,
+        start: localInputToIso(f.start),
+        end: localInputToIso(f.end),
+        limit: 1000,
+      }),
+    placeholderData: (p) => p,
+    staleTime: 60_000,
+  });
+  const charts = React.useMemo(() => {
+    const rows = stats.data?.items ?? [];
+    const actions = countBy(rows, (e) => e.action, 10);
+    const areas = countBy(rows, (e) => e.action.split(".")[0], 5);
+    const areaOrder = areas.map((a) => a.name);
+    const series = bucketSeries(rows, (e) => e.timestamp, range, now, {
+      group: (e) => {
+        const a = e.action.split(".")[0];
+        return areaOrder.slice(0, 4).includes(a) ? a : "Other";
+      },
+      groupOrder: [...areaOrder.slice(0, 4), ...(areaOrder.length > 4 ? ["Other"] : [])],
+    });
+    return {
+      n: rows.length,
+      inRange: series.counted,
+      actions: barOption({ categories: actions.map((a) => a.name), series: [{ name: "Events", data: actions.map((a) => a.value) }], horizontal: true, valueLabels: true, labelWidth: 150 }, mode),
+      actionsN: actions.length,
+      timeline: barOption(
+        { categories: series.labels, series: series.series.map((x) => ({ name: x.name, data: x.data, stack: "a" })), axisLabelInterval: range === "30d" ? 4 : 3, barWidth: 12 },
+        mode,
+      ),
+    };
+  }, [stats.data, range, now, mode]);
+  const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${formatNumber(stats.data.items.length)} of ${formatNumber(stats.data.total)}` : "";
 
   return (
     <>
@@ -75,17 +123,39 @@ export default function AuditPage() {
         <div
           role="status"
           className={cn(
-            "mb-4 flex items-center gap-3 rounded-lg border p-3 text-sm",
-            verify.intact ? "border-success/40 bg-success/10" : "border-destructive/40 bg-destructive/10",
+            "rise mb-4 flex items-center gap-3 rounded-xl border p-4 text-sm",
+            verify.intact ? "border-success/30 bg-success-soft" : "border-danger/30 bg-danger-soft",
           )}
         >
-          {verify.intact ? <ShieldCheck className="h-5 w-5 text-success" /> : <ShieldAlert className="h-5 w-5 text-destructive" />}
+          {verify.intact ? <ShieldCheck className="h-5 w-5 text-success" /> : <ShieldAlert className="h-5 w-5 text-danger" />}
           <div>
             <p className="font-medium">{verify.intact ? "Chain intact" : "Chain verification FAILED"}</p>
             <p className="text-xs text-muted-foreground">{formatNumber(verify.events_verified)} events verified</p>
           </div>
         </div>
       ) : null}
+      <div className="mb-4 grid gap-4 xl:grid-cols-[1fr_1.6fr]">
+        <ChartCard title="Actions by type" description={`Most frequent actions matching the filters${statsNote}`}>
+          <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.n} emptyTitle="No audit events match" emptyIcon={History} emptyArt="default" height={240}>
+            <Chart
+              option={charts.actions}
+              height={Math.max(200, charts.actionsN * 28 + 20)}
+              ariaLabel="Audit actions by type"
+              onEvents={{ click: (p) => set("action")((p as { name: string }).name) }}
+            />
+          </ChartBody>
+        </ChartCard>
+        <ChartCard
+          title="Activity over time"
+          description="Portal and API actions, stacked by area"
+          delay={1}
+          actions={<Segmented<TimeRange> aria-label="Window" value={range} onChange={setRange} options={TIME_RANGES.map((r) => ({ value: r.value, label: r.label }))} />}
+        >
+          <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.inRange} emptyTitle="No activity in this window" emptyIcon={History} height={240}>
+            <Chart option={charts.timeline} height={240} ariaLabel="Audit activity over time" />
+          </ChartBody>
+        </ChartCard>
+      </div>
       <Card>
         <FilterBar>
           <TextFilter value={f.actor} onCommit={set("actor")} placeholder="Actor (exact)" className="w-40" aria-label="Actor" />
@@ -122,7 +192,7 @@ export default function AuditPage() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap font-medium">{e.actor_name}</TableCell>
                     <TableCell>
-                      <code className="whitespace-nowrap rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{e.action}</code>
+                      <code className="whitespace-nowrap rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-ink-2">{e.action}</code>
                     </TableCell>
                     <TableCell className="max-w-0">
                       <p className="truncate">
@@ -137,7 +207,7 @@ export default function AuditPage() {
                   </TableRow>
                   {open ? (
                     <TableRow className="hover:bg-transparent">
-                      <TableCell colSpan={7} className="bg-muted/20">
+                      <TableCell colSpan={7} className="bg-secondary/60">
                         <div className="grid gap-3 md:grid-cols-2">
                           <div>
                             <p className="mb-1 text-xs font-medium text-muted-foreground">Before</p>

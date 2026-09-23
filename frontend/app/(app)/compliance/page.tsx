@@ -5,9 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ClipboardCheck, ListChecks, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { CHART, ChartTooltip } from "@/components/charts/chart-kit";
+import { Chart, useChartMode } from "@/components/charts/chart";
+import { ChartBody, ChartCard } from "@/components/common/chart-card";
+import { RunCharts } from "@/components/compliance/run-charts";
 import { RuleDialog } from "@/components/compliance/rule-dialog";
 import { ConfirmDialog, useConfirm } from "@/components/common/confirm-dialog";
 import { EmptyState } from "@/components/common/empty-state";
@@ -17,8 +18,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { TableState } from "@/components/common/table-skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
@@ -26,61 +26,94 @@ import { toast } from "@/hooks/use-toast";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { scoreColor } from "@/lib/status";
-import type { ComplianceRule, ComplianceRun } from "@/lib/types";
+import { barOption, gaugeOption, lineOption, palette } from "@/lib/charts";
+import type { ComplianceRule, ComplianceRun, ComplianceRunDetail } from "@/lib/types";
 import { cn, formatDate, formatDateTime, formatDuration, humanize, parseDate } from "@/lib/utils";
 
 function RunsPanel() {
   const router = useRouter();
+  const mode = useChartMode();
   const runs = useQuery({ queryKey: ["compliance", "runs", 90], queryFn: () => api.get<ComplianceRun[]>("/compliance/runs", { limit: 90 }) });
-  const list = runs.data ?? [];
-  const latest = list.find((r) => r.score !== null);
-  const chart = [...list].reverse().filter((r) => r.score !== null).map((r) => ({ t: r.started_at, score: Math.round((r.score ?? 0) * 10) / 10 }));
+  const list = React.useMemo(() => runs.data ?? [], [runs.data]);
+  const completed = React.useMemo(() => list.filter((r) => r.score !== null), [list]);
+  const latest = completed[0];
+  const previous = completed[1];
+  const detail = useQuery({
+    queryKey: ["compliance", "run", latest?.id],
+    queryFn: () => api.get<ComplianceRunDetail>(`/compliance/runs/${latest?.id}`),
+    enabled: !!latest,
+  });
+  const chart = React.useMemo(() => [...completed].reverse(), [completed]);
+  const delta = latest?.score != null && previous?.score != null ? latest.score - previous.score : null;
+
+  const gauge = React.useMemo(
+    () =>
+      gaugeOption(
+        {
+          value: latest?.score == null ? null : Math.round(latest.score * 10) / 10,
+          label: delta == null ? `${latest?.devices_checked ?? 0} devices checked` : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toFixed(1)} vs previous run`,
+          gradient: true,
+        },
+        mode,
+      ),
+    [latest, delta, mode],
+  );
+  const trend = React.useMemo(
+    () =>
+      lineOption(
+        {
+          categories: chart.map((r) => formatDate(r.started_at)),
+          series: [
+            { name: "Score", data: chart.map((r) => Math.round((r.score ?? 0) * 10) / 10) },
+          ],
+          area: true,
+          min: 0,
+          max: 100,
+          format: (v) => `${v}%`,
+          axisFormat: (v) => `${v}%`,
+        },
+        mode,
+      ),
+    [chart, mode],
+  );
+  const checked = React.useMemo(
+    () =>
+      barOption(
+        {
+          categories: chart.map((r) => formatDate(r.started_at)),
+          series: [{ name: "Devices checked", data: chart.map((r) => r.devices_checked), color: palette(mode)[2] }],
+          barWidth: 14,
+        },
+        mode,
+      ),
+    [chart, mode],
+  );
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-4 lg:grid-cols-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Latest score</CardTitle>
-            <CardDescription>{latest ? <RelativeTime value={latest.started_at} /> : "No completed runs"}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {runs.isLoading ? (
-              <Skeleton className="h-12 w-28" />
-            ) : (
-              <>
-                <p className={cn("text-5xl font-semibold tracking-tight tabular", scoreColor(latest?.score))}>
-                  {latest?.score == null ? "—" : `${latest.score.toFixed(1)}%`}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">{latest ? `${latest.devices_checked} devices checked` : ""}</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="lg:col-span-3">
-          <CardHeader>
-            <CardTitle>Score history</CardTitle>
-            <CardDescription>Fleet compliance per run</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {runs.isLoading ? (
-              <Skeleton className="h-[200px]" />
-            ) : chart.length ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chart} margin={{ left: -12, right: 8, top: 8 }}>
-                  <CartesianGrid vertical={false} stroke={CHART.grid} />
-                  <XAxis dataKey="t" tickFormatter={(v: string) => formatDate(v)} tick={CHART.tick} axisLine={false} tickLine={false} minTickGap={24} />
-                  <YAxis domain={[0, 100]} unit="%" tick={CHART.tick} axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip labelFormatter={(l) => formatDateTime(String(l))} valueFormatter={(v) => `${v}%`} />} />
-                  <Line type="monotone" dataKey="score" name="Score" stroke={CHART.series1} strokeWidth={2} dot={chart.length < 20 ? { r: 3 } : false} activeDot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <EmptyState title="No runs yet" icon={ClipboardCheck} />
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 xl:grid-cols-[1fr_2fr]">
+        <ChartCard title="Compliance score" description={latest ? <>Latest run · <RelativeTime value={latest.started_at} /></> : "No completed runs"}>
+          <ChartBody loading={runs.isLoading} error={runs.error} empty={!latest} emptyTitle="No runs yet" emptyDescription="Run the checks to get a fleet score." emptyIcon={ClipboardCheck} emptyArt="default" height={220}>
+            <Chart option={gauge} height={220} ariaLabel={`Latest compliance score ${latest?.score?.toFixed(1) ?? ""}`} />
+          </ChartBody>
+        </ChartCard>
+        <ChartCard title="Score history" description={`Fleet compliance per run · ${completed.length} run${completed.length === 1 ? "" : "s"}`} delay={1}>
+          <ChartBody loading={runs.isLoading} error={runs.error} empty={!chart.length} emptyTitle="No runs yet" emptyIcon={ClipboardCheck} height={220}>
+            <Chart
+              option={trend}
+              height={220}
+              ariaLabel="Compliance score per run"
+              onEvents={{ click: (p) => { const r = chart[(p as { dataIndex: number }).dataIndex]; if (r) router.push(`/compliance/runs/${r.id}`); } }}
+            />
+          </ChartBody>
+        </ChartCard>
       </div>
+      <RunCharts detail={latest ? detail.data : undefined} mode={mode} delay={2} />
+      {chart.length > 1 ? (
+        <ChartCard title="Coverage per run" description="Devices evaluated in each run" delay={5}>
+          <Chart option={checked} height={180} ariaLabel="Devices checked per run" />
+        </ChartCard>
+      ) : null}
       <Card>
         <Table>
           <TableHeader>
@@ -112,8 +145,8 @@ function RunsPanel() {
                       "—"
                     ) : (
                       <div className="flex items-center gap-2">
-                        <div className="h-1.5 w-40 rounded-full bg-muted">
-                          <div className="h-full rounded-full" style={{ width: `${r.score}%`, background: CHART.series1 }} />
+                        <div className="h-1.5 w-40 rounded-full bg-secondary">
+                          <div className="h-full rounded-full bg-primary" style={{ width: `${r.score}%` }} />
                         </div>
                         <span className={cn("text-sm font-medium tabular", scoreColor(r.score))}>{r.score.toFixed(1)}%</span>
                       </div>

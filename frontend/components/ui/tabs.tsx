@@ -14,7 +14,7 @@ export const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "flex w-full items-center gap-1 overflow-x-auto border-b text-muted-foreground scrollbar-thin",
+      "flex w-full items-center gap-6 overflow-x-auto border-b border-[hsl(var(--input))] px-1 text-muted-foreground scrollbar-thin",
       className,
     )}
     {...props}
@@ -29,7 +29,7 @@ export const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3 py-2 text-sm font-medium transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-primary data-[state=active]:text-foreground [&_svg]:size-4",
+      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-t-sm px-0 py-2.5 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:font-extrabold data-[state=active]:text-accent-foreground data-[state=active]:shadow-[inset_0_-2px_0_hsl(var(--primary))] [&_svg]:size-4",
       className,
     )}
     {...props}
@@ -41,7 +41,7 @@ export const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
 >(({ className, ...props }, ref) => (
-  <TabsPrimitive.Content ref={ref} className={cn("mt-4 focus-visible:outline-none", className)} {...props} />
+  <TabsPrimitive.Content ref={ref} className={cn("mt-5 focus-visible:outline-none", className)} {...props} />
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;
 
@@ -60,7 +60,7 @@ export function Segmented<T extends string>({
   "aria-label"?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className={cn("inline-flex rounded-md border bg-muted/40 p-0.5", className)}>
+    <div role="radiogroup" aria-label={ariaLabel} className={cn("inline-flex gap-1 rounded-[9px] bg-secondary p-[3px]", className)}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -69,8 +69,8 @@ export function Segmented<T extends string>({
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
           className={cn(
-            "inline-flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground [&_svg]:size-3.5",
-            value === o.value && "bg-background text-foreground shadow-sm",
+            "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs font-semibold text-ink-3 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5",
+            value === o.value && "bg-card font-bold text-foreground shadow-[0_1px_2px_rgba(20,20,43,.08)]",
           )}
         >
           {o.label}

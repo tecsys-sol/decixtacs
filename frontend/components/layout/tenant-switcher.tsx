@@ -33,7 +33,7 @@ export function TenantSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="max-w-[200px] shrink-0 gap-2" aria-label="Switch tenant">
+        <Button variant="outline" size="sm" className="h-[38px] max-w-[200px] shrink-0 gap-2" aria-label="Switch tenant">
           <Building className="text-muted-foreground" />
           <span className="hidden truncate sm:inline">{current?.name ?? tenant ?? "Tenant"}</span>
           <ChevronsUpDown className="hidden opacity-50 sm:block" />

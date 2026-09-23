@@ -5,8 +5,15 @@ compliance, command accounting, session replay, audit, change management and Net
 IXP Manager / birdseye integrations.
 
 Built with Next.js 16 (App Router), React 19, TypeScript (strict), Tailwind CSS,
-Radix-based shadcn/ui-style components, TanStack Query, Recharts, React Flow
-(`@xyflow/react`), `asciinema-player` and `cmdk`.
+Radix-based shadcn/ui-style components, TanStack Query, Apache ECharts (tree-shaken
+`echarts/core`, including the network map), `asciinema-player` and `cmdk`.
+
+The visual language is the "Aurora" design: light theme first (dark mode available), Sora /
+Manrope / JetBrains Mono, indigo brand, inline line-art illustrations and restrained motion
+that is switched off under `prefers-reduced-motion`. Chart styling and the colour-blind-safe
+palettes live in `lib/charts.ts`; data aggregation for charts in `lib/aggregate.ts`.
+
+![Dashboard](docs/screenshots/dashboard.png)
 
 ## Requirements
 

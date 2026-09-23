@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Keyboard, LogOut, Settings, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,11 +26,13 @@ export function UserMenu({ onShowShortcuts }: { onShowShortcuts: () => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="rounded-full" aria-label="Account menu">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary">
-            {initials(display)}
-          </span>
-        </Button>
+        <button
+          type="button"
+          className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-[#ffe4d6] text-[13px] font-extrabold text-[#8a3a12] transition-shadow hover:ring-2 hover:ring-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          aria-label={`Account menu for ${display}`}
+        >
+          {initials(display)}
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel className="font-normal">

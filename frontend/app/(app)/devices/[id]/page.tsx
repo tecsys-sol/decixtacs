@@ -20,7 +20,6 @@ import * as React from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ErrorState } from "@/components/common/error-state";
 import { PageHeader } from "@/components/common/page-header";
-import { StatusBadge } from "@/components/common/status-badge";
 import { CommandsTab } from "@/components/devices/commands-tab";
 import { ComplianceTab } from "@/components/devices/compliance-tab";
 import { ConfigTab } from "@/components/devices/config-tab";
@@ -29,6 +28,8 @@ import { DiffTab } from "@/components/devices/diff-tab";
 import { HistoryTab } from "@/components/devices/history-tab";
 import { OverviewTab } from "@/components/devices/overview-tab";
 import { RestoreTab } from "@/components/devices/restore-tab";
+import { DeviceChassis } from "@/components/illustrations";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,6 +45,23 @@ import { toast } from "@/hooks/use-toast";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import type { BackupRunResult, Device } from "@/lib/types";
+import { cn, humanize } from "@/lib/utils";
+
+function ReachabilityPill({ value }: { value: string }) {
+  const up = value === "reachable" || value === "up";
+  const down = value === "unreachable" || value === "down";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-sans text-xs font-bold",
+        up ? "bg-success-soft text-success" : down ? "bg-danger-soft text-danger" : "bg-secondary text-ink-3",
+      )}
+    >
+      <span className={cn("h-[7px] w-[7px] rounded-full", up ? "live bg-[var(--ill-green)]" : down ? "bg-danger" : "bg-muted-foreground")} aria-hidden />
+      {humanize(value)}
+    </span>
+  );
+}
 
 const TABS = ["overview", "config", "history", "diff", "compliance", "commands", "restore"] as const;
 
@@ -87,26 +105,43 @@ export default function DeviceDetailPage() {
   if (device.error || !device.data) return <ErrorState error={device.error} onRetry={() => void device.refetch()} />;
   const d = device.data;
   const tab = (TABS as readonly string[]).includes(state.tab) ? state.tab : "overview";
+  const ports: ("up" | "down" | "idle")[] = [
+    d.reachability === "reachable" ? "up" : d.reachability === "unreachable" ? "down" : "idle",
+    d.last_backup_status === "failed" ? "down" : d.last_backup_status ? "up" : "idle",
+    d.backup_enabled ? "up" : "idle",
+    "idle",
+    d.status === "active" ? "up" : "idle",
+    d.credential_id ? "up" : "idle",
+    d.platform ? "up" : "idle",
+    "idle",
+  ];
 
   return (
     <>
       <PageHeader
-        breadcrumbs={[{ label: "Devices", href: "/devices" }, { label: d.hostname }]}
+        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Devices", href: "/devices" }, { label: d.hostname }]}
         title={
-          <span className="flex items-center gap-2">
-            {d.hostname} <StatusBadge status={d.reachability} />
+          <span className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 break-all">{d.hostname}</span>
+            <ReachabilityPill value={d.reachability} />
+            {d.groups?.slice(0, 2).map((g) => (
+              <Badge key={g.id} variant="secondary" className="text-xs">
+                {g.name}
+              </Badge>
+            ))}
           </span>
         }
-        description={
-          <span className="font-mono text-xs">
-            {d.management_ip} · {d.platform?.name ?? "no platform"} · {d.site?.name ?? "no site"}
-          </span>
-        }
+        illustration={<DeviceChassis className="hidden h-[84px] w-[132px] shrink-0 md:block" ports={ports} />}
         actions={
           <>
             {can("configs:backup") ? (
               <Button variant="outline" onClick={() => backup.mutate()} loading={backup.isPending}>
-                <DatabaseBackup /> Back up now
+                <DatabaseBackup /> Run backup
+              </Button>
+            ) : null}
+            {can("configs:restore") ? (
+              <Button onClick={() => setState({ tab: "restore" })}>
+                <RotateCcw /> Restore a version
               </Button>
             ) : null}
             {can("devices:write") ? (
@@ -129,14 +164,21 @@ export default function DeviceDetailPage() {
             ) : null}
           </>
         }
-      />
+      >
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-ink-3">
+          <span>{[d.vendor?.name, d.platform?.name, d.os_version].filter(Boolean).join(" · ") || "No platform"}</span>
+          <span className="font-mono">{d.management_ip}</span>
+          <span>{d.site?.name ?? "No site"}</span>
+          {d.serial ? <span>Serial <span className="font-mono">{d.serial}</span></span> : null}
+        </div>
+      </PageHeader>
 
       <Tabs value={tab} onValueChange={(v) => setState({ tab: v })}>
         <TabsList>
           <TabsTrigger value="overview"><LayoutGrid /> Overview</TabsTrigger>
-          <TabsTrigger value="config"><FileText /> Config</TabsTrigger>
-          <TabsTrigger value="history"><History /> History</TabsTrigger>
-          <TabsTrigger value="diff"><GitCompare /> Diff</TabsTrigger>
+          <TabsTrigger value="config"><FileText /> Configuration</TabsTrigger>
+          <TabsTrigger value="history"><History /> Commits</TabsTrigger>
+          <TabsTrigger value="diff"><GitCompare /> History &amp; diff</TabsTrigger>
           {can("compliance:read") ? <TabsTrigger value="compliance"><ClipboardCheck /> Compliance</TabsTrigger> : null}
           {can("accounting:read") ? <TabsTrigger value="commands"><Terminal /> Commands</TabsTrigger> : null}
           {can("configs:restore") ? <TabsTrigger value="restore"><RotateCcw /> Restore</TabsTrigger> : null}

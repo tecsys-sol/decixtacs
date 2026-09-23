@@ -698,7 +698,8 @@ export interface RouteServerClient {
   exported: number | null;
   irr_filtered: number | null;
   rpki_invalid: number | null;
-  rpki: string | null;
+  /** per-route origin validation counts ({valid, invalid, unknown}); older collectors sent a status string */
+  rpki: Record<string, number> | string | null;
   irr_status: string | null;
   since: string | null;
 }
