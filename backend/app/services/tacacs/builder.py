@@ -86,8 +86,15 @@ def build_inputs(db: Session, tenant_id: uuid.UUID, server: TacacsServer | None 
             base=s.ldap_user_base,
             bind_dn=s.ldap_bind_dn,
             bind_password=s.ldap_bind_password,
+            exec_path=s.tacacs_mavis_ldap_exec,
         )
-    settings = g.ServerSettings(listen_port=server.port if server else 49, acct_log=s.tacacs_accounting_log, ldap=ldap)
+    settings = g.ServerSettings(
+        listen_port=server.port if server else 49,
+        access_log=s.tacacs_access_log,
+        authz_log=s.tacacs_authz_log,
+        acct_log=s.tacacs_accounting_log,
+        ldap=ldap,
+    )
     return nas, profiles, users, settings
 
 

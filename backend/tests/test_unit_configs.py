@@ -121,3 +121,28 @@ def test_git_store(tmp_path):
     hist = s.history(p)
     assert [h.sha for h in hist] == [sha2, sha1] and hist[0].author == "bob"
     assert "Reason: vlan" in hist[0].message
+
+
+def test_nornir_collect_runs_without_inventory_plugins():
+    """Regression: nornir_collect used a non-existent "DictInventory" plugin and the "netmiko"
+    connection plugin was never registered, so every SSH backup failed before connecting."""
+    import socket
+
+    import pytest
+
+    pytest.importorskip("nornir")
+    pytest.importorskip("nornir_netmiko")
+    from app.services.backup.collector import CollectTarget, nornir_collect
+
+    with socket.socket() as s:  # a local port nobody listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    targets = [
+        CollectTarget("a", "a", "127.0.0.1", port, "linux", None, "linux", ["cat x"], "u", "p"),
+        CollectTarget("b", "b", "127.0.0.1", port, "eos", "arista_eos", "arista_eos", ["show run"], "u", "p"),
+    ]
+    results = {r.device_id: r for r in nornir_collect(targets, workers=2, timeout=5)}
+    assert set(results) == {"a", "b"}
+    for r in results.values():
+        assert not r.ok
+        assert "not registered" not in r.error and "DictInventory" not in r.error

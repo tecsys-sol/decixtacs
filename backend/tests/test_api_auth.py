@@ -82,3 +82,15 @@ def test_readonly_user_forbidden_to_write(admin, client):
     assert c.get("/api/v1/devices").status_code == 200
     assert c.post("/api/v1/devices", json={"hostname": "x", "management_ip": "1.1.1.1"}).status_code == 403
     assert c.get("/api/v1/audit").status_code == 403
+
+
+def test_totp_code_cannot_be_replayed(admin):
+    setup = admin.post("/api/v1/auth/mfa/setup").json()
+    totp = pyotp.TOTP(setup["secret"])
+    admin.post("/api/v1/auth/mfa/verify", json={"otp": totp.now()})
+    code = totp.now()
+    assert login(admin, otp=code)["access_token"]
+    r = admin.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": ADMIN_PW, "tenant": "decix", "otp": code}
+    )
+    assert r.status_code == 401 and r.json()["detail"]["code"] == "mfa_invalid"

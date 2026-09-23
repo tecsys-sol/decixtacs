@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiClient, ApiError, buildQuery, type AuthTokens, type TokenStorage } from "@/lib/api";
+import { ApiClient, ApiError, buildQuery, errorMessage, type AuthTokens, type TokenStorage } from "@/lib/api";
 
 function memoryStorage(initial: AuthTokens | null): TokenStorage & { value: AuthTokens | null } {
   const s = {
@@ -123,5 +123,15 @@ describe("buildQuery", () => {
   it("skips empty values and repeats arrays", () => {
     expect(buildQuery({ a: "x", b: "", c: null, d: undefined, e: false, f: [1, 2] })).toBe("?a=x&e=false&f=1&f=2");
     expect(buildQuery({})).toBe("");
+  });
+});
+
+describe("errorMessage", () => {
+  it("keeps messages that were already formatted (toast.error(title, errorMessage(e)) formats twice)", () => {
+    const err = new ApiError(409, "four-eyes principle: requester cannot approve their own change");
+    expect(errorMessage(errorMessage(err))).toBe("four-eyes principle: requester cannot approve their own change");
+    expect(errorMessage(new Error("boom"))).toBe("boom");
+    expect(errorMessage(42)).toBe("Unexpected error");
+    expect(errorMessage("")).toBe("Unexpected error");
   });
 });

@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
@@ -205,7 +205,8 @@ async def upload_recording(
     path = root / f"{rid}.cast"
     path.write_bytes(data)
     dev = db.scalar(select(Device).where(Device.tenant_id == server.tenant_id, Device.management_ip == device_address))
-    ts = started_at or (datetime.fromtimestamp(header["timestamp"]) if header.get("timestamp") else None)
+    # asciicast "timestamp" is a Unix epoch: convert in UTC, not the API process' local zone
+    ts = started_at or (datetime.fromtimestamp(header["timestamp"], UTC) if header.get("timestamp") else None)
     rec = SessionRecording(
         id=rid,
         tenant_id=server.tenant_id,

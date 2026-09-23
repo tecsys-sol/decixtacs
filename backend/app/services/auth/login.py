@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -84,6 +86,18 @@ def sync_ldap_groups(db: Session, user: User, group_names: list[str]) -> None:
     user.groups = keep + [g for g in groups if g.name.lower() in wanted]
 
 
+def totp_step(secret: str, otp: str, window: int = 1) -> int | None:
+    """Return the TOTP time-step ``otp`` matches (current ±window), or None."""
+    if not secret or not otp or not otp.isdigit():
+        return None
+    totp = pyotp.TOTP(secret)
+    now = int(time.time()) // totp.interval
+    for step in range(now - window, now + window + 1):
+        if hmac.compare_digest(totp.generate_otp(step), otp):
+            return step
+    return None
+
+
 def password_login(
     db: Session,
     tenant_slug: str | None,
@@ -135,11 +149,13 @@ def password_login(
     if user.mfa_enabled:
         if not otp:
             raise AuthError("one-time password required", "mfa_required")
-        if not pyotp.TOTP(decrypt_secret(user.mfa_secret_enc) or "").verify(otp, valid_window=1):
+        step = totp_step(decrypt_secret(user.mfa_secret_enc) or "", otp)
+        if step is None or (user.mfa_last_step is not None and step <= user.mfa_last_step):
             user.failed_logins += 1
             _history(db, user, tenant.id, username, False, method, ip, ua, "bad otp")
             db.commit()
             raise AuthError("invalid one-time password", "mfa_invalid")
+        user.mfa_last_step = step
 
     user.failed_logins = 0
     user.locked_until = None

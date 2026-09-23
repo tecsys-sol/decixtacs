@@ -170,7 +170,7 @@ export function PolicyEditor({ open, onOpenChange, policy }: { open: boolean; on
             <Field label="Default action" htmlFor="pdef">
               <SimpleSelect id="pdef" value={f.default_action ?? "deny"} onValueChange={(v) => set("default_action", v)} options={[{ value: "deny", label: "Deny" }, { value: "permit", label: "Permit" }]} />
             </Field>
-            <Field label="Time window" htmlFor="ptime" hint="e.g. Mon-Fri 08:00-18:00">
+            <Field label="Time window" htmlFor="ptime" hint="cron &quot;* 8-17 * * 1-5&quot; or UUCP &quot;Wk0800-1800&quot;">
               <Input id="ptime" value={f.time_window ?? ""} onChange={(e) => set("time_window", e.target.value)} />
             </Field>
             <Field label="Description" htmlFor="pdesc" className="sm:col-span-2">

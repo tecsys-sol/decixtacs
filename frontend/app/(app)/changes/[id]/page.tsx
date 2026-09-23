@@ -89,7 +89,13 @@ function TransitionDialog({ change, transition, onClose }: { change: Change; tra
           <Button variant="outline" onClick={onClose}>
             Back
           </Button>
-          <Button variant={meta?.variant ?? "default"} loading={run.isPending} disabled={needsComment && !comment.trim()} onClick={() => run.mutate()}>
+          <Button
+            data-testid="transition-confirm"
+            variant={meta?.variant ?? "default"}
+            loading={run.isPending}
+            disabled={needsComment && !comment.trim()}
+            onClick={() => run.mutate()}
+          >
             {meta?.icon} {meta?.label ?? shown}
           </Button>
         </DialogFooter>

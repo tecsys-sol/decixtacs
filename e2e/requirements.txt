@@ -1,0 +1,6 @@
+# Python dependencies of the E2E suite (e2e/api) and the stack bootstrap (e2e/scripts/bootstrap.py)
+pytest>=8.2
+httpx>=0.27
+tacacs_plus==2.6
+pyotp>=2.9
+psycopg[binary]>=3.2

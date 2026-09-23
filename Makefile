@@ -87,6 +87,30 @@ lint: venv ## ruff, mypy (SDK), gofmt/go vet, eslint + tsc
 	cd sdk/go/networkops && test -z "$$(gofmt -l .)" && go vet ./...
 	@[ -d frontend/node_modules ] && (cd frontend && npm run lint && npm run typecheck) || echo "skipping frontend lint (npm ci first)"
 
+# --- end-to-end -------------------------------------------------------------------------------
+# Full local stack (PostgreSQL + Redis must run; root or passwordless sudo for sshd/useradd).
+# See e2e/README.md.
+
+.PHONY: e2e-deps
+e2e-deps: $(BACKEND_VENV)/bin/python $(AGENT_VENV)/bin/python ## Build tac_plus-ng and install the E2E Python/Node dependencies
+	e2e/scripts/build-tac-plus-ng.sh
+	test -x e2e/.venv/bin/python || $(PYTHON) -m venv e2e/.venv
+	e2e/.venv/bin/pip install -q -r e2e/requirements.txt
+	cd e2e && npm ci
+	test -d frontend/node_modules || (cd frontend && npm ci)
+
+.PHONY: e2e
+e2e: ## Full-stack E2E: stack-up -> API suite + Playwright -> stack-down (non-zero on failure)
+	e2e/scripts/run.sh
+
+.PHONY: e2e-up
+e2e-up: ## Start the E2E stack and leave it running (web :3000, API :8000, TACACS+ :4949, ssh :2222)
+	e2e/scripts/stack-up.sh
+
+.PHONY: e2e-down
+e2e-down: ## Stop the E2E stack and drop its database
+	e2e/scripts/stack-down.sh
+
 .PHONY: check-manifests
 check-manifests: ## docker compose config + kustomize build of every overlay
 	$(COMPOSE) config -q

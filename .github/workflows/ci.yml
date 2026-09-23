@@ -132,6 +132,107 @@ jobs:
       - run: ruff check src tests
       - run: pytest -q
 
+  e2e:
+    name: End-to-end (full stack, tac_plus-ng, Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nom  # superuser: stack-up creates nom_e2e and alembic creates pg_trgm
+          POSTGRES_PASSWORD: nom
+          POSTGRES_DB: nom
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nom -d nom"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TACPLUS_PREFIX: /home/runner/.cache/nom-e2e/tac_plus-ng
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            backend/pyproject.toml
+            tacacs-agent/pyproject.toml
+            e2e/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+      - name: System packages (tac_plus-ng build deps, sshd, psql)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libpcre2-dev libssl-dev libc-ares-dev libldap2-dev \
+            libpam0g-dev zlib1g-dev openssh-server postgresql-client
+      - name: Resolve tac_plus-ng upstream commit
+        id: tacplus
+        run: |
+          sha=$(git ls-remote https://github.com/MarcJHuber/event-driven-servers.git refs/heads/master | cut -f1)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Cache tac_plus-ng build
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TACPLUS_PREFIX }}
+          key: tac_plus-ng-${{ runner.os }}-${{ steps.tacplus.outputs.sha }}
+      - name: Build tac_plus-ng (no-op on cache hit)
+        env:
+          TACPLUS_REF: ${{ steps.tacplus.outputs.sha }}
+        run: e2e/scripts/build-tac-plus-ng.sh
+      - name: Python environments
+        run: |
+          python -m venv backend/.venv && backend/.venv/bin/pip install -q -e "backend[dev,collectors]"
+          python -m venv tacacs-agent/.venv && tacacs-agent/.venv/bin/pip install -q -e tacacs-agent
+          python -m venv e2e/.venv && e2e/.venv/bin/pip install -q -r e2e/requirements.txt
+      - name: Node dependencies and Chromium
+        run: |
+          (cd frontend && npm ci)
+          (cd e2e && npm ci && npx playwright install --with-deps chromium)
+      - name: Backend unit test against the real tac_plus-ng parser
+        working-directory: backend
+        env:
+          NOM_TACPLUS_BIN: ${{ env.TACPLUS_PREFIX }}/sbin/tac_plus-ng
+          NOM_TEST_DATABASE_URL: postgresql+psycopg://nom:nom@localhost:5432/nom_test
+          PGPASSWORD: nom
+        run: |
+          psql -h localhost -U nom -d nom -v ON_ERROR_STOP=1 -c "CREATE DATABASE nom_test OWNER nom"
+          .venv/bin/pytest -q tests/test_unit_tacacs.py -k accepted_by_tac_plus_ng -rA
+      - name: E2E (stack-up, API + browser suites, stack-down)
+        run: e2e/scripts/run.sh
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+      - name: Upload stack logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-stack-logs
+          path: |
+            e2e/.run/logs
+            e2e/.run/tac/tac_plus-ng.cfg
+            e2e/.run/tac/log
+          if-no-files-found: ignore
+
   sdk-python:
     name: Python SDK
     runs-on: ubuntu-latest

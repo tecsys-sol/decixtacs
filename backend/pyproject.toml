@@ -33,6 +33,7 @@ dependencies = [
 collectors = [
   "nornir>=3.4",
   "nornir-scrapli>=2023.7.30",
+  "nornir-netmiko>=1.0",  # registers the "netmiko" connection plugin used for non-Scrapli platforms
   "scrapli>=2024.1.30",
   "scrapli-cfg>=2023.7.30",
   "netmiko>=4.3",

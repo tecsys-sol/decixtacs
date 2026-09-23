@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import datetime
@@ -247,6 +248,25 @@ class CommandRuleOut(CommandRuleIn, ORM):
     id: uuid.UUID
 
 
+# tac_plus-ng ``time`` objects: crontab(5) style "min hour day month weekday" (no */step) or
+# Taylor-UUCP items such as "Wk0800-1800", "Sa,Su", "Any" (doc/tac_plus-ng "Time Ranges").
+_CRON_FIELD = r"(?:\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?)(?:,(?:\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?))*"
+_CRON = re.compile(rf"^{_CRON_FIELD}(?: {_CRON_FIELD}){{4}}$")
+_UUCP_ITEM = r"(?:Any|Wk|Su|Mo|Tu|We|Th|Fr|Sa)(?:\d{4}-\d{4})?"
+_UUCP = re.compile(rf"^{_UUCP_ITEM}(?:,{_UUCP_ITEM})*$")
+
+
+def validate_time_window(v: str | None) -> str | None:
+    if v is None or not v.strip():
+        return None
+    v = " ".join(v.split())
+    if not (_CRON.match(v) or _UUCP.match(v)):
+        raise ValueError(
+            "time_window must be a cron spec like '* 8-17 * * 1-5' or UUCP ranges like 'Wk0800-1800' / 'Sa,Su'"
+        )
+    return v
+
+
 class PolicyIn(BaseModel):
     name: str
     description: str | None = None
@@ -262,6 +282,11 @@ class PolicyIn(BaseModel):
     time_window: str | None = None
     enabled: bool = True
     command_rules: list[CommandRuleIn] = []
+
+    @field_validator("time_window")
+    @classmethod
+    def _time_window(cls, v: str | None) -> str | None:
+        return validate_time_window(v)
 
 
 class PolicyOut(ORM):

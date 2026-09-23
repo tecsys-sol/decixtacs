@@ -44,6 +44,17 @@ def test_tacacs_end_to_end(admin, client):
         ).status_code
         == 422
     )
+    # time windows must use a syntax tac_plus-ng accepts (it rejects e.g. "Mon-Fri 08:00-18:00")
+    for tw, ok in (
+        ("Mon-Fri 08:00-18:00", False),
+        ("*/5 * * * *", False),
+        ("Wk0800-1800", True),
+        ("* 8-17 * * 1-5", True),
+    ):
+        r = admin.post("/api/v1/tacacs/policies", json={"name": f"tw-{tw}", "group_id": grp["id"], "time_window": tw})
+        assert r.status_code == (201 if ok else 422), (tw, r.text)
+        if ok:
+            assert admin.delete(f"/api/v1/tacacs/policies/{r.json()['id']}").status_code == 204
     m = admin.post("/api/v1/tacacs/users", json={"user_id": user["id"], "password": "Tacacs-Pass-2026!"})
     assert m.status_code == 201 and m.json()["has_password"]
 

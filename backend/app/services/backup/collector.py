@@ -130,9 +130,14 @@ def nornir_collect(targets: list[CollectTarget], workers: int = 50, timeout: int
     """Collect configs from many devices in parallel with Nornir."""
     import time
 
-    from nornir import InitNornir
+    from nornir.core import Nornir
+    from nornir.core.configuration import Config
     from nornir.core.inventory import ConnectionOptions, Defaults, Groups, Host, Hosts, Inventory
+    from nornir.core.plugins.connections import ConnectionPluginRegister
     from nornir.core.task import Result, Task
+    from nornir.plugins.runners import ThreadedRunner
+
+    ConnectionPluginRegister.auto_register()  # scrapli / netmiko plugins (normally done by InitNornir)
 
     hosts = Hosts()
     for t in targets:
@@ -158,12 +163,13 @@ def nornir_collect(targets: list[CollectTarget], workers: int = 50, timeout: int
                 ),
             },
         )
-    nr = InitNornir(
-        runner={"plugin": "threaded", "options": {"num_workers": workers}},
-        inventory={"plugin": "DictInventory", "options": {"hosts": {}, "groups": {}, "defaults": {}}},
-        logging={"enabled": False},
+    # Build the Nornir object directly from the in-memory inventory: there is no built-in
+    # "DictInventory" plugin (only SimpleInventory, which reads YAML files).
+    nr = Nornir(
+        inventory=Inventory(hosts=hosts, groups=Groups(), defaults=Defaults()),
+        runner=ThreadedRunner(num_workers=workers),
+        config=Config(),  # InitNornir would also configure logging; we deliberately do not
     )
-    nr.inventory = Inventory(hosts=hosts, groups=Groups(), defaults=Defaults())
 
     def collect(task: Task) -> Result:
         t: CollectTarget = task.host.data["target"]

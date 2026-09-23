@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -61,6 +62,8 @@ class User(UUIDPk, Timestamps, TenantScoped, Base):
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)  # platform-wide operator
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret_enc: Mapped[str | None] = mapped_column(Text)
+    # last accepted TOTP time-step; codes at or before it are rejected (replay protection)
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger)
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

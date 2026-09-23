@@ -1,5 +1,8 @@
 import io
 import json
+import os
+import time
+from datetime import UTC, datetime
 
 import httpx
 import respx
@@ -218,14 +221,26 @@ def test_session_recording_upload_and_replay(admin):
         + "\n"
     )
     agent = as_agent(admin, srv["agent_token"])
-    r = agent.post(
-        "/api/v1/sessions",
-        files={"file": ("s.cast", cast.encode(), "application/x-asciicast")},
-        data={"username": "shashank", "device_address": "10.0.0.1"},
-    )
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Kolkata"  # API process zone != database session zone (UTC)
+    time.tzset()
+    try:
+        r = agent.post(
+            "/api/v1/sessions",
+            files={"file": ("s.cast", cast.encode(), "application/x-asciicast")},
+            data={"username": "shashank", "device_address": "10.0.0.1"},
+        )
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
     assert r.status_code == 201, r.text
     rec = r.json()
     assert [c["cmd"] for c in rec["commands"]] == ["show bgp summary", "exit"] and rec["device_id"]
+    # the header epoch is stored as that instant, whatever the API process' local time zone is
+    assert datetime.fromisoformat(rec["started_at"]) == datetime.fromtimestamp(1790000000, UTC)
     assert admin.get("/api/v1/sessions", params={"command": "bgp"}).json()["total"] == 1
     replay = admin.get(f"/api/v1/sessions/{rec['id']}/cast")
     assert replay.status_code == 200 and replay.text == cast

@@ -379,6 +379,8 @@ export const api = new ApiClient({
 });
 
 export function errorMessage(e: unknown): string {
+  // already a message (toast.error(title, errorMessage(e)) formats twice)
+  if (typeof e === "string") return e || "Unexpected error";
   if (e instanceof ApiError) return e.message;
   if (e instanceof Error) return e.message;
   return "Unexpected error";

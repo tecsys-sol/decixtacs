@@ -85,12 +85,13 @@ class TacUser:
 
 @dataclass
 class LdapBackend:
-    server_type: str  # "microsoft" | "generic" | "tacacs_schema"
+    server_type: str  # "microsoft" | "generic" (informational: the MAVIS script autodetects it)
     hosts: str
     base: str
     bind_dn: str
     bind_password: str
-    group_prefix: str = ""
+    group_prefix: str = ""  # only LDAP groups "cn=<prefix>NAME,..." map to tac_plus-ng group NAME
+    exec_path: str = "/usr/local/lib/mavis/mavis_tacplus-ng_ldap.pl"
 
 
 @dataclass
@@ -112,6 +113,33 @@ class RenderResult:
 
 
 NO_TACACS_VENDORS = {"mikrotik"}
+
+# Explicit log formats for the file destinations. tac_plus-ng's built-in defaults differ per log
+# type (the access log has five fields and folds the result into free text, the authorization log
+# puts ${profile} before ${result}, the accounting log writes a bare ${service}/${cmd}), and the
+# default file prefix is "${TIMESTAMP} " (a space). Rendering one fixed layout here keeps
+# services/tacacs/accounting.py simple and robust across tac_plus-ng versions:
+#
+#   TIMESTAMP \t NAS \t USER \t PORT \t CLIENT \t RECORD-TYPE \t key=value ...
+#
+# RECORD-TYPE is start/stop/update (accounting), permit/deny (authorization) or the message id
+# AUTHC-PASS / AUTHC-FAIL[-...] (authentication - ${result} alone cannot tell authen from author).
+# Variable names are the tokens tac_plus-ng accepts and evaluates: ${priv-lvl} (the documented
+# ${privlvl} is rejected) and ${client.address} (the documented ${client} parses but is never filled).
+LOG_PREFIX = "${TIMESTAMP}${FS}"
+_LOG_HEAD = "${device.address}${FS}${user}${FS}${device.port}${FS}${client.address}${FS}"
+ACCESS_FORMAT = (
+    _LOG_HEAD + "${msgid}${FS}service=${authen-service}${FS}authen-type=${authen-type}${FS}"
+    "profile=${profile}${FS}session_id=${session.id}${FS}detail=${action} ${hint}"
+)
+AUTHZ_FORMAT = (
+    _LOG_HEAD + "${result}${FS}service=${service}${FS}priv-lvl=${priv-lvl}${FS}profile=${profile}${FS}"
+    "rule=${rule}${FS}session_id=${session.id}${FS}cmd=${cmd}"
+)
+ACCT_FORMAT = (
+    _LOG_HEAD + "${accttype}${FS}service=${service}${FS}priv-lvl=${priv-lvl}${FS}session_id=${session.id}${FS}"
+    "args=${args, }${FS}cmd=${cmd}"
+)
 
 
 def _shell_block(p: Profile, indent: str) -> list[str]:
@@ -197,9 +225,18 @@ def render(
     lines.append("}")
     lines.append("")
     lines.append("id = tac_plus-ng {")
-    lines.append(f"\tlog accesslog {{ destination = {s.access_log} }}")
-    lines.append(f"\tlog authzlog {{ destination = {s.authz_log} }}")
-    lines.append(f"\tlog acctlog {{ destination = {s.acct_log} }}")
+    for name, path, kind, fmt in (
+        ("accesslog", s.access_log, "access", ACCESS_FORMAT),
+        ("authzlog", s.authz_log, "authorization", AUTHZ_FORMAT),
+        ("acctlog", s.acct_log, "accounting", ACCT_FORMAT),
+    ):
+        lines += [
+            f"\tlog {name} {{",
+            f"\t\tdestination = {quote(path)}",
+            f"\t\tprefix = {quote(LOG_PREFIX)}",
+            f"\t\t{kind} format = {quote(fmt)}",
+            "\t}",
+        ]
     if s.syslog_host:
         lines.append(f"\tlog netsyslog {{ destination = {s.syslog_host} }}")
     lines.append("\tauthentication log = accesslog")
@@ -207,19 +244,25 @@ def render(
     lines.append("\taccounting log = acctlog")
     if s.syslog_host:
         lines += ["\taccounting log = netsyslog", "\tauthorization log = netsyslog"]
+    # PAP logins (e.g. web UIs, FortiGate) use the login password.
+    lines.append("\tpap password = login")
     lines.append("")
 
     if s.ldap:
         ld = s.ldap
         lines += [
             "\tmavis module = external {",
-            f"\t\tsetenv LDAP_SERVER_TYPE = {quote(ld.server_type)}",
             f"\t\tsetenv LDAP_HOSTS = {quote(ld.hosts)}",
             f"\t\tsetenv LDAP_BASE = {quote(ld.base)}",
             f"\t\tsetenv LDAP_USER = {quote(ld.bind_dn)}",
             f"\t\tsetenv LDAP_PASSWD = {quote(ld.bind_password)}",
-            f"\t\tsetenv TACACS_GROUP_PREFIX = {quote(ld.group_prefix)}",
-            "\t\texec = /usr/local/lib/mavis/mavis_tacplus-ng_ldap.pl",
+        ]
+        if ld.group_prefix:
+            # mavis_tacplus-ng_ldap.pl maps memberOf values through LDAP_MEMBEROF_REGEX ($1 = group)
+            memberof = "^cn=" + re.escape(ld.group_prefix) + "([^,]+),.*"
+            lines.append(f"\t\tsetenv LDAP_MEMBEROF_REGEX = {quote(memberof)}")
+        lines += [
+            f"\t\texec = {quote(ld.exec_path)}",
             "\t}",
             "\tuser backend = mavis",
             "\tlogin backend = mavis",
@@ -244,7 +287,7 @@ def render(
     # --- time spans ----------------------------------------------------------
     for p in profiles:
         if p.timespan:
-            lines.append(f"\ttimespan ts-{ident(p.name)} {{ {quote(p.timespan)} }}")
+            lines.append(f"\ttime ts-{ident(p.name)} {{ {quote(p.timespan)} }}")
 
     # --- groups / users ------------------------------------------------------
     groups = sorted({ident(g) for p in profiles for g in [p.group]} | {ident(g) for u in users for g in u.groups})
@@ -258,7 +301,7 @@ def render(
                 warnings.append(f"user {u.username}: no password set - login disabled")
                 lines.append("\t\tpassword login = deny")
             else:
-                lines.append(f"\t\tpassword login = crypt {u.password_crypt}")
+                lines.append(f"\t\tpassword login = crypt {quote(u.password_crypt)}")
         else:
             lines.append("\t\tpassword login = mavis")
         for g in sorted({ident(g) for g in u.groups}):

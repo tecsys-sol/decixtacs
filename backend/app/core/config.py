@@ -74,7 +74,11 @@ class Settings(BaseSettings):
     )
 
     # TACACS (the config file path on the TACACS host is owned by the agent: NOM_AGENT_CONFIG_PATH)
+    # Log destinations rendered into tac_plus-ng.cfg; must match the agent's NOM_AGENT_LOG_FILES.
     tacacs_accounting_log: str = "/var/log/tac_plus-ng/acct.log"
+    tacacs_access_log: str = "/var/log/tac_plus-ng/access.log"
+    tacacs_authz_log: str = "/var/log/tac_plus-ng/authz.log"
+    tacacs_mavis_ldap_exec: str = "/usr/local/lib/mavis/mavis_tacplus-ng_ldap.pl"
 
     # Integrations. The URL/token pairs are bootstrap defaults: `python -m app.cli init` and
     # `python -m app.cli sync-integrations-from-env` create/update per-tenant Integration rows.

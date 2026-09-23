@@ -18,3 +18,9 @@ dist/
 # openapi-generator output (make sdk)
 sdk/generated/
 dump.rdb
+
+# E2E suite (e2e/)
+e2e/.run/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/

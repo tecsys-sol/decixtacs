@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { DatabaseBackup, Plus, Search, Server } from "lucide-react";
+import { Building2, DatabaseBackup, Plus, Search, Server } from "lucide-react";
 import * as React from "react";
 
 import { EmptyState } from "@/components/common/empty-state";
@@ -13,6 +13,7 @@ import { RelativeTime } from "@/components/common/relative-time";
 import { StatusBadge } from "@/components/common/status-badge";
 import { TableState } from "@/components/common/table-skeleton";
 import { DeviceFormDialog } from "@/components/devices/device-form-dialog";
+import { SiteFormDialog } from "@/components/devices/site-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,6 +37,7 @@ export default function DevicesPage() {
   const [q, setQ] = React.useState(filters.q);
   const debouncedQ = useDebounce(q, 300);
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [siteOpen, setSiteOpen] = React.useState(false);
   const sites = useSites();
   const platforms = usePlatforms();
 
@@ -77,9 +79,14 @@ export default function DevicesPage() {
         description="Network inventory with backup and reachability status."
         actions={
           can("devices:write") ? (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus /> Add device
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setSiteOpen(true)}>
+                <Building2 /> Add site
+              </Button>
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus /> Add device
+              </Button>
+            </>
           ) : null
         }
       />
@@ -213,6 +220,7 @@ export default function DevicesPage() {
         ) : null}
       </Card>
       <DeviceFormDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <SiteFormDialog open={siteOpen} onOpenChange={setSiteOpen} />
     </>
   );
 }
