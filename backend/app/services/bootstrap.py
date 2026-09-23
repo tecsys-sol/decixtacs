@@ -1,0 +1,63 @@
+"""Seeding: RBAC catalogue, platforms/vendors, default compliance rules, first tenant + admin."""
+
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.security import PasswordPolicyError, hash_password, validate_password_policy
+from app.models import ComplianceRule, Platform, Role, RoleBinding, Tenant, User, Vendor
+from app.services.backup.collector import DEFAULT_PLATFORMS
+from app.services.compliance.engine import DEFAULT_RULES
+from app.services.rbac import seed_rbac
+
+VENDOR_NAMES = {"juniper": "Juniper Networks", "arista": "Arista Networks", "cisco": "Cisco Systems",
+                "fortinet": "Fortinet", "sophos": "Sophos", "mikrotik": "MikroTik", "vyos": "VyOS",
+                "linux": "Linux"}
+
+
+def seed_platforms(db: Session) -> None:
+    vendors = {v.slug: v for v in db.scalars(select(Vendor))}
+    for slug, name in VENDOR_NAMES.items():
+        if slug not in vendors:
+            vendors[slug] = Vendor(slug=slug, name=name)
+            db.add(vendors[slug])
+    db.flush()
+    existing = {p.slug for p in db.scalars(select(Platform))}
+    for p in DEFAULT_PLATFORMS:
+        if p["slug"] in existing:
+            continue
+        db.add(Platform(
+            slug=p["slug"], name=p["name"], vendor_id=vendors[p["vendor"]].id, scrapli_platform=p.get("scrapli"),
+            netmiko_device_type=p.get("netmiko"), backup_commands=p["commands"],
+            tacacs_service=p.get("tacacs_service", "shell"), supports_tacacs=p.get("supports_tacacs", True),
+            supports_config_replace=p.get("replace", False),
+        ))
+    db.flush()
+
+
+def seed_global(db: Session) -> None:
+    seed_rbac(db)
+    seed_platforms(db)
+
+
+def create_tenant(db: Session, name: str, slug: str, admin_username: str, admin_password: str,
+                  admin_email: str | None = None, superuser: bool = False) -> Tenant:
+    try:
+        validate_password_policy(admin_password, admin_username)
+    except PasswordPolicyError as e:
+        raise ValueError(str(e)) from e
+    seed_global(db)
+    t = Tenant(name=name, slug=slug)
+    db.add(t)
+    db.flush()
+    admin = User(tenant_id=t.id, username=admin_username, email=admin_email, full_name="Tenant administrator",
+                 password_hash=hash_password(admin_password), is_superuser=superuser)
+    db.add(admin)
+    db.flush()
+    role = db.scalar(select(Role).where(Role.name == "admin", Role.tenant_id.is_(None)))
+    db.add(RoleBinding(tenant_id=t.id, role_id=role.id, user_id=admin.id))
+    for r in DEFAULT_RULES:
+        db.add(ComplianceRule(tenant_id=t.id, **{k: v for k, v in r.items()}))
+    db.flush()
+    return t
