@@ -1,0 +1,8 @@
+# Single-instance PostgreSQL 16 + Redis 7 inside the namespace - for staging / labs ONLY.
+# Production: CloudNativePG (components/cloudnative-pg) or a managed PostgreSQL, and a managed
+# Redis with automatic failover (docs/high-availability.md).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - postgres.yaml
+  - redis.yaml

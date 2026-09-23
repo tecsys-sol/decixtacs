@@ -1,0 +1,128 @@
+# NetworkOps Manager alert rules (plain Prometheus format; the Kubernetes PrometheusRule in
+# deploy/k8s/components/monitoring carries the same rules).
+groups:
+  - name: networkops.backups
+    rules:
+      - alert: NomConfigBackupFailures
+        expr: sum by (platform) (increase(nom_config_backups_total{status="failed"}[1h])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Config backups failing for platform {{ $labels.platform }}"
+          description: "{{ $value | humanize }} failed backups in the last hour on {{ $labels.platform }}."
+      - alert: NomConfigBackupFailureRatioHigh
+        expr: |
+          sum(increase(nom_config_backups_total{status="failed"}[2h]))
+            / clamp_min(sum(increase(nom_config_backups_total[2h])), 1) > 0.10
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 10% of configuration backups are failing"
+          description: "Failure ratio over 2h is {{ $value | humanizePercentage }}. Check credentials, reachability and worker logs."
+      - alert: NomNoBackupsRunning
+        expr: sum(increase(nom_config_backups_total[3h])) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No configuration backups recorded for 3 hours"
+          description: "The hourly backup schedule (celery beat 'backups-hourly') does not appear to run. Check beat and collect workers."
+
+  - name: networkops.compliance
+    rules:
+      - alert: NomComplianceScoreDrop
+        # Scores of the scheduled daily run come from the worker exporter (latest value per tenant).
+        expr: |
+          (max by (tenant) (max_over_time(nom_compliance_score{job=~"nom-worker.*"}[1d] offset 1d))
+            - max by (tenant) (nom_compliance_score{job=~"nom-worker.*"})) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Compliance score dropped for tenant {{ $labels.tenant }}"
+          description: "Compliance score fell by {{ $value | humanize }} points compared to the previous day."
+      - alert: NomComplianceScoreLow
+        expr: max by (tenant) (nom_compliance_score{job=~"nom-worker.*"}) < 80
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Compliance score below 80 for tenant {{ $labels.tenant }}"
+          description: "Current score {{ $value | humanize }}."
+
+  - name: networkops.auth
+    rules:
+      - alert: NomLoginFailureSpike
+        expr: sum by (source) (increase(nom_login_failures_total[10m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spike of failed {{ $labels.source }} logins"
+          description: "{{ $value | humanize }} failed logins (source={{ $labels.source }}) in 10 minutes - possible brute force."
+      - alert: NomTacacsAuthFailureSpike
+        expr: sum(increase(nom_tacacs_requests_total{kind="authen",result="fail"}[10m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spike of failed TACACS+ authentications"
+          description: "{{ $value | humanize }} failed TACACS+ authentications in 10 minutes."
+
+  - name: networkops.tacacs
+    rules:
+      - alert: NomTacacsDeployErrors
+        expr: sum(increase(nom_alerts_total{event_type="tacacs_deploy_failed"}[15m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "tac_plus-ng rejected a deployed configuration"
+          description: "An agent reported a validation or reload failure. The previous configuration keeps running; check the TACACS server heartbeat message in the UI."
+      - alert: NomTacacsIngestStalled
+        expr: sum(rate(nom_tacacs_requests_total[30m])) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No TACACS+ records ingested for an hour"
+          description: "Agents may be down or unable to reach /api/v1/accounting/ingest."
+
+  - name: networkops.api
+    rules:
+      - alert: NomApiHighErrorRate
+        expr: |
+          sum(rate(nom_http_request_duration_seconds_count{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(nom_http_request_duration_seconds_count[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx ratio above 5%"
+          description: "{{ $value | humanizePercentage }} of API requests fail."
+      - alert: NomApiHighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(nom_http_request_duration_seconds_bucket{route!="/api/v1/accounting/ingest"}[5m]))) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 1s"
+          description: "p95 latency is {{ $value | humanizeDuration }}."
+      - alert: NomIntegrationSyncFailing
+        expr: sum by (kind) (increase(nom_integration_sync_total{status="failed"}[1h])) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.kind }} integration sync failing"
+          description: "{{ $value | humanize }} failed syncs in the last hour."
+      - alert: NomTargetDown
+        expr: up{job=~"nom-.*"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }}."

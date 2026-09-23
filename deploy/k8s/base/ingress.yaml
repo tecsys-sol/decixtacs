@@ -1,0 +1,39 @@
+# HTTPS entry point (ingress-nginx + cert-manager). Only /api, /healthz and /readyz reach the
+# API; everything else goes to the frontend, so /metrics is never exposed externally
+# (Prometheus scrapes the pods directly).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nom
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 200m      # session recording uploads
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"  # synchronous backups / restores
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [nom.example.net]
+      secretName: nom-tls
+  rules:
+    - host: nom.example.net
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: {name: nom-api, port: {name: http}}
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service: {name: nom-api, port: {name: http}}
+          - path: /readyz
+            pathType: Exact
+            backend:
+              service: {name: nom-api, port: {name: http}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: nom-frontend, port: {name: http}}

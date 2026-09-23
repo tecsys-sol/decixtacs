@@ -1,0 +1,55 @@
+# Database migrations (alembic upgrade head). Runs before the new application version:
+#  * Argo CD: PreSync hook (recreated on every sync), wave -1.
+#  * Flux: put the Job in its own Kustomization that the app Kustomization `dependsOn`.
+#  * plain kubectl: applied with everything else; pods wait in their init container. The Job
+#    is garbage-collected after ttlSecondsAfterFinished so the next `kubectl apply` recreates it
+#    (Job specs are immutable).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nom-migrate
+  labels:
+    app.kubernetes.io/component: migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: nom-backend
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: networkops-backend
+          args: ["migrate"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          env:
+            - {name: NOM_DB_WAIT_TIMEOUT, value: "600"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

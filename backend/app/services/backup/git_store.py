@@ -14,8 +14,10 @@ structured message::
 
 from __future__ import annotations
 
+import fcntl
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,9 +29,20 @@ _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
-def _lock(path: str) -> threading.Lock:
+@contextmanager
+def _lock(path: str):
+    """Serialise writers to one repository: a thread lock within the process plus an flock on
+    ``.git/nom.lock`` across worker processes/pods sharing the volume."""
     with _locks_guard:
-        return _locks.setdefault(path, threading.Lock())
+        tlock = _locks.setdefault(path, threading.Lock())
+    with tlock:
+        os.makedirs(os.path.join(path, ".git"), exist_ok=True)
+        with open(os.path.join(path, ".git", "nom.lock"), "w") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 @dataclass

@@ -1,0 +1,6 @@
+# prometheus-operator resources (kube-prometheus-stack). Requires the monitoring.coreos.com CRDs.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - servicemonitor.yaml
+  - prometheusrule.yaml

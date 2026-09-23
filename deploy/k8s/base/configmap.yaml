@@ -1,0 +1,44 @@
+# Non-secret settings (see backend/.env.example for every NOM_* variable).
+# Secrets (DB/Redis URLs, JWT secret, Fernet keys, LDAP/OIDC/SMTP passwords) come from the
+# nom-secrets Secret created by the ExternalSecret in externalsecret.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nom-config
+data:
+  NOM_ENVIRONMENT: production
+  NOM_CORS_ORIGINS: https://nom.example.net
+  NOM_BACKUP_REPO_ROOT: /var/lib/nom/configs
+  NOM_BACKUP_SANITIZE_SECRETS: "true"
+  NOM_BACKUP_CONCURRENCY: "50"
+  NOM_ACCESS_TOKEN_TTL_MINUTES: "15"
+  NOM_REFRESH_TOKEN_TTL_DAYS: "14"
+  NOM_PASSWORD_MIN_LENGTH: "12"
+  NOM_MAX_FAILED_LOGINS: "5"
+  NOM_LOCKOUT_MINUTES: "15"
+  NOM_RATE_LIMIT_LOGIN: "10"
+  NOM_RATE_LIMIT_API: "600"
+  NOM_LDAP_ENABLED: "false"
+  NOM_LDAP_URI: ldaps://ldap.example.net
+  NOM_LDAP_BIND_DN: cn=svc-networkops,ou=service,dc=example,dc=net
+  NOM_LDAP_USER_BASE: ou=people,dc=example,dc=net
+  NOM_LDAP_GROUP_BASE: ou=groups,dc=example,dc=net
+  NOM_OIDC_ENABLED: "false"
+  NOM_OIDC_ISSUER: ""
+  NOM_OIDC_CLIENT_ID: networkops
+  NOM_OIDC_REDIRECT_URI: https://nom.example.net/auth/callback
+  NOM_OIDC_GROUPS_CLAIM: groups
+  NOM_NETBOX_SYNC_MINUTES: "15"
+  NOM_RETENTION_COMMAND_LOGS_DAYS: "365"
+  NOM_RETENTION_AUDIT_DAYS: "730"
+  NOM_RETENTION_LOGIN_HISTORY_DAYS: "365"
+  NOM_SMTP_HOST: smtp.example.net
+  NOM_SMTP_PORT: "587"
+  NOM_SMTP_STARTTLS: "true"
+  NOM_SMTP_FROM: networkops@example.net
+  NOM_LOG_LEVEL: info
+  # container runtime (docker-entrypoint.sh)
+  NOM_API_WORKERS: "1"
+  NOM_WORKER_QUEUES: collect,alerts,celery
+  NOM_WORKER_CONCURRENCY: "4"
+  NOM_WORKER_METRICS_PORT: "9808"

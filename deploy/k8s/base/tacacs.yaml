@@ -1,0 +1,165 @@
+# tac_plus-ng + NetworkOps agent. StatefulSet so every replica keeps its own volume with the
+# last-known-good configuration (a restarted pod serves it immediately, even if the API is
+# down), its log files and the agent's shipping offsets.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nom-tacacs
+  labels:
+    app.kubernetes.io/component: tacacs
+spec:
+  serviceName: nom-tacacs-headless
+  replicas: 2
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: tacacs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: tacacs
+    spec:
+      serviceAccountName: nom-tacacs
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        fsGroup: 10002
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+        # bind :49 without CAP_NET_BIND_SERVICE (safe sysctl, allowed by the restricted PSS)
+        sysctls:
+          - {name: net.ipv4.ip_unprivileged_port_start, value: "0"}
+      affinity:
+        podAntiAffinity:
+          # never two TACACS replicas on one node...
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: tacacs}
+          # ...and preferably in different zones
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: topology.kubernetes.io/zone
+                labelSelector:
+                  matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: tacacs}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: tacacs}
+      containers:
+        - name: tacacs
+          image: networkops-tacacs
+          args: ["supervise"]
+          ports:
+            - {name: tacacs, containerPort: 49, protocol: TCP}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: NOM_AGENT_API_URL, value: "http://nom-api:8000"}
+            # per-replica token: key "nom-tacacs-0", "nom-tacacs-1", ... of Secret nom-tacacs-agent
+            - {name: NOM_AGENT_TOKEN_FILE, value: "/var/run/nom-agent/$(POD_NAME)"}
+            - {name: NOM_AGENT_POLL_INTERVAL, value: "30"}
+          readinessProbe:
+            tcpSocket: {port: tacacs}
+            periodSeconds: 5
+          livenessProbe:
+            exec: {command: ["nom-tacacs-agent", "healthcheck"]}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /etc/tac_plus-ng, subPath: config}
+            - {name: data, mountPath: /var/log/tac_plus-ng, subPath: logs}
+            - {name: data, mountPath: /var/lib/nom-agent, subPath: state}
+            - {name: data, mountPath: /var/spool/nom-recordings, subPath: spool}
+            - {name: run, mountPath: /run/nom}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-token, mountPath: /var/run/nom-agent, readOnly: true}
+      volumes:
+        - name: run
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: agent-token
+          secret: {secretName: nom-tacacs-agent, defaultMode: 0400}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi
+---
+# TACACS+ VIP for the network devices. externalTrafficPolicy: Local is REQUIRED: tac_plus-ng
+# identifies the NAS (and picks its shared key) by the packet's source address - SNAT to a node
+# IP would make every device look like the node and fail authentication.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nom-tacacs
+  labels:
+    app.kubernetes.io/component: tacacs
+  annotations:
+    # Examples - pick the ones for your load balancer:
+    # metallb.universe.tf/loadBalancerIPs: 192.0.2.49
+    # service.beta.kubernetes.io/aws-load-balancer-type: external
+    # service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    # service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+    networkops.io/note: "devices must reach this address from their management VRF"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  sessionAffinity: None
+  selector:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: tacacs
+  ports:
+    - {name: tacacs, port: 49, targetPort: tacacs, protocol: TCP}
+  # restrict to your management networks
+  loadBalancerSourceRanges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nom-tacacs-headless
+  labels:
+    app.kubernetes.io/component: tacacs
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: tacacs
+  ports:
+    - {name: tacacs, port: 49, targetPort: tacacs, protocol: TCP}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nom-tacacs
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: tacacs

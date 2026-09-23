@@ -1,0 +1,56 @@
+# Celery's Redis transport keeps each queue as a Redis LIST named after the queue ("collect").
+# The hourly schedule enqueues ceil(devices / 250) backup tasks; with 4 processes per pod a
+# listLength of 4 means "one pod per 4 waiting chunks".
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: nom-worker
+spec:
+  scaleTargetRef:
+    name: nom-worker
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 600          # scale in slowly; running chunks finish during warm shutdown
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - {type: Pods, value: 1, periodSeconds: 120}
+  triggers:
+    - type: redis
+      metadata:
+        listName: collect
+        listLength: "4"
+        activationListLength: "1"
+        databaseIndex: "0"
+      authenticationRef:
+        name: nom-keda-redis
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: nom-keda-redis
+spec:
+  secretTargetRef:
+    - {parameter: address, name: nom-keda-redis, key: address}     # host:port
+    - {parameter: password, name: nom-keda-redis, key: password}
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: nom-keda-redis
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: networkops-secret-store
+  target:
+    name: nom-keda-redis
+  data:
+    - secretKey: address
+      remoteRef: {key: networkops/production/app, property: redis_address}
+    - secretKey: password
+      remoteRef: {key: networkops/production/app, property: redis_password}

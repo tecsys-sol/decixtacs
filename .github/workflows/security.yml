@@ -1,0 +1,164 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly, Monday 03:17 UTC (new CVEs in unchanged dependencies)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+
+  pip-audit:
+    name: pip-audit (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: backend
+            spec: "./backend[collectors]"
+          - project: tacacs-agent
+            spec: "./tacacs-agent"
+          - project: sdk-python
+            spec: "./sdk/python"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit installed dependency closure
+        run: |
+          python -m venv /tmp/audit
+          /tmp/audit/bin/pip install --upgrade pip pip-audit
+          /tmp/audit/bin/pip install "${{ matrix.spec }}"
+          # Accepted risks: add `--ignore-vuln <ID>` with a comment and an expiry date.
+          /tmp/audit/bin/pip-audit --progress-spinner off --skip-editable --desc on
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm audit --omit=dev --audit-level=high
+
+  trivy:
+    name: Trivy image scan (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            context: backend
+          - image: frontend
+            context: frontend
+          - image: tacacs
+            context: tacacs-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: networkops/${{ matrix.image }}:scan
+          cache-from: type=gha,scope=${{ matrix.image }}
+      - name: Scan (SARIF for code scanning)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: networkops/${{ matrix.image }}:scan
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}
+      - name: Fail on fixable critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: networkops/${{ matrix.image }}:scan
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  trivy-config:
+    name: Trivy IaC scan (Dockerfiles, Kubernetes, Compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: CRITICAL,HIGH
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (full history)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            git /repo --redact --verbose --exit-code 1 --log-opts="--all"

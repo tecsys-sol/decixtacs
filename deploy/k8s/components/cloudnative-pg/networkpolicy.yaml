@@ -1,0 +1,42 @@
+# The namespace is default-deny. CloudNativePG instances additionally need: the operator
+# (status port 8000), streaming replication between instances, the Kubernetes API (instance
+# manager) and HTTPS to the object store for WAL/base backups.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cnpg-instances
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: nom-db
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: cnpg-system}
+      ports:
+        - {port: 8000, protocol: TCP}
+        - {port: 5432, protocol: TCP}
+    - from:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: nom-db}
+      ports:
+        - {port: 5432, protocol: TCP}
+        - {port: 8000, protocol: TCP}
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {port: 9187, protocol: TCP}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: nom-db}
+      ports:
+        - {port: 5432, protocol: TCP}
+        - {port: 8000, protocol: TCP}
+    - to:   # Kubernetes API + S3 (narrow to your API server / object store CIDRs)
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 443, protocol: TCP}
+        - {port: 6443, protocol: TCP}

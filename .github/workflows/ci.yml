@@ -1,0 +1,222 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  GO_VERSION: "1.23"
+
+jobs:
+  backend:
+    name: Backend (ruff, pytest, alembic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # POSTGRES_USER becomes a superuser: the tests run `alembic upgrade head`, whose
+          # revision 0002 executes CREATE EXTENSION pg_trgm.
+          POSTGRES_USER: nom
+          POSTGRES_PASSWORD: nom
+          POSTGRES_DB: nom
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nom -d nom"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      NOM_TEST_DATABASE_URL: postgresql+psycopg://nom:nom@localhost:5432/nom_test
+      NOM_REDIS_URL: redis://localhost:6379/0
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,collectors]"
+      - name: Create test database (owned by nom)
+        env:
+          PGPASSWORD: nom
+        run: |
+          psql -h localhost -U nom -d nom -v ON_ERROR_STOP=1 -c "CREATE DATABASE nom_test OWNER nom"
+          psql -h localhost -U nom -d nom -v ON_ERROR_STOP=1 -c "CREATE DATABASE nom_migrations OWNER nom"
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest
+        run: pytest -q --cov=app --cov-report=xml --cov-report=term
+      - name: Alembic upgrade head + check (models and migrations in sync)
+        env:
+          NOM_DATABASE_URL: postgresql+psycopg://nom:nom@localhost:5432/nom_migrations
+        run: |
+          alembic upgrade head
+          alembic check
+          alembic downgrade base
+          alembic upgrade head
+      - name: OpenAPI document is up to date
+        env:
+          NOM_ENVIRONMENT: test
+        run: |
+          python -m app.cli export-openapi --output /tmp/openapi.json
+          if ! diff -q /tmp/openapi.json ../docs/api/openapi.json; then
+            echo "::error::docs/api/openapi.json is stale - run 'make openapi' and commit the result"
+            diff -u ../docs/api/openapi.json /tmp/openapi.json | head -100
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  frontend:
+    name: Frontend (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  tacacs-agent:
+    name: TACACS agent (ruff, pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tacacs-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: pytest -q
+
+  sdk-python:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: pytest -q
+
+  sdk-go:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sdk/go/networkops
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sdk/go/networkops/go.mod
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  manifests:
+    name: Compose & Kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        run: docker compose config -q
+      - name: Install kustomize, kubeconform, promtool
+        run: |
+          curl -sSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz | tar xz -C /usr/local/bin kustomize
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v2.55.1/prometheus-2.55.1.linux-amd64.tar.gz \
+            | tar xz --strip-components=1 -C /usr/local/bin prometheus-2.55.1.linux-amd64/promtool
+      - name: Render and validate overlays
+        run: |
+          for overlay in staging production; do
+            kustomize build deploy/k8s/overlays/$overlay | kubeconform -strict -summary -kubernetes-version 1.30.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done
+          kubeconform -strict -summary deploy/k8s/extras/*.yaml
+      - name: Prometheus rules
+        run: promtool check rules deploy/prometheus/alerts.yml
+
+  docker:
+    name: Docker build (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [backend, tacacs-agent]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            context: backend
+          - image: frontend
+            context: frontend
+          - image: tacacs
+            context: tacacs-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: false
+          tags: networkops/${{ matrix.image }}:ci
+          build-args: |
+            VERSION=${{ github.sha }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

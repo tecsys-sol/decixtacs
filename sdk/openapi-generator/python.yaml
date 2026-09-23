@@ -1,0 +1,8 @@
+# openapi-generator "python" (urllib3 based, pydantic v2 models) - see README.md
+packageName: networkops_generated
+projectName: networkops-generated
+packageVersion: 1.0.0
+packageUrl: https://github.com/tecsys-sol/decixtacs
+library: urllib3
+generateSourceCodeOnly: false
+hideGenerationTimestamp: true

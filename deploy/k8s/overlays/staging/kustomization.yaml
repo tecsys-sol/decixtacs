@@ -1,0 +1,56 @@
+# Staging: smaller footprint, in-cluster single-instance PostgreSQL/Redis, images from main.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: networkops-staging
+
+resources:
+  - ../../base
+
+components:
+  - ../../components/monitoring
+  - ../../components/in-cluster-datastores
+
+images:
+  - name: ghcr.io/tecsys-sol/decixtacs/backend
+    newTag: main
+  - name: ghcr.io/tecsys-sol/decixtacs/frontend
+    newTag: main
+  - name: ghcr.io/tecsys-sol/decixtacs/tacacs
+    newTag: main
+
+replicas:
+  - {name: nom-api, count: 2}
+  - {name: nom-worker, count: 1}
+  - {name: nom-frontend, count: 1}
+
+patches:
+  - target: {kind: HorizontalPodAutoscaler, name: nom-api}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 2}
+      - {op: replace, path: /spec/maxReplicas, value: 4}
+  - target: {kind: PodDisruptionBudget, name: nom-api}
+    patch: |-
+      - {op: replace, path: /spec/minAvailable, value: 1}
+  - target: {kind: ExternalSecret, name: nom-secrets}
+    patch: |-
+      - {op: replace, path: /spec/dataFrom/0/extract/key, value: networkops/staging/app}
+  - target: {kind: ExternalSecret, name: nom-tacacs-agent}
+    patch: |-
+      - {op: replace, path: /spec/dataFrom/0/extract/key, value: networkops/staging/tacacs-agent-tokens}
+  - target: {kind: PersistentVolumeClaim, name: nom-data}
+    patch: |-
+      - {op: replace, path: /spec/resources/requests/storage, value: 20Gi}
+  - target: {kind: Ingress, name: nom}
+    patch: |-
+      - {op: replace, path: /metadata/annotations/cert-manager.io~1cluster-issuer, value: letsencrypt-staging}
+      - {op: replace, path: /spec/tls/0/hosts/0, value: staging.nom.example.net}
+      - {op: replace, path: /spec/rules/0/host, value: staging.nom.example.net}
+  - target: {kind: ConfigMap, name: nom-config}
+    patch: |-
+      - {op: replace, path: /data/NOM_CORS_ORIGINS, value: "https://staging.nom.example.net"}
+      - {op: replace, path: /data/NOM_OIDC_REDIRECT_URI, value: "https://staging.nom.example.net/auth/callback"}
+      - {op: replace, path: /data/NOM_WORKER_CONCURRENCY, value: "2"}
+  - target: {kind: StatefulSet, name: nom-tacacs}
+    patch: |-
+      - {op: replace, path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage, value: 2Gi}

@@ -1,0 +1,14 @@
+# Per-tenant configuration Git repositories and session recordings. Mounted read-write by the
+# API and every collect worker at the same time -> ReadWriteMany (NFS, CephFS, EFS, Filestore,
+# Azure Files...). Git on network storage is fine for this workload (small files, few writers),
+# but back it up and mirror the repositories off-site (docs/disaster-recovery.md).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nom-data
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: rwx-storage   # set to your RWX storage class
+  resources:
+    requests:
+      storage: 100Gi

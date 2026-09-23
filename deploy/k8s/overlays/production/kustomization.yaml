@@ -1,0 +1,44 @@
+# Production: 3+ API replicas (HPA), KEDA-scaled collect workers, 3 TACACS replicas across
+# zones, CloudNativePG (3 instances, sync replication, PITR to S3), managed Redis.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: networkops
+
+resources:
+  - ../../base
+  - managed-redis-networkpolicy.yaml
+
+components:
+  - ../../components/monitoring
+  - ../../components/keda
+  - ../../components/cloudnative-pg
+
+# Pin immutable release tags (or digests) in production.
+images:
+  - name: ghcr.io/tecsys-sol/decixtacs/backend
+    newTag: "1.0.0"
+  - name: ghcr.io/tecsys-sol/decixtacs/frontend
+    newTag: "1.0.0"
+  - name: ghcr.io/tecsys-sol/decixtacs/tacacs
+    newTag: "1.0.0"
+
+replicas:
+  - {name: nom-api, count: 3}
+  - {name: nom-frontend, count: 3}
+  - {name: nom-tacacs, count: 3}
+
+patches:
+  - target: {kind: Deployment, name: nom-api}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value: {requests: {cpu: 500m, memory: 768Mi}, limits: {cpu: "2", memory: 1536Mi}}
+  - target: {kind: Deployment, name: nom-worker}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 6Gi}}
+  - target: {kind: ConfigMap, name: nom-config}
+    patch: |-
+      - {op: replace, path: /data/NOM_LDAP_ENABLED, value: "true"}

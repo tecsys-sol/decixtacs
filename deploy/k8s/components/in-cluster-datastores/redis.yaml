@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nom-redis
+  labels:
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: redis
+        networkops.io/datastore: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--appendonly", "yes", "--maxmemory-policy", "noeviction", "--dir", "/data"]
+          ports:
+            - {name: redis, containerPort: 6379}
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {}   # queue contents are transient; use a PVC if you care about in-flight tasks
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nom-redis
+  labels:
+    app.kubernetes.io/component: redis
+spec:
+  selector:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: redis
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}

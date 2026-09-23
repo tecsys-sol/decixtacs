@@ -1,0 +1,86 @@
+# Off-site mirror of the per-tenant configuration Git repositories (disaster recovery).
+# The platform itself does not push anywhere; this CronJob runs `git push --mirror` for every
+# tenant repository under NOM_BACKUP_REPO_ROOT to <GIT_MIRROR_BASE>/<tenant-slug>.git every
+# 15 minutes. Create the remote repositories beforehand (empty, bare) and a deploy key with
+# write access. Apply manually:  kubectl -n networkops apply -f deploy/k8s/extras/git-mirror-cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nom-git-mirror
+  labels:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: git-mirror
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 840
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: networkops-manager
+            app.kubernetes.io/component: git-mirror
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: mirror
+              image: ghcr.io/tecsys-sol/decixtacs/backend:latest   # has git + openssh-client
+              command: ["/bin/bash", "-ceu"]
+              args:
+                - |
+                  export GIT_SSH_COMMAND="ssh -i /secrets/id_ed25519 -o UserKnownHostsFile=/secrets/known_hosts -o StrictHostKeyChecking=yes"
+                  rc=0
+                  for repo in /var/lib/nom/configs/*/; do
+                    [ -d "$repo/.git" ] || continue
+                    slug=$(basename "$repo")
+                    echo "mirroring $slug"
+                    git -c safe.directory='*' -C "$repo" push --mirror "${GIT_MIRROR_BASE}/${slug}.git" || rc=1
+                  done
+                  exit $rc
+              env:
+                - {name: GIT_MIRROR_BASE, value: "git@git.example.net:networkops-configs"}
+                - {name: HOME, value: /tmp}
+              resources:
+                requests: {cpu: 50m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 512Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: data, mountPath: /var/lib/nom, readOnly: true}
+                - {name: ssh, mountPath: /secrets, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: data
+              persistentVolumeClaim: {claimName: nom-data, readOnly: true}
+            - name: ssh
+              secret: {secretName: nom-git-mirror-ssh, defaultMode: 0400}   # keys: id_ed25519, known_hosts
+            - name: tmp
+              emptyDir: {}
+---
+# The namespace is default-deny: allow SSH to the Git server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: git-mirror-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: git-mirror}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}   # narrow to your Git server
+      ports:
+        - {port: 22, protocol: TCP}
+        - {port: 443, protocol: TCP}

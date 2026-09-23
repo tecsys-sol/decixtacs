@@ -1,0 +1,194 @@
+# Default deny, then allow exactly the flows the platform needs:
+#
+#   ingress-controller -> frontend:3000, api:8000
+#   frontend -> api:8000                  tacacs -> api:8000 (agent)
+#   api/worker/beat/migrate -> datastores (postgres 5432, redis 6379)   [datastore-client label]
+#   api/worker -> external: SSH/NETCONF to devices, LDAP/OIDC/HTTPS, SMTP
+#   devices -> tacacs:49                  prometheus -> api:8000, worker:9808
+#
+# Datastore pods (in-cluster Postgres/Redis or CloudNativePG) carry
+# networkops.io/datastore: "true"; for managed services add an ipBlock egress policy
+# (see overlays/production).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: frontend}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: tacacs}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {port: 8000, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: frontend}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      ports:
+        - {port: 3000, protocol: TCP}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: api}
+      ports:
+        - {port: 8000, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-metrics-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: worker}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {port: 9808, protocol: TCP}
+---
+# api / worker / beat / migrate -> PostgreSQL + Redis (and nothing else in-cluster).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-to-datastores
+spec:
+  podSelector:
+    matchLabels: {networkops.io/datastore-client: "true"}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {networkops.io/datastore: "true"}
+      ports:
+        - {port: 5432, protocol: TCP}
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migrate-to-datastores
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: migrate}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {networkops.io/datastore: "true"}
+      ports:
+        - {port: 5432, protocol: TCP}
+---
+# Datastores accept connections only from platform backends.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: datastores-ingress
+spec:
+  podSelector:
+    matchLabels: {networkops.io/datastore: "true"}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {networkops.io/datastore-client: "true"}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: migrate}
+      ports:
+        - {port: 5432, protocol: TCP}
+        - {port: 6379, protocol: TCP}
+---
+# Collections run in workers AND in the API (drift-check, restore, synchronous backups):
+# SSH/NETCONF to device management addresses, HTTPS to NetBox / IXP Manager / birdseye /
+# OIDC / webhooks, LDAP(S), SMTP. Narrow the CIDRs to your management networks.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-external-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: [api, worker]}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 22, protocol: TCP}     # SSH (add custom device ssh_port values here)
+        - {port: 830, protocol: TCP}    # NETCONF
+        - {port: 443, protocol: TCP}    # NetBox, IXP Manager, birdseye, OIDC, Slack/Teams/webhooks
+        - {port: 80, protocol: TCP}
+        - {port: 389, protocol: TCP}    # LDAP
+        - {port: 636, protocol: TCP}    # LDAPS
+        - {port: 25, protocol: TCP}     # SMTP
+        - {port: 465, protocol: TCP}
+        - {port: 587, protocol: TCP}
+---
+# NAS clients -> tac_plus-ng; agent -> API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tacacs
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: tacacs}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 0.0.0.0/0}   # narrow to device management networks
+      ports:
+        - {port: 49, protocol: TCP}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: api}
+      ports:
+        - {port: 8000, protocol: TCP}
+    - to:   # LDAP/AD for servers with ldap_backend=true (mavis)
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 389, protocol: TCP}
+        - {port: 636, protocol: TCP}

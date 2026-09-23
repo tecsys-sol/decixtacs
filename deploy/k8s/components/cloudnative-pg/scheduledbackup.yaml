@@ -1,0 +1,13 @@
+# Nightly base backup at 01:00 UTC (six-field cron: seconds first). WAL is archived
+# continuously, so the RPO is the WAL archive interval (archive_timeout, 5 min by default).
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: nom-db-nightly
+spec:
+  schedule: "0 0 1 * * *"
+  backupOwnerReference: self
+  immediate: true
+  cluster:
+    name: nom-db
+  method: barmanObjectStore

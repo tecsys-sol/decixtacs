@@ -265,6 +265,14 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
     if target is None:
         raise HTTPException(422, "device has no credential/platform")
     config = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), b.commit_sha)
+    if config and "<removed>" in config:
+        # Backups taken with NOM_BACKUP_SANITIZE_SECRETS mask secrets; pushing them would overwrite
+        # real keys/passwords on the device with the placeholder.
+        raise HTTPException(
+            422,
+            "this backup has masked secrets and cannot be restored verbatim; "
+            "disable secret sanitising for restorable backups or restore manually",
+        )
     r = ConfigRestore(
         tenant_id=ctx.tenant_id,
         device_id=d.id,

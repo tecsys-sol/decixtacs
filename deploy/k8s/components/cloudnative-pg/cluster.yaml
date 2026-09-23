@@ -1,0 +1,82 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: nom-db
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.4
+  primaryUpdateStrategy: unsupervised
+  enableSuperuserAccess: false
+
+  # Zero data loss on primary failure: every commit is confirmed by at least one replica.
+  minSyncReplicas: 1
+  maxSyncReplicas: 1
+
+  # Labels for the namespace NetworkPolicies (backend-to-datastores / datastores-ingress).
+  inheritedMetadata:
+    labels:
+      networkops.io/datastore: "true"
+
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: required
+
+  postgresql:
+    parameters:
+      max_connections: "400"          # api (pool 20+20 per pod) + workers (per process) + headroom
+      shared_buffers: 2GB
+      effective_cache_size: 6GB
+      work_mem: 16MB
+      maintenance_work_mem: 512MB
+      wal_compression: "on"
+      max_wal_size: 4GB
+      random_page_cost: "1.1"
+      log_min_duration_statement: "1000"
+      pg_stat_statements.max: "10000"
+      pg_stat_statements.track: all
+    shared_preload_libraries: [pg_stat_statements]
+
+  bootstrap:
+    initdb:
+      database: nom
+      owner: nom
+      secret:
+        name: nom-db-app          # kubernetes.io/basic-auth (username nom + password)
+      dataChecksums: true
+      # pg_trgm is a trusted extension (PG13+), migration 0002 can create it as owner; creating
+      # it here as well makes the migration independent of that.
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS pg_trgm
+
+  storage:
+    size: 200Gi
+    storageClass: fast-ssd          # set to your block storage class
+  walStorage:
+    size: 50Gi
+    storageClass: fast-ssd
+
+  resources:
+    requests: {cpu: "2", memory: 8Gi}
+    limits: {memory: 8Gi}
+
+  monitoring:
+    enablePodMonitor: true
+
+  # Continuous WAL archiving + base backups (barman-cloud). CNPG >= 1.26 recommends the
+  # Barman Cloud Plugin (ObjectStore CRD) instead of the in-tree barmanObjectStore; the
+  # parameters are the same.
+  backup:
+    retentionPolicy: 30d
+    barmanObjectStore:
+      destinationPath: s3://example-networkops-pg-backups/production
+      endpointURL: https://s3.eu-central-1.amazonaws.com
+      s3Credentials:
+        accessKeyId: {name: nom-db-s3, key: ACCESS_KEY_ID}
+        secretAccessKey: {name: nom-db-s3, key: ACCESS_SECRET_KEY}
+      wal:
+        compression: gzip
+        maxParallel: 4
+      data:
+        compression: gzip
+        jobs: 2

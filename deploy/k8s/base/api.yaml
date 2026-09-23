@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nom-api
+  labels:
+    app.kubernetes.io/component: api
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: api
+        networkops.io/datastore-client: "true"
+    spec:
+      serviceAccountName: nom-backend
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: api}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: api}
+      initContainers:
+        - name: wait-for-migrations
+          image: networkops-backend
+          args: ["wait-for-migrations"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: &containersec
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: api
+          image: networkops-backend
+          args: ["api"]
+          ports:
+            - {name: http, containerPort: 8000, protocol: TCP}
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          env:
+            - {name: NOM_ROLE, value: api}
+          # API processes also run synchronous collections (drift-check, restore, backups with
+          # run_async=false), hence the shared config volume.
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/nom}
+            - {name: tmp, mountPath: /tmp}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # let the ingress controller drop the endpoint before uvicorn stops accepting
+              exec: {command: ["python", "-c", "import time; time.sleep(5)"]}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          securityContext: *containersec
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: nom-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nom-api
+  labels:
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: api
+  ports:
+    - {name: http, port: 8000, targetPort: http, protocol: TCP}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nom-api
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: api
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nom-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nom-api
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}

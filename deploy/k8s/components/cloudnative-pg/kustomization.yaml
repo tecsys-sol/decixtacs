@@ -1,0 +1,10 @@
+# PostgreSQL 16 HA with the CloudNativePG operator (cloudnative-pg.io, >= 1.24):
+# 3 instances across zones, synchronous replication, continuous WAL archiving + nightly base
+# backups to S3 with barman (point-in-time recovery). Requires the CNPG operator/CRDs.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - cluster.yaml
+  - scheduledbackup.yaml
+  - secrets.yaml
+  - networkpolicy.yaml

@@ -1,0 +1,5 @@
+# Files the generators must not (re)create in sdk/generated/*
+.travis.yml
+git_push.sh
+.gitlab-ci.yml
+.github/**

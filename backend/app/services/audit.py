@@ -109,13 +109,18 @@ def record(
 
 
 def verify_chain(db: Session, tenant_id: uuid.UUID) -> tuple[bool, int]:
-    """Re-compute the chain; returns (ok, events_checked)."""
-    prev = ""
+    """Re-compute the chain; returns (ok, events_checked).
+
+    The oldest surviving event is the trust anchor: once retention drops old partitions its
+    predecessor is gone, so only the links from it onwards can be verified.
+    """
+    prev: str | None = None
     n = 0
     for ev in db.scalars(select(AuditEvent).where(AuditEvent.tenant_id == tenant_id).order_by(AuditEvent.timestamp)):
-        expected = hashlib.sha256((prev + _canonical(ev)).encode()).hexdigest()
-        if expected != ev.chain_hash:
-            return False, n
+        if prev is not None:
+            expected = hashlib.sha256((prev + _canonical(ev)).encode()).hexdigest()
+            if expected != ev.chain_hash:
+                return False, n
         prev = ev.chain_hash
         n += 1
     return True, n

@@ -1,0 +1,50 @@
+# First-run bootstrap (seed permission catalogue + platforms, create first tenant + admin).
+# Idempotent: an existing tenant slug is left untouched. Apply once after the first rollout:
+#   kubectl -n networkops apply -f deploy/k8s/extras/init-job.yaml
+#   kubectl -n networkops logs -f job/nom-init
+# The admin password comes from NOM_INIT_ADMIN_PASSWORD in nom-secrets; rotate it after login.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nom-init
+  labels:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: migrate   # same datastore network policy as migrations
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: nom-backend
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: init
+          image: ghcr.io/tecsys-sol/decixtacs/backend:latest
+          args: ["init"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          env:
+            - {name: NOM_INIT_TENANT_NAME, value: "Default"}
+            - {name: NOM_INIT_TENANT_SLUG, value: "default"}
+            - {name: NOM_INIT_ADMIN_USERNAME, value: "admin"}
+            - {name: NOM_INIT_SUPERUSER, value: "true"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

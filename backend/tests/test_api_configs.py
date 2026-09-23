@@ -207,3 +207,25 @@ def test_change_workflow_and_restore_guard(admin, client, fake_collector, monkey
     actions = [a["action"] for a in admin.get("/api/v1/audit", params={"action": "change.*"}).json()["items"]]
     assert actions[:2] == ["change.close", "change.implement"]
     assert admin.get("/api/v1/audit", params={"action": "config.restore*"}).json()["total"] == 2
+
+
+def test_restore_refuses_masked_secrets(admin, fake_collector):
+    CONFIGS[3] = CONFIGS[1] + 'set system login user ops authentication encrypted-password "$6$real"\n'
+    fake_collector["version"] = 3
+    dev = _device(admin)
+    b = _backup(admin)[0]
+    r = admin.post(f"/api/v1/devices/{dev['id']}/restore", json={"backup_id": b["id"], "dry_run": True})
+    assert r.status_code == 422 and "masked secrets" in r.text
+
+
+def test_audit_chain_survives_retention(admin):
+    from sqlalchemy import text
+
+    from app.db.session import engine
+
+    for i in range(3):
+        admin.post("/api/v1/sites", json={"name": f"s{i}", "slug": f"s{i}"})
+    with engine.begin() as c:  # simulate the oldest partition being dropped by retention
+        c.execute(text("SET LOCAL nom.allow_audit_purge = 'on'"))
+        c.execute(text("DELETE FROM audit_events WHERE timestamp = (SELECT min(timestamp) FROM audit_events)"))
+    assert admin.get("/api/v1/audit/verify").json()["intact"]

@@ -1,0 +1,10 @@
+# openapi-generator "go" - see README.md
+packageName: networkopsgen
+packageVersion: 1.0.0
+moduleName: github.com/tecsys-sol/decixtacs/sdk/generated/go
+isGoSubmodule: true
+enumClassPrefix: true
+generateInterfaces: true
+structPrefix: false
+withGoMod: true
+hideGenerationTimestamp: true

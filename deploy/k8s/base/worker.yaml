@@ -1,0 +1,119 @@
+# Celery workers: collect (config backups via Nornir/Scrapli/Netmiko), alerts, default queue.
+# Scale horizontally (replicas, or KEDA on the Redis queue length - components/keda).
+# Capacity per pod = NOM_WORKER_CONCURRENCY processes x NOM_BACKUP_CONCURRENCY SSH threads.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nom-worker
+  labels:
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 1}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: worker
+        networkops.io/datastore-client: "true"
+    spec:
+      serviceAccountName: nom-backend
+      automountServiceAccountToken: false
+      # Celery warm shutdown finishes running tasks; a 250-device chunk normally takes minutes.
+      # Unfinished tasks are redelivered (acks_late) if the grace period expires.
+      terminationGracePeriodSeconds: 900
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: networkops-manager, app.kubernetes.io/component: worker}
+      initContainers:
+        - name: wait-for-migrations
+          image: networkops-backend
+          args: ["wait-for-migrations"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: &containersec
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: worker
+          image: networkops-backend
+          args: ["worker"]
+          ports:
+            - {name: metrics, containerPort: 9808, protocol: TCP}
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          env:
+            - {name: NOM_ROLE, value: worker}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/nom}
+            - {name: tmp, mountPath: /tmp}
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "celery -A app.workers.celery_app inspect ping -d worker@$HOSTNAME --timeout 20 >/dev/null"]
+            initialDelaySeconds: 60
+            periodSeconds: 120
+            timeoutSeconds: 45
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket: {port: metrics}
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+          securityContext: *containersec
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: nom-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}
+---
+# Headless service used by the ServiceMonitor to scrape every worker's exporter.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nom-worker-metrics
+  labels:
+    app.kubernetes.io/component: worker
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: networkops-manager
+    app.kubernetes.io/component: worker
+  ports:
+    - {name: metrics, port: 9808, targetPort: metrics, protocol: TCP}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nom-worker
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: worker

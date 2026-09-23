@@ -1,0 +1,45 @@
+# NetworkOps Manager - Kustomize base.
+#
+# Render:  kubectl kustomize deploy/k8s/overlays/production
+# Apply:   kubectl apply -k deploy/k8s/overlays/production
+#
+# Ordering: the migrate Job carries Argo CD PreSync hook / sync-wave annotations. With plain
+# `kubectl apply` it is applied together with the Deployments; the api/worker/beat pods have a
+# `wait-for-migrations` init container that blocks until the schema is at the Alembic head, so
+# no pod ever serves traffic against an old schema. (See docs/deployment.md.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: networkops
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/part-of: networkops-manager
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - configmap.yaml
+  - externalsecret.yaml
+  - pvc.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+  - beat.yaml
+  - frontend.yaml
+  - tacacs.yaml
+  - ingress.yaml
+  - networkpolicies.yaml
+
+images:
+  - name: networkops-backend
+    newName: ghcr.io/tecsys-sol/decixtacs/backend
+    newTag: latest
+  - name: networkops-frontend
+    newName: ghcr.io/tecsys-sol/decixtacs/frontend
+    newTag: latest
+  - name: networkops-tacacs
+    newName: ghcr.io/tecsys-sol/decixtacs/tacacs
+    newTag: latest

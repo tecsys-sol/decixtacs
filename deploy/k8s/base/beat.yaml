@@ -1,0 +1,66 @@
+# Celery beat scheduler: hourly backups, integration sync, compliance, retention, partitions,
+# reports. EXACTLY ONE replica (two would enqueue every job twice) -> Recreate strategy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nom-beat
+  labels:
+    app.kubernetes.io/component: beat
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: networkops-manager
+      app.kubernetes.io/component: beat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: networkops-manager
+        app.kubernetes.io/component: beat
+        networkops.io/datastore-client: "true"
+    spec:
+      serviceAccountName: nom-backend
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: wait-for-migrations
+          image: networkops-backend
+          args: ["wait-for-migrations"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: &containersec
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: beat
+          image: networkops-backend
+          args: ["beat"]
+          envFrom:
+            - configMapRef: {name: nom-config}
+            - secretRef: {name: nom-secrets}
+          env:
+            - {name: NOM_ROLE, value: beat}
+            - {name: NOM_BEAT_SCHEDULE, value: /tmp/celerybeat-schedule}
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext: *containersec
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

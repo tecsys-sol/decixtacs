@@ -1,0 +1,262 @@
+# NetworkOps Manager - single-host deployment (evaluation, lab, small production).
+#
+#   cp .env.example .env         # at minimum set NOM_JWT_SECRET, NOM_ENCRYPTION_KEYS, passwords
+#   docker compose up -d --build
+#   docker compose run --rm init # first tenant + admin (NOM_INIT_* in .env)
+#   docker compose up -d --scale worker=4
+#
+# The UI/API are served by Caddy on :80/:443 (NOM_DOMAIN). Grafana: :3001, Prometheus: :9090
+# (bound to localhost). TACACS+: :49/tcp.
+
+name: networkops
+
+x-backend: &backend
+  build:
+    context: ./backend
+    args:
+      VERSION: ${NOM_VERSION:-dev}
+  image: ${NOM_IMAGE_REGISTRY:-ghcr.io/tecsys-sol/decixtacs}/backend:${NOM_VERSION:-dev}
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment: &backend-env
+    NOM_ENVIRONMENT: ${NOM_ENVIRONMENT:-production}
+    NOM_DATABASE_URL: postgresql+psycopg://nom:${NOM_DB_PASSWORD:-nom}@postgres:5432/nom
+    NOM_REDIS_URL: redis://redis:6379/0
+    NOM_BACKUP_REPO_ROOT: /var/lib/nom/configs
+    NOM_CORS_ORIGINS: ${NOM_PUBLIC_URL:-https://localhost}
+    NOM_OIDC_REDIRECT_URI: ${NOM_PUBLIC_URL:-https://localhost}/auth/callback
+  volumes:
+    # Config Git repositories + session recordings: shared by API and collect workers.
+    - nom-data:/var/lib/nom
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  networks: [backend]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nom
+      POSTGRES_PASSWORD: ${NOM_DB_PASSWORD:-nom}
+      POSTGRES_DB: nom
+      POSTGRES_INITDB_ARGS: --data-checksums
+    command: >
+      postgres -c shared_buffers=512MB -c max_connections=300 -c wal_level=replica
+               -c log_min_duration_statement=1000 -c shared_preload_libraries=pg_stat_statements
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nom -d nom"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  migrate:
+    <<: *backend
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One-shot bootstrap: `docker compose run --rm init` (profile keeps it out of `up`).
+  init:
+    <<: *backend
+    command: ["init"]
+    restart: "no"
+    profiles: ["init"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *backend
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      NOM_ROLE: api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [backend, frontend]
+
+  # Scale horizontally: docker compose up -d --scale worker=N. Each replica runs
+  # NOM_WORKER_CONCURRENCY processes x NOM_BACKUP_CONCURRENCY Nornir threads.
+  worker:
+    <<: *backend
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+      NOM_ROLE: worker
+      NOM_WORKER_QUEUES: ${NOM_WORKER_QUEUES:-collect,alerts,celery}
+      NOM_WORKER_CONCURRENCY: ${NOM_WORKER_CONCURRENCY:-4}
+    stop_grace_period: 2m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # Workers need outbound SSH to devices and HTTPS to NetBox/IXP Manager/webhooks
+    # (the backend network is not internal, so egress works).
+
+  # Exactly one scheduler.
+  beat:
+    <<: *backend
+    command: ["beat"]
+    environment:
+      <<: *backend-env
+      NOM_ROLE: beat
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # empty = the browser calls the API on the same origin (/api is routed by the proxy)
+        NEXT_PUBLIC_API_URL: ""
+    image: ${NOM_IMAGE_REGISTRY:-ghcr.io/tecsys-sol/decixtacs}/frontend:${NOM_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      - api
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    networks: [frontend]
+
+  tacacs:
+    build:
+      context: ./tacacs-agent
+    image: ${NOM_IMAGE_REGISTRY:-ghcr.io/tecsys-sol/decixtacs}/tacacs:${NOM_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      # The agent talks to the API directly on the internal network. Get the token from
+      # POST /api/v1/tacacs/servers (shown once) and put it in .env.
+      NOM_AGENT_API_URL: http://api:8000
+      NOM_AGENT_TOKEN: ${NOM_TACACS_AGENT_TOKEN:-}
+      NOM_AGENT_POLL_INTERVAL: "30"
+    ports:
+      - "${NOM_TACACS_BIND:-0.0.0.0}:49:49/tcp"
+    volumes:
+      - tacacs-config:/etc/tac_plus-ng
+      - tacacs-logs:/var/log/tac_plus-ng
+      - tacacs-state:/var/lib/nom-agent
+      - recordings-spool:/var/spool/nom-recordings
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    depends_on:
+      - api
+    networks: [backend]
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      NOM_DOMAIN: ${NOM_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - frontend
+    networks: [frontend]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    networks: [backend]
+
+networks:
+  # Datastores, API, workers, TACACS, monitoring. Not reachable from the proxy.
+  backend:
+    internal: false
+  # Reverse proxy <-> frontend/API.
+  frontend: {}
+
+volumes:
+  pgdata:
+  redisdata:
+  nom-data:
+  tacacs-config:
+  tacacs-logs:
+  tacacs-state:
+  recordings-spool:
+  caddy-data:
+  caddy-config:
+  prometheus-data:
+  grafana-data:

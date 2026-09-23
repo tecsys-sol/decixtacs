@@ -1,0 +1,16 @@
+# Managed Redis (ElastiCache / Memorystore / Azure Cache) lives outside the cluster, so the
+# pod-label based datastore policy does not cover it: allow the backends to reach its CIDR.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-to-managed-redis
+spec:
+  podSelector:
+    matchLabels: {networkops.io/datastore-client: "true"}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 10.20.30.0/24}   # EXAMPLE: your managed Redis subnet
+      ports:
+        - {port: 6379, protocol: TCP}
+        - {port: 6380, protocol: TCP}   # TLS endpoint (rediss://)

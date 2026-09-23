@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
@@ -24,7 +25,7 @@ def main() -> int:
     p.add_argument("--db-only", action="store_true", help="only wait for a working connection")
     p.add_argument("--timeout", type=float, default=600)
     p.add_argument("--interval", type=float, default=3)
-    p.add_argument("--alembic-ini", default="/app/alembic.ini")
+    p.add_argument("--alembic-ini", default=str(Path(__file__).resolve().parent.parent / "alembic.ini"))
     a = p.parse_args()
 
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)

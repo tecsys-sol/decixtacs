@@ -1,0 +1,38 @@
+# Prometheus configuration for the docker-compose stack.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    platform: networkops
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Point this at your Alertmanager (not part of the compose stack).
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # API replicas: HTTP latency, logins, TACACS ingest counters, on-demand compliance/backups.
+  - job_name: nom-api
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 8000
+
+  # Celery workers (multiprocess exporter started by docker-entrypoint.sh on :9808):
+  # scheduled backups, compliance runs, alert deliveries, integration syncs.
+  # DNS A records return every scaled replica of the service.
+  - job_name: nom-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9808
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
