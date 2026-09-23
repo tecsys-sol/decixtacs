@@ -18,9 +18,9 @@ export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenC
               <span>{s.description}</span>
               <span className="flex items-center gap-1">
                 {s.keys.map((k, i) => (
-                  <span key={k} className="flex items-center gap-1">
+                  <span key={`${k}-${i}`} className="flex items-center gap-1">
                     <Kbd>{k}</Kbd>
-                    {i < s.keys.length - 1 && s.keys[0] === "g" ? (
+                    {i < s.keys.length - 1 && /^[a-z]$/.test(s.keys[0]) ? (
                       <span className="text-[10px] text-muted-foreground">then</span>
                     ) : null}
                   </span>

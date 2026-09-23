@@ -103,5 +103,6 @@ export const SHORTCUT_HELP: { keys: string[]; description: string }[] = [
   { keys: ["g", "b"], description: "Go to backups" },
   { keys: ["g", "c"], description: "Go to changes" },
   { keys: ["g", "a"], description: "Go to audit log" },
+  { keys: ["t", "t"], description: "Toggle design theme (Aurora / Meridian)" },
   { keys: ["?"], description: "Show keyboard shortcuts" },
 ];

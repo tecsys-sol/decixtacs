@@ -5,7 +5,7 @@ import Link from "next/link";
 import { DatabaseBackup, GitCompare, Play, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { ConfirmDialog, useConfirm } from "@/components/common/confirm-dialog";
 import { EmptyState } from "@/components/common/empty-state";
@@ -42,7 +42,7 @@ import { useOnOpen } from "@/hooks/use-reset";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
 import { countBy, dailySeries } from "@/lib/aggregate";
-import { barOption, divergingBarOption, donutOption, palette, STATUS } from "@/lib/charts";
+import { barOption, divergingBarOption, donutOption, palette } from "@/lib/charts";
 import { BACKUP_STATUSES, PAGE_SIZE } from "@/lib/constants";
 import type { Backup, BackupRunResult, Change, Page } from "@/lib/types";
 import { formatBytes, formatNumber, humanize, shortSha } from "@/lib/utils";
@@ -153,7 +153,7 @@ export default function BackupsPage() {
   const { can } = useAuth();
   const qc = useQueryClient();
   const devices = useDeviceNames();
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const now = useNow();
   const [filters, setFilters] = useUrlState({ changed_only: "", status: "", author: "", device: "", offset: "0" });
   const [author, setAuthor] = React.useState(filters.author);
@@ -200,7 +200,7 @@ export default function BackupsPage() {
   const charts = React.useMemo(() => {
     const rows = stats.data?.items ?? [];
     const statusItems = countBy(rows, (b) => (b.status === "failed" ? "failed" : b.changed ? "changed" : "unchanged"));
-    const colors: Record<string, string> = { changed: palette(mode)[0], unchanged: STATUS[mode].neutral, failed: STATUS[mode].danger };
+    const colors: Record<string, string> = { changed: palette(theme)[0], unchanged: theme.status.neutral, failed: theme.status.danger };
     const changed = rows.filter((b) => b.changed);
     const perDay = dailySeries(changed, (b) => b.collected_at, 30, now);
     const added = dailySeries(changed, (b) => b.collected_at, 30, now, (b) => b.lines_added);
@@ -210,12 +210,12 @@ export default function BackupsPage() {
       changed: changed.length,
       status: donutOption(
         { items: statusItems.map((i) => ({ name: humanize(i.name), value: i.value, color: colors[i.name] })), centerValue: formatNumber(rows.length), centerLabel: "backups" },
-        mode,
+        theme,
       ),
-      perDay: barOption({ categories: perDay.labels, series: [{ name: "Config changes", data: perDay.data }], barWidth: 12, axisLabelInterval: 4 }, mode),
-      lines: divergingBarOption({ categories: added.labels, added: added.data, removed: removed.data, showCategoryLabels: true }, mode),
+      perDay: barOption({ categories: perDay.labels, series: [{ name: "Config changes", data: perDay.data }], barWidth: 12, axisLabelInterval: 4 }, theme),
+      lines: divergingBarOption({ categories: added.labels, added: added.data, removed: removed.data, showCategoryLabels: true }, theme),
     };
-  }, [stats.data, now, mode]);
+  }, [stats.data, now, theme]);
   const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${stats.data.items.length} of ${formatNumber(stats.data.total)}` : "";
 
   return (

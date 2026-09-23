@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { CheckCircle2, ChevronDown, ChevronRight, Search } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { RunCharts } from "@/components/compliance/run-charts";
 import { ErrorState } from "@/components/common/error-state";
@@ -27,7 +27,7 @@ const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low
 
 export default function ComplianceRunPage() {
   const { id } = useParams<{ id: string }>();
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const [filter, setFilter] = React.useState("");
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const q = useQuery({ queryKey: ["compliance", "run", id], queryFn: () => api.get<ComplianceRunDetail>(`/compliance/runs/${id}`) });
@@ -43,8 +43,8 @@ export default function ComplianceRunPage() {
   }, [q.data]);
 
   const gauge = React.useMemo(
-    () => gaugeOption({ value: q.data?.run.score == null ? null : Math.round(q.data.run.score * 10) / 10, label: `${q.data?.run.devices_checked ?? 0} devices`, gradient: true }, mode),
-    [q.data, mode],
+    () => gaugeOption({ value: q.data?.run.score == null ? null : Math.round(q.data.run.score * 10) / 10, label: `${q.data?.run.devices_checked ?? 0} devices`, gradient: true }, theme),
+    [q.data, theme],
   );
 
   if (q.isLoading) return <Skeleton className="h-96" />;
@@ -67,7 +67,7 @@ export default function ComplianceRunPage() {
         title={`Compliance run · ${formatDateTime(run.started_at)}`}
         description={`${run.devices_checked} devices checked · ${q.data.failures.length} failed checks`}
       />
-      <RunCharts detail={q.data} mode={mode} />
+      <RunCharts detail={q.data} theme={theme} />
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>

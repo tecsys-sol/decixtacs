@@ -6,7 +6,7 @@ import { CheckCircle2, ClipboardCheck } from "lucide-react";
 
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { RelativeTime } from "@/components/common/relative-time";
@@ -15,31 +15,31 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
-import { donutOption, gaugeOption, STATUS } from "@/lib/charts";
+import { donutOption, gaugeOption } from "@/lib/charts";
 import { scoreColor } from "@/lib/status";
 import type { ComplianceRun, ComplianceRunDetail, Device } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function DeviceGauges({ score, fleet }: { score: { score: number; passed: number; failed: number }; fleet: number | null }) {
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const gauge = React.useMemo(
-    () => gaugeOption({ value: Math.round(score.score * 10) / 10, label: fleet == null ? "device score" : `${score.score >= fleet ? "+" : "−"}${Math.abs(score.score - fleet).toFixed(1)} vs fleet`, gradient: true }, mode),
-    [score, fleet, mode],
+    () => gaugeOption({ value: Math.round(score.score * 10) / 10, label: fleet == null ? "device score" : `${score.score >= fleet ? "+" : "−"}${Math.abs(score.score - fleet).toFixed(1)} vs fleet`, gradient: true }, theme),
+    [score, fleet, theme],
   );
   const checks = React.useMemo(
     () =>
       donutOption(
         {
           items: [
-            { name: "Passed", value: score.passed, color: STATUS[mode].success },
-            { name: "Failed", value: score.failed, color: STATUS[mode].danger },
+            { name: "Passed", value: score.passed, color: theme.status.success },
+            { name: "Failed", value: score.failed, color: theme.status.danger },
           ],
           centerValue: String(score.passed + score.failed),
           centerLabel: "checks",
         },
-        mode,
+        theme,
       ),
-    [score, mode],
+    [score, theme],
   );
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2">

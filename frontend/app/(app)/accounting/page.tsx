@@ -5,7 +5,7 @@ import { Info, Server, Terminal, Users } from "lucide-react";
 import * as React from "react";
 
 import { CommandsTable } from "@/components/accounting/commands-table";
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { FilterBar } from "@/components/common/filter-bar";
 import { PageHeader } from "@/components/common/page-header";
@@ -22,7 +22,7 @@ import { useTimeRange } from "@/hooks/use-time-range";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { bucketSeries, dailySeries, DAY_LABELS, dayHourMatrix, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
-import { barOption, heatmapOption, palette, STATUS } from "@/lib/charts";
+import { barOption, heatmapOption, palette } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { CommandLog, Page } from "@/lib/types";
 import { formatNumber, localInputToIso, parseDate } from "@/lib/utils";
@@ -31,7 +31,7 @@ const DEFAULTS = { user: "", device: "", command: "", result: "", start: "", end
 
 export default function AccountingPage() {
   const [f, setF] = useUrlState(DEFAULTS);
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const now = useNow();
   const { range, setRange } = useTimeRange();
   const offset = Number(f.offset) || 0;
@@ -90,13 +90,13 @@ export default function AccountingPage() {
       const bad = dailySeries(rows.filter((r) => r.dangerous), (r) => r.timestamp, spanDays, t);
       timeline = { labels: all.labels, series: [{ name: "Commands", data: all.data }, { name: "Dangerous", data: bad.data }] };
     }
-    const colors: Record<string, string> = { Commands: palette(mode)[0], Dangerous: STATUS[mode].danger };
+    const colors: Record<string, string> = { Commands: palette(theme)[0], Dangerous: theme.status.danger };
     const heat = dayHourMatrix(rows.map((r) => r.timestamp), t, 3650);
     return {
       n: rows.length,
       timeline: barOption(
         { categories: timeline.labels, series: timeline.series.map((x) => ({ ...x, stack: "c", color: colors[x.name] })), barWidth: 14 },
-        mode,
+        theme,
       ),
       heat: heatmapOption(
         {
@@ -106,21 +106,21 @@ export default function AccountingPage() {
           max: heat.max,
           tooltip: (x, y, v) => `<b>${y} ${x}:00</b> — ${v.toLocaleString("en")} command${v === 1 ? "" : "s"}`,
         },
-        mode,
+        theme,
       ),
     };
-  }, [stats.data, now, mode]);
+  }, [stats.data, now, theme]);
   const topUsers = React.useMemo(
-    () => barOption({ categories: (top.data?.users ?? []).map((u) => u.user), series: [{ name: "Commands", data: (top.data?.users ?? []).map((u) => u.commands) }], horizontal: true, valueLabels: true }, mode),
-    [top.data, mode],
+    () => barOption({ categories: (top.data?.users ?? []).map((u) => u.user), series: [{ name: "Commands", data: (top.data?.users ?? []).map((u) => u.commands) }], horizontal: true, valueLabels: true }, theme),
+    [top.data, theme],
   );
   const topDevices = React.useMemo(
     () =>
       barOption(
-        { categories: (top.data?.devices ?? []).map((u) => u.device), series: [{ name: "Commands", data: (top.data?.devices ?? []).map((u) => u.commands), color: palette(mode)[2] }], horizontal: true, valueLabels: true, labelWidth: 140 },
-        mode,
+        { categories: (top.data?.devices ?? []).map((u) => u.device), series: [{ name: "Commands", data: (top.data?.devices ?? []).map((u) => u.commands), color: palette(theme)[2] }], horizontal: true, valueLabels: true, labelWidth: 140 },
+        theme,
       ),
-    [top.data, mode],
+    [top.data, theme],
   );
   const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${formatNumber(stats.data.items.length)} of ${formatNumber(stats.data.total)}` : "";
   const rangeLabel = TIME_RANGES.find((r) => r.value === range)?.long.toLowerCase();

@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Building2, Laptop, Loader2, Moon, Network, Server, Sun, User, Workflow, type LucideIcon } from "lucide-react";
+import { Building2, Laptop, Loader2, Moon, Network, Palette, Server, Sun, User, Workflow, type LucideIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import * as React from "react";
 
@@ -16,10 +16,12 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { useAuth } from "@/hooks/use-auth";
+import { useDesign } from "@/hooks/use-design";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useOnChange } from "@/hooks/use-reset";
 import { api } from "@/lib/api";
 import { NAV } from "@/lib/nav";
+import { DESIGN_META, DESIGNS } from "@/lib/theme";
 import type { SearchResult } from "@/lib/types";
 
 const TYPE_ICON: Record<string, LucideIcon> = {
@@ -42,6 +44,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const router = useRouter();
   const { can } = useAuth();
   const { setTheme } = useTheme();
+  const { design, setDesign } = useDesign();
   const [query, setQuery] = React.useState("");
   const q = useDebounce(query.trim(), 200);
 
@@ -120,16 +123,23 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             ))}
           </CommandGroup>
         ) : null}
-        {!needle || "theme dark light".includes(needle) ? (
-          <CommandGroup heading="Theme">
+        {!needle || needle.split(/\s+/).every((w) => "theme design appearance switch aurora meridian dark light system mode".includes(w)) ? (
+          <CommandGroup heading="Appearance">
+            {DESIGNS.filter((d) => !needle || needle.split(/\s+/).every((w) => `switch to ${d} theme design appearance`.includes(w))).map((d) => (
+              <CommandItem key={d} value={`design-${d}`} onSelect={() => { setDesign(d); onOpenChange(false); }}>
+                <Palette className="text-muted-foreground" /> Switch to {DESIGN_META[d].label} theme
+                {design === d ? <span className="ml-1 text-xs text-muted-foreground">(current)</span> : null}
+                <CommandShortcut>t t</CommandShortcut>
+              </CommandItem>
+            ))}
             <CommandItem value="theme-dark" onSelect={() => { setTheme("dark"); onOpenChange(false); }}>
-              <Moon className="text-muted-foreground" /> Dark theme
+              <Moon className="text-muted-foreground" /> Dark mode
             </CommandItem>
             <CommandItem value="theme-light" onSelect={() => { setTheme("light"); onOpenChange(false); }}>
-              <Sun className="text-muted-foreground" /> Light theme
+              <Sun className="text-muted-foreground" /> Light mode
             </CommandItem>
             <CommandItem value="theme-system" onSelect={() => { setTheme("system"); onOpenChange(false); }}>
-              <Laptop className="text-muted-foreground" /> System theme
+              <Laptop className="text-muted-foreground" /> System mode
             </CommandItem>
           </CommandGroup>
         ) : null}

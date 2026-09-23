@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ClipboardCheck, ListChecks, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { RunCharts } from "@/components/compliance/run-charts";
 import { RuleDialog } from "@/components/compliance/rule-dialog";
@@ -22,17 +22,93 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
+import { useDesign } from "@/hooks/use-design";
 import { toast } from "@/hooks/use-toast";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { scoreColor } from "@/lib/status";
-import { barOption, gaugeOption, lineOption, palette } from "@/lib/charts";
+import { barOption, gaugeOption, lineOption, palette, sparklineOption, type ChartTheme } from "@/lib/charts";
 import type { ComplianceRule, ComplianceRun, ComplianceRunDetail } from "@/lib/types";
-import { cn, formatDate, formatDateTime, formatDuration, humanize, parseDate } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, formatDuration, formatNumber, humanize, parseDate } from "@/lib/utils";
+
+/**
+ * Meridian fleet score: the brand-filled card from the mockup — big serif score, delta, a sentence
+ * built from the latest run, the score history as a sparkline and a stamped seal.
+ */
+function FleetScoreCard({
+  latest,
+  delta,
+  detail,
+  history,
+  theme,
+}: {
+  latest: ComplianceRun | undefined;
+  delta: number | null;
+  detail: ComplianceRunDetail | undefined;
+  history: ComplianceRun[];
+  theme: ChartTheme;
+}) {
+  const spark = React.useMemo(
+    () =>
+      history.length > 1
+        ? sparklineOption(
+            {
+              labels: history.map((r) => formatDate(r.started_at)),
+              data: history.map((r) => Math.round((r.score ?? 0) * 10) / 10),
+              name: "Score",
+              color: theme.tokens.onBrand,
+              format: (v) => `${v}%`,
+            },
+            theme,
+          )
+        : null,
+    [history, theme],
+  );
+  const failingDevices = detail ? detail.devices.filter((d) => d.failed > 0).length : null;
+  const critical = detail ? detail.failures.filter((f) => f.severity === "critical").length : null;
+  const best = history.reduce((m, r) => Math.max(m, r.score ?? 0), 0);
+  return (
+    <article className="rise relative flex min-h-[260px] flex-col gap-2.5 overflow-hidden rounded-[24px] bg-primary p-[26px] text-primary-foreground">
+      <span className="text-[13px] opacity-85">Fleet score</span>
+      {latest?.score != null ? (
+        <>
+          <div className="flex items-baseline gap-2.5">
+            <span className="font-display text-[84px] font-semibold leading-none tracking-[-0.03em] tabular">{latest.score.toFixed(1)}</span>
+            {delta != null ? (
+              <span className="text-[15px] font-semibold opacity-90">
+                {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}
+                <span className="sr-only"> points versus the previous run</span>
+              </span>
+            ) : null}
+          </div>
+          <p className="max-w-[300px] text-sm leading-relaxed opacity-90">
+            {latest.score >= best && history.length > 1 ? `Highest of the last ${history.length} runs. ` : ""}
+            {failingDevices != null
+              ? `${formatNumber(failingDevices)} of ${formatNumber(detail?.devices.length ?? 0)} devices have failing checks${critical ? `, ${formatNumber(critical)} critical` : ""}.`
+              : `${formatNumber(latest.devices_checked)} devices checked.`}
+          </p>
+          {spark ? (
+            <div className="-mx-2 mt-auto">
+              <Chart option={spark} height={96} ariaLabel="Fleet score per run" />
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-sm opacity-90">No completed runs yet. Run the checks to get a fleet score.</p>
+      )}
+      <svg className="stamp absolute right-[18px] top-[18px] h-24 w-24" viewBox="0 0 96 96" fill="none" aria-hidden>
+        <circle cx="48" cy="48" r="42" className="stroke-primary-foreground/50" strokeWidth="2" strokeDasharray="3 5" />
+        <circle cx="48" cy="48" r="32" className="stroke-primary-foreground/50" strokeWidth="2" />
+        <path d="m35 49 9 9 18-20" className="stroke-primary-foreground/80" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </article>
+  );
+}
 
 function RunsPanel() {
   const router = useRouter();
-  const mode = useChartMode();
+  const theme = useChartTheme();
+  const { design } = useDesign();
   const runs = useQuery({ queryKey: ["compliance", "runs", 90], queryFn: () => api.get<ComplianceRun[]>("/compliance/runs", { limit: 90 }) });
   const list = React.useMemo(() => runs.data ?? [], [runs.data]);
   const completed = React.useMemo(() => list.filter((r) => r.score !== null), [list]);
@@ -54,9 +130,9 @@ function RunsPanel() {
           label: delta == null ? `${latest?.devices_checked ?? 0} devices checked` : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toFixed(1)} vs previous run`,
           gradient: true,
         },
-        mode,
+        theme,
       ),
-    [latest, delta, mode],
+    [latest, delta, theme],
   );
   const trend = React.useMemo(
     () =>
@@ -72,31 +148,35 @@ function RunsPanel() {
           format: (v) => `${v}%`,
           axisFormat: (v) => `${v}%`,
         },
-        mode,
+        theme,
       ),
-    [chart, mode],
+    [chart, theme],
   );
   const checked = React.useMemo(
     () =>
       barOption(
         {
           categories: chart.map((r) => formatDate(r.started_at)),
-          series: [{ name: "Devices checked", data: chart.map((r) => r.devices_checked), color: palette(mode)[2] }],
+          series: [{ name: "Devices checked", data: chart.map((r) => r.devices_checked), color: palette(theme)[2] }],
           barWidth: 14,
         },
-        mode,
+        theme,
       ),
-    [chart, mode],
+    [chart, theme],
   );
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 xl:grid-cols-[1fr_2fr]">
-        <ChartCard title="Compliance score" description={latest ? <>Latest run · <RelativeTime value={latest.started_at} /></> : "No completed runs"}>
-          <ChartBody loading={runs.isLoading} error={runs.error} empty={!latest} emptyTitle="No runs yet" emptyDescription="Run the checks to get a fleet score." emptyIcon={ClipboardCheck} emptyArt="default" height={220}>
-            <Chart option={gauge} height={220} ariaLabel={`Latest compliance score ${latest?.score?.toFixed(1) ?? ""}`} />
-          </ChartBody>
-        </ChartCard>
+        {design === "meridian" && !runs.isLoading && !runs.error ? (
+          <FleetScoreCard latest={latest} delta={delta} detail={latest ? detail.data : undefined} history={chart.slice(-30)} theme={theme} />
+        ) : (
+          <ChartCard title="Compliance score" description={latest ? <>Latest run · <RelativeTime value={latest.started_at} /></> : "No completed runs"}>
+            <ChartBody loading={runs.isLoading} error={runs.error} empty={!latest} emptyTitle="No runs yet" emptyDescription="Run the checks to get a fleet score." emptyIcon={ClipboardCheck} emptyArt="default" height={220}>
+              <Chart option={gauge} height={220} ariaLabel={`Latest compliance score ${latest?.score?.toFixed(1) ?? ""}`} />
+            </ChartBody>
+          </ChartCard>
+        )}
         <ChartCard title="Score history" description={`Fleet compliance per run · ${completed.length} run${completed.length === 1 ? "" : "s"}`} delay={1}>
           <ChartBody loading={runs.isLoading} error={runs.error} empty={!chart.length} emptyTitle="No runs yet" emptyIcon={ClipboardCheck} height={220}>
             <Chart
@@ -108,7 +188,7 @@ function RunsPanel() {
           </ChartBody>
         </ChartCard>
       </div>
-      <RunCharts detail={latest ? detail.data : undefined} mode={mode} delay={2} />
+      <RunCharts detail={latest ? detail.data : undefined} theme={theme} delay={2} />
       {chart.length > 1 ? (
         <ChartCard title="Coverage per run" description="Devices evaluated in each run" delay={5}>
           <Chart option={checked} height={180} ariaLabel="Devices checked per run" />

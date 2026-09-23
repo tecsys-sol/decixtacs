@@ -1,7 +1,11 @@
 /**
- * Aurora line-art illustrations. Colours come from the --ill-* CSS variables so every drawing
- * follows the theme; motion classes (flow / floaty / blink / fan) are disabled under
- * prefers-reduced-motion in globals.css. All illustrations are decorative (aria-hidden).
+ * Theme-aware illustrations. Every exported illustration renders an Aurora drawing (line-art
+ * devices and flowing links) and a Meridian drawing (globe with orbiting dots, swaying plant,
+ * drifting waves, stamped seal); the `meridian:` / `aurora:` CSS variants show the one matching
+ * <html data-design>, so server-rendered pages never flash the wrong art. Colours come from the
+ * --ill-* CSS variables (per design × mode); motion classes (flow / floaty / blink / fan / sway /
+ * drift / orbit / stamp) are disabled under prefers-reduced-motion in globals.css. All
+ * illustrations are decorative (aria-hidden).
  */
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
@@ -17,6 +21,30 @@ const s = {
   green: "stroke-[var(--ill-green)]",
   orange: "stroke-[var(--ill-orange)]",
 };
+const sx = {
+  wave: "stroke-[var(--ill-wave)]",
+  wave2: "stroke-[var(--ill-wave-2)]",
+  leaf: "stroke-[var(--ill-leaf)]",
+  blue: "stroke-[var(--ill-blue)]",
+  gold: "stroke-[var(--ill-gold)]",
+};
+const fx = {
+  leaf: "fill-[var(--ill-leaf)]",
+  blue: "fill-[var(--ill-blue)]",
+  gold: "fill-[var(--ill-gold)]",
+  page: "fill-background",
+};
+
+/** Two layers in one box: Aurora art and Meridian art, switched by the design theme (CSS only). */
+function Themed({ className, aurora, meridian, as: Tag = "span" }: { className?: string; aurora: React.ReactNode; meridian: React.ReactNode; as?: "span" | "div" }) {
+  return (
+    <Tag className={cn("relative block", className)} aria-hidden>
+      <span className="absolute inset-0 block meridian:hidden">{aurora}</span>
+      <span className="absolute inset-0 hidden meridian:block">{meridian}</span>
+    </Tag>
+  );
+}
+
 const f = {
   brand: "fill-[var(--ill-brand)]",
   brand2: "fill-[var(--ill-brand-2)]",
@@ -40,8 +68,8 @@ function Svg({ viewBox, className, children }: { viewBox: string; className?: st
   );
 }
 
-/** Dashboard hero: devices linked by flowing connections (from the approved mockup). */
-export function HeroNetwork({ className }: SvgProps) {
+/** Aurora dashboard hero: devices linked by flowing connections (from the approved mockup). */
+function AuroraHero({ className }: SvgProps) {
   return (
     <Svg viewBox="0 0 420 170" className={className}>
       <ellipse cx="210" cy="150" rx="190" ry="14" className={f.ground} />
@@ -74,8 +102,53 @@ export function HeroNetwork({ className }: SvgProps) {
   );
 }
 
-/** Sidebar status card: a small chain of nodes with a flowing link. */
-export function MiniNetwork({ className, degraded }: SvgProps & { degraded?: boolean }) {
+/**
+ * Meridian hero scene (from the approved mockup): drifting waves, a globe whose coloured dots
+ * orbit it, a dashed triangle of sites and a swaying plant. Fills its box (slice).
+ */
+export function MeridianGlobeScene({ className }: SvgProps) {
+  return (
+    <svg viewBox="0 0 640 300" preserveAspectRatio="xMidYMid slice" fill="none" aria-hidden focusable="false" className={className}>
+      <g className="drift">
+        <path d="M0 238c80-30 160-30 240 0s160 30 240 0 160-30 240 0 160 30 240 0" strokeWidth="2" className={sx.wave} />
+        <path d="M0 258c80-24 160-24 240 0s160 24 240 0 160-24 240 0 160 24 240 0" strokeWidth="2" className={sx.wave2} />
+      </g>
+      <g transform="translate(160 20)">
+        <circle cx="160" cy="110" r="96" strokeWidth="2" className={cn(fx.page, s.brand)} />
+        <path d="M64 110h192M160 14c42 38 42 154 0 192M160 14c-42 38-42 154 0 192" strokeWidth="1.6" className={s.soft} />
+        <ellipse cx="160" cy="110" rx="96" ry="34" strokeWidth="1.6" className={s.soft} />
+        <g className="orbit" style={{ transformOrigin: "160px 110px" }}>
+          <circle cx="160" cy="4" r="9" className={f.orange} />
+          <circle cx="266" cy="110" r="7" className={fx.blue} />
+          <circle cx="72" cy="170" r="7" className={fx.gold} />
+        </g>
+        <circle cx="126" cy="84" r="6" className={f.brand} />
+        <circle cx="196" cy="130" r="6" className={f.brand} />
+        <circle cx="170" cy="70" r="6" className={f.brand} />
+        <path d="M126 84 170 70 196 130Z" strokeWidth="1.6" strokeDasharray="4 5" className={s.brand} />
+      </g>
+      <g className="sway">
+        <path d="M70 270V190" strokeWidth="2.4" className={s.brand} />
+        <path d="M70 214c-22-6-30-24-26-38 18 2 28 18 26 38ZM70 200c20-8 26-26 22-40-16 4-24 22-22 40Z" className={fx.leaf} />
+      </g>
+    </svg>
+  );
+}
+
+/** Dashboard / sign-in hero, in the active design. */
+export function HeroNetwork({ className }: SvgProps) {
+  return (
+    <Themed
+      as="div"
+      className={className}
+      aurora={<AuroraHero className="h-full w-full" />}
+      meridian={<MeridianGlobeScene className="h-full w-full rounded-[26px] bg-hero-panel" />}
+    />
+  );
+}
+
+/** Aurora sidebar status card: a small chain of nodes with a flowing link. */
+function AuroraMiniNetwork({ className, degraded }: SvgProps & { degraded?: boolean }) {
   return (
     <Svg viewBox="0 0 200 70" className={cn("floaty", className)}>
       <path d="M20 50 60 22 100 44 140 16 180 38" strokeWidth="2" className={s.lilac} />
@@ -90,6 +163,37 @@ export function MiniNetwork({ className, degraded }: SvgProps & { degraded?: boo
       ))}
       <circle cx="100" cy="44" r="6" className={cn(degraded ? f.orange : f.brand, degraded && "blink")} />
     </Svg>
+  );
+}
+
+/** Meridian status card: a small globe with an orbiting dot riding a wave. */
+function MeridianMiniNetwork({ className, degraded }: SvgProps & { degraded?: boolean }) {
+  return (
+    <Svg viewBox="0 0 200 70" className={className}>
+      <g className="drift">
+        <path d="M0 58c40-12 80-12 120 0s80 12 120 0 80-12 120 0" strokeWidth="2" className={sx.wave} />
+      </g>
+      <circle cx="100" cy="32" r="22" strokeWidth="2" className={cn(fx.page, s.brand)} />
+      <path d="M78 32h44M100 10c9 8 9 36 0 44M100 10c-9 8-9 36 0 44" strokeWidth="1.4" className={s.soft} />
+      <g className="orbit" style={{ transformOrigin: "100px 32px" }}>
+        <circle cx="100" cy="4" r="5" className={degraded ? cn(f.orange, "blink") : f.green} />
+      </g>
+      <g className="sway">
+        <path d="M30 62V38" strokeWidth="2" className={s.brand} />
+        <path d="M30 46c-8-2-11-9-9-14 6 1 10 7 9 14ZM30 42c7-3 9-9 8-14-6 1-8 8-8 14Z" className={fx.leaf} />
+      </g>
+    </Svg>
+  );
+}
+
+/** Status card art: a small network (Aurora) or globe (Meridian); amber when degraded. */
+export function MiniNetwork({ className, degraded }: SvgProps & { degraded?: boolean }) {
+  return (
+    <Themed
+      className={className}
+      aurora={<AuroraMiniNetwork className="h-full w-full" degraded={degraded} />}
+      meridian={<MeridianMiniNetwork className="h-full w-full" degraded={degraded} />}
+    />
   );
 }
 
@@ -358,12 +462,102 @@ const ART: Record<HeaderArt, () => React.ReactElement> = {
   ),
 };
 
+// Meridian header motifs: every page maps onto one of four drawings in the mockup's language.
+type MeridianMotif = "globe" | "plant" | "waves" | "seal";
+
+const MERIDIAN_MOTIF: Record<HeaderArt, MeridianMotif> = {
+  network: "globe",
+  devices: "globe",
+  ixp: "globe",
+  integrations: "globe",
+  backups: "waves",
+  accounting: "waves",
+  sessions: "waves",
+  audit: "waves",
+  compliance: "seal",
+  changes: "seal",
+  tacacs: "seal",
+  alerts: "seal",
+  reports: "plant",
+  users: "plant",
+  settings: "plant",
+};
+
+function MeridianArch() {
+  return <path d="M20 96a90 90 0 0 1 180 0" className="fill-[var(--ill-softer)]" />;
+}
+
+const MERIDIAN_ART: Record<MeridianMotif, () => React.ReactElement> = {
+  globe: () => (
+    <>
+      <MeridianArch />
+      <circle cx="110" cy="52" r="34" strokeWidth="2" className={cn(fx.page, s.brand)} />
+      <path d="M76 52h68M110 18c15 13 15 55 0 68M110 18c-15 13-15 55 0 68" strokeWidth="1.5" className={s.soft} />
+      <ellipse cx="110" cy="52" rx="34" ry="12" strokeWidth="1.5" className={s.soft} />
+      <g className="orbit" style={{ transformOrigin: "110px 52px" }}>
+        <circle cx="110" cy="10" r="5" className={f.orange} />
+        <circle cx="152" cy="52" r="4" className={fx.blue} />
+        <circle cx="78" cy="80" r="4" className={fx.gold} />
+      </g>
+      <path d="M98 42 120 38 128 62Z" strokeWidth="1.4" strokeDasharray="3 4" className={s.brand} />
+    </>
+  ),
+  plant: () => (
+    <>
+      <MeridianArch />
+      <circle cx="156" cy="30" r="12" className={fx.gold} opacity="0.35" />
+      <g className="sway">
+        <path d="M110 84V34" strokeWidth="2.4" className={s.brand} />
+        <path d="M110 62c-18-4-24-18-21-30 14 2 22 14 21 30ZM110 50c16-6 21-20 18-31-13 3-19 17-18 31Z" className={fx.leaf} />
+      </g>
+      <path d="M92 80h36l-5 16h-26Z" className={f.orange} />
+    </>
+  ),
+  waves: () => (
+    <>
+      <MeridianArch />
+      <g className="floaty">
+        <rect x="84" y="22" width="52" height="40" rx="10" strokeWidth="2" className={cn(f.surface, s.brand)} />
+        <path d="M94 36h32M94 46h20" strokeWidth="2" strokeLinecap="round" className={s.soft} />
+      </g>
+      <svg x="0" y="0" width="220" height="100" overflow="hidden">
+        <g className="drift">
+          <path d="M0 74c40-12 80-12 120 0s80 12 120 0 80-12 120 0" strokeWidth="2" className={s.brand2} />
+          <path d="M0 86c40-10 80-10 120 0s80 10 120 0 80-10 120 0" strokeWidth="2" className={sx.wave} />
+        </g>
+      </svg>
+    </>
+  ),
+  seal: () => (
+    <>
+      <MeridianArch />
+      <g className="stamp" style={{ transformOrigin: "110px 50px" }}>
+        <circle cx="110" cy="50" r="36" strokeWidth="2" strokeDasharray="3 5" className={s.soft} />
+        <circle cx="110" cy="50" r="27" strokeWidth="2" className={cn(fx.page, s.brand)} />
+        <path d="m98 51 8 8 16-18" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" className={s.brand} />
+      </g>
+      <circle cx="160" cy="24" r="5" className={cn(f.orange, "blink")} />
+    </>
+  ),
+};
+
 export function HeaderIllustration({ art, className }: { art: HeaderArt; className?: string }) {
   const Art = ART[art];
+  const MArt = MERIDIAN_ART[MERIDIAN_MOTIF[art]];
   return (
-    <Svg viewBox="0 0 220 100" className={className}>
-      <Art />
-    </Svg>
+    <Themed
+      className={className}
+      aurora={
+        <Svg viewBox="0 0 220 100" className="h-full w-full">
+          <Art />
+        </Svg>
+      }
+      meridian={
+        <Svg viewBox="0 0 220 100" className="h-full w-full">
+          <MArt />
+        </Svg>
+      }
+    />
   );
 }
 
@@ -394,11 +588,78 @@ export function artForPath(pathname: string): HeaderArt | null {
 
 export type EmptyArt = "default" | "chart" | "search" | "success" | "network";
 
-/** Illustrated scene for empty states: floating cards, a flowing link and the context icon in a tile. */
-export function EmptyScene({ art = "default", icon: Icon, className }: { art?: EmptyArt; icon?: LucideIcon; className?: string }) {
+/** Meridian empty state: a sunrise arch, drifting waves, a swaying plant and the icon in a round seal. */
+function MeridianEmptyScene({ art = "default", icon: Icon }: { art?: EmptyArt; icon?: LucideIcon }) {
+  return (
+    <div className="relative h-full w-full">
+      <Svg viewBox="0 0 200 104" className="absolute inset-0 h-full w-full overflow-hidden">
+        <path d="M40 92a60 60 0 0 1 120 0" className="fill-[var(--ill-softer)]" />
+        <svg x="0" y="0" width="200" height="104" overflow="hidden">
+          <g className="drift">
+            <path d="M0 94c40-10 80-10 120 0s80 10 120 0 80-10 120 0" strokeWidth="2" className={sx.wave} />
+          </g>
+        </svg>
+        <g className="sway">
+          <path d="M32 94V62" strokeWidth="2" className={s.brand} />
+          <path d="M32 76c-10-3-14-11-12-17 8 1 12 9 12 17ZM32 70c9-4 12-12 10-18-7 2-10 10-10 18Z" className={fx.leaf} />
+        </g>
+        {art === "chart" ? (
+          <g>
+            {[0, 1, 2].map((i) => (
+              <rect key={i} x={150 + i * 10} y={70 - i * 12} width="6" height={20 + i * 12} rx="3" className={i === 2 ? f.brand : fx.leaf} />
+            ))}
+          </g>
+        ) : art === "network" ? (
+          <g>
+            <circle cx="166" cy="62" r="16" strokeWidth="1.8" className={cn(fx.page, s.brand)} />
+            <path d="M150 62h32M166 46c7 6 7 26 0 32M166 46c-7 6-7 26 0 32" strokeWidth="1.2" className={s.soft} />
+            <g className="orbit" style={{ transformOrigin: "166px 62px" }}>
+              <circle cx="166" cy="42" r="3.5" className={f.orange} />
+            </g>
+          </g>
+        ) : art === "success" ? (
+          <circle cx="166" cy="58" r="14" strokeWidth="2" strokeDasharray="3 4" className={s.brand2} />
+        ) : (
+          <g className="floaty">
+            <circle cx="166" cy="60" r="5" className={f.orange} />
+            <circle cx="180" cy="48" r="3.5" className={fx.blue} />
+          </g>
+        )}
+        {art === "search" ? <path d="m124 66 12 12" strokeWidth="4" strokeLinecap="round" className={s.brand} /> : null}
+      </Svg>
+      <div className="absolute left-1/2 top-[18px] -translate-x-1/2">
+        <div
+          className={cn(
+            art === "success" ? "stamp" : "floaty",
+            "flex h-14 w-14 items-center justify-center rounded-full border-2 bg-card",
+            art === "success" ? "border-[var(--ill-green)] text-success" : "border-[var(--ill-brand)] text-primary",
+          )}
+          style={{ animationDelay: ".4s" }}
+        >
+          {Icon ? <Icon className="h-6 w-6" aria-hidden /> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Illustrated scene for empty states in the active design. */
+export function EmptyScene({ art = "default", icon, className }: { art?: EmptyArt; icon?: LucideIcon; className?: string }) {
+  return (
+    <Themed
+      as="div"
+      className={cn("mx-auto h-[104px] w-[200px]", className)}
+      aurora={<AuroraEmptyScene art={art} icon={icon} />}
+      meridian={<MeridianEmptyScene art={art} icon={icon} />}
+    />
+  );
+}
+
+/** Aurora scene: floating cards, a flowing link and the context icon in a tile. */
+function AuroraEmptyScene({ art = "default", icon: Icon }: { art?: EmptyArt; icon?: LucideIcon }) {
   const accent = art === "success" ? s.green : s.brand;
   return (
-    <div className={cn("relative mx-auto h-[104px] w-[200px]", className)} aria-hidden>
+    <div className="relative h-full w-full">
       <Svg viewBox="0 0 200 104" className="absolute inset-0 h-full w-full">
         <ellipse cx="100" cy="94" rx="84" ry="7" className={f.ground} />
         {art === "chart" ? (

@@ -15,9 +15,10 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import type { Tenant } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /** Shown only to superusers (platform operators); sets the X-Tenant header for all requests. */
-export function TenantSwitcher() {
+export function TenantSwitcher({ labelClassName = "hidden sm:inline" }: { labelClassName?: string } = {}) {
   const { me, tenant, switchTenant } = useAuth();
   const tenants = useQuery({
     queryKey: ["tenants"],
@@ -35,7 +36,7 @@ export function TenantSwitcher() {
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="h-[38px] max-w-[200px] shrink-0 gap-2" aria-label="Switch tenant">
           <Building className="text-muted-foreground" />
-          <span className="hidden truncate sm:inline">{current?.name ?? tenant ?? "Tenant"}</span>
+          <span className={cn("truncate", labelClassName)}>{current?.name ?? tenant ?? "Tenant"}</span>
           <ChevronsUpDown className="hidden opacity-50 sm:block" />
         </Button>
       </DropdownMenuTrigger>

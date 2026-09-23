@@ -4,12 +4,14 @@ import { usePathname } from "next/navigation";
 import * as React from "react";
 
 import { Dialog, DialogDescription, DialogTitle, SheetContent } from "@/components/ui/dialog";
+import { useDesign } from "@/hooks/use-design";
 import { useOnChange } from "@/hooks/use-reset";
 import { useGlobalShortcuts } from "@/hooks/use-shortcuts";
 import { TimeRangeProvider } from "@/hooks/use-time-range";
 
 import { CommandPalette } from "./command-palette";
 import { Logo } from "./logo";
+import { MeridianHeader } from "./meridian-header";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import { Sidebar, SidebarNav, TacacsHealthCard } from "./sidebar";
 import { Topbar } from "./topbar";
@@ -40,14 +42,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return !c;
     });
 
+  const { design, toggleDesign } = useDesign();
   const openSearch = React.useCallback(() => setSearchOpen(true), []);
   const openHelp = React.useCallback(() => setHelpOpen(true), []);
-  useGlobalShortcuts({ onSearch: openSearch, onHelp: openHelp });
+  useGlobalShortcuts({ onSearch: openSearch, onHelp: openHelp, onToggleDesign: toggleDesign });
 
-  return (
-    <TimeRangeProvider>
-      <div className="flex min-h-screen bg-background">
-        <Sidebar collapsed={collapsed} onToggle={toggle} />
+  // Shell variant follows the design theme; both share nav data (lib/nav.ts + nav-model.ts), the
+  // drawer, the command palette and the shortcuts.
+  const meridian = design === "meridian";
+  const drawer = (
         <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent className="gap-5 px-4 py-5">
             <DialogTitle className="sr-only">Navigation</DialogTitle>
@@ -61,12 +64,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <TacacsHealthCard />
           </SheetContent>
         </Dialog>
+  );
+  const overlays = (
+    <>
+      <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
+    </>
+  );
+
+  if (meridian) {
+    return (
+      <TimeRangeProvider>
+        <div className="flex min-h-screen flex-col bg-background">
+          <MeridianHeader onOpenSearch={openSearch} onOpenNav={() => setMobileOpen(true)} onShowShortcuts={openHelp} />
+          {drawer}
+          <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-10 pt-6 sm:px-8 sm:pt-[30px] xl:px-11">{children}</main>
+          {overlays}
+        </div>
+      </TimeRangeProvider>
+    );
+  }
+
+  return (
+    <TimeRangeProvider>
+      <div className="flex min-h-screen bg-background">
+        <Sidebar collapsed={collapsed} onToggle={toggle} />
+        {drawer}
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar onOpenSearch={openSearch} onOpenNav={() => setMobileOpen(true)} onShowShortcuts={openHelp} />
           <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-8 pt-6 sm:px-8 sm:pt-[26px]">{children}</main>
         </div>
-        <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
-        <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
+        {overlays}
       </div>
     </TimeRangeProvider>
   );

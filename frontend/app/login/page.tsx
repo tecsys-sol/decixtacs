@@ -26,7 +26,7 @@ export default function LoginPage() {
               Back up every config, review every change, account for every command.
             </p>
           </div>
-          <HeroNetwork className="h-auto w-full" />
+          <HeroNetwork className="h-[190px] w-full" />
         </div>
       </div>
     </div>

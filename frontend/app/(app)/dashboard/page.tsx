@@ -6,19 +6,21 @@ import { useRouter } from "next/navigation";
 import { Activity, ClipboardCheck, DatabaseBackup, GitCompare, History, Server, ShieldCheck, Terminal, Users } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { KpiTile } from "@/components/common/kpi-tile";
 import { RelativeTime } from "@/components/common/relative-time";
-import { HeroNetwork } from "@/components/illustrations";
+import { HeroNetwork, MeridianGlobeScene } from "@/components/illustrations";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Segmented } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { useCommandsSince, useTacacsActivity } from "@/hooks/use-activity";
 import { useRecentBackups } from "@/hooks/use-backup-stats";
 import { useDashboard } from "@/hooks/use-dashboard";
+import { useDesign } from "@/hooks/use-design";
 import { useNow } from "@/hooks/use-now";
 import { useTimeRange } from "@/hooks/use-time-range";
 import {
@@ -33,7 +35,7 @@ import {
   type TimeRange,
 } from "@/lib/aggregate";
 import { api } from "@/lib/api";
-import { barOption, donutOption, gaugeOption, heatmapOption, lineOption, palette, STATUS, type ChartMode } from "@/lib/charts";
+import { barOption, donutOption, gaugeOption, heatmapOption, lineOption, palette, type ChartTheme } from "@/lib/charts";
 import type { ComplianceRun, ComplianceRunDetail, Device, Page } from "@/lib/types";
 import { formatDate, formatNumber, humanize, parseDate } from "@/lib/utils";
 
@@ -50,8 +52,8 @@ function firstName(me: { full_name: string | null; username: string } | null): s
   return (me.full_name?.split(/\s+/)[0] || me.username).replace(/^./, (c) => c.toUpperCase());
 }
 
-function reachColor(key: string, mode: ChartMode): string {
-  const s = STATUS[mode];
+function reachColor(key: string, theme: ChartTheme): string {
+  const s = theme.status;
   const k = key.toLowerCase();
   if (["reachable", "up", "ok"].includes(k)) return s.success;
   if (["unreachable", "down", "failed"].includes(k)) return s.danger;
@@ -59,8 +61,8 @@ function reachColor(key: string, mode: ChartMode): string {
   return s.neutral;
 }
 
-function authColor(key: string, mode: ChartMode): string {
-  const s = STATUS[mode];
+function authColor(key: string, theme: ChartTheme): string {
+  const s = theme.status;
   const k = key.toLowerCase();
   if (["pass", "permit", "success", "accepted"].includes(k)) return s.success;
   if (["fail", "deny", "denied", "reject"].includes(k)) return s.danger;
@@ -75,6 +77,25 @@ const TINTS = [
   "bg-[#fbe3ec] text-[#8c1f4b] dark:bg-[#3a1a2a] dark:text-[#f3a6c4]",
 ];
 
+const NUMBER_WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve"];
+function countWord(n: number): string {
+  return NUMBER_WORDS[n] ?? formatNumber(n);
+}
+
+function isReachable(k: string): boolean {
+  return ["reachable", "up", "ok"].includes(k.toLowerCase());
+}
+
+/** Floating stat card on the Meridian hero panel. */
+function FloatingStat({ label, value, className }: { label: string; value: React.ReactNode; className?: string }) {
+  return (
+    <div className={`absolute flex flex-col gap-0.5 rounded-2xl bg-card px-4 py-3 shadow-pop ${className ?? ""}`}>
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="font-display text-2xl font-bold tabular">{value}</span>
+    </div>
+  );
+}
+
 function initials(name: string | null): string {
   if (!name) return "?";
   const parts = name.split(/[\s._-]+/).filter(Boolean);
@@ -84,7 +105,8 @@ function initials(name: string | null): string {
 export default function DashboardPage() {
   const router = useRouter();
   const { me, can } = useAuth();
-  const mode = useChartMode();
+  const { design } = useDesign();
+  const theme = useChartTheme();
   const now = useNow();
   const { range, setRange } = useTimeRange();
   const q = useDashboard();
@@ -161,10 +183,10 @@ export default function DashboardPage() {
               stacked: true,
               labelInterval: range === "24h" ? 3 : range === "7d" ? 3 : 4,
             },
-            mode,
+            theme,
           )
         : null,
-    [activity.series, range, mode],
+    [activity.series, range, theme],
   );
 
   const gauge = React.useMemo(
@@ -175,15 +197,15 @@ export default function DashboardPage() {
           label: scoreDelta == null ? "latest run" : `${scoreDelta >= 0 ? "+" : "−"}${Math.abs(scoreDelta).toFixed(1)} vs previous run`,
           gradient: true,
         },
-        mode,
+        theme,
       ),
-    [d, scoreDelta, mode],
+    [d, scoreDelta, theme],
   );
 
   const vendors = React.useMemo(() => {
     const items = foldTop((d?.devices.by_vendor ?? []).map((v) => ({ name: v.name, value: v.count })), 5);
-    return donutOption({ items, centerValue: formatNumber(d?.devices.total ?? 0), centerLabel: "devices" }, mode);
-  }, [d?.devices.by_vendor, d?.devices.total, mode]);
+    return donutOption({ items, centerValue: formatNumber(d?.devices.total ?? 0), centerLabel: "devices" }, theme);
+  }, [d?.devices.by_vendor, d?.devices.total, theme]);
 
   const heat = React.useMemo(() => {
     const m = dayHourMatrix((week.data?.items ?? []).map((c) => c.timestamp), t, 7);
@@ -197,17 +219,17 @@ export default function DashboardPage() {
           max: m.max,
           tooltip: (x, y, v) => `<b>${y} ${x}:00</b> — ${v.toLocaleString("en")} command${v === 1 ? "" : "s"}`,
         },
-        mode,
+        theme,
       ),
     };
-  }, [week.data, t, mode]);
+  }, [week.data, t, theme]);
 
   const backupBars = React.useMemo(() => {
     const s = bucketSeries(backups.data?.items ?? [], (b) => b.collected_at, range, t, {
       group: (b) => (b.status === "failed" ? "Failed" : b.changed ? "Changed" : "Unchanged"),
       groupOrder: ["Changed", "Unchanged", "Failed"],
     });
-    const colors: Record<string, string> = { Changed: palette(mode)[0], Unchanged: STATUS[mode].neutral, Failed: STATUS[mode].danger };
+    const colors: Record<string, string> = { Changed: palette(theme)[0], Unchanged: theme.status.neutral, Failed: theme.status.danger };
     return {
       counted: s.counted,
       option: barOption(
@@ -217,27 +239,27 @@ export default function DashboardPage() {
           axisLabelInterval: range === "30d" ? 4 : 3,
           barWidth: 12,
         },
-        mode,
+        theme,
       ),
     };
-  }, [backups.data, range, t, mode]);
+  }, [backups.data, range, t, theme]);
 
   const authPie = React.useMemo(() => {
     const items = Object.entries(d?.tacacs.auth_24h ?? {})
-      .map(([k, v]) => ({ name: humanize(k), value: v, color: authColor(k, mode) }))
+      .map(([k, v]) => ({ name: humanize(k), value: v, color: authColor(k, theme) }))
       .sort((a, b) => b.value - a.value);
     const total = items.reduce((a, b) => a + b.value, 0);
-    return { total, option: donutOption({ items, centerValue: compactNumber(total), centerLabel: "auth events" }, mode) };
-  }, [d?.tacacs.auth_24h, mode]);
+    return { total, option: donutOption({ items, centerValue: compactNumber(total), centerLabel: "auth events" }, theme) };
+  }, [d?.tacacs.auth_24h, theme]);
 
   const reach = React.useMemo(() => {
     const items = Object.entries(d?.devices.by_reachability ?? {})
-      .map(([k, v]) => ({ name: humanize(k), value: v, color: reachColor(k, mode) }))
+      .map(([k, v]) => ({ name: humanize(k), value: v, color: reachColor(k, theme) }))
       .sort((a, b) => b.value - a.value);
-    const ok = items.filter((i) => i.color === STATUS[mode].success).reduce((a, b) => a + b.value, 0);
+    const ok = items.filter((i) => i.color === theme.status.success).reduce((a, b) => a + b.value, 0);
     const total = items.reduce((a, b) => a + b.value, 0);
-    return donutOption({ items, centerValue: total ? `${Math.round((ok / total) * 100)}%` : "—", centerLabel: "reachable" }, mode);
-  }, [d?.devices.by_reachability, mode]);
+    return donutOption({ items, centerValue: total ? `${Math.round((ok / total) * 100)}%` : "—", centerLabel: "reachable" }, theme);
+  }, [d?.devices.by_reachability, theme]);
 
   const trendOption = React.useMemo(
     () =>
@@ -251,9 +273,9 @@ export default function DashboardPage() {
           format: (v) => `${v}%`,
           axisFormat: (v) => `${v}%`,
         },
-        mode,
+        theme,
       ),
-    [trend, mode],
+    [trend, theme],
   );
 
   const sites = React.useMemo(
@@ -265,9 +287,9 @@ export default function DashboardPage() {
           horizontal: true,
           valueLabels: true,
         },
-        mode,
+        theme,
       ),
-    [d?.devices.by_site, mode],
+    [d?.devices.by_site, theme],
   );
 
   const topUsers = React.useMemo(
@@ -275,27 +297,27 @@ export default function DashboardPage() {
       barOption(
         {
           categories: (d?.top_users ?? []).map((u) => u.user),
-          series: [{ name: "Commands", data: (d?.top_users ?? []).map((u) => u.commands), color: palette(mode)[0] }],
+          series: [{ name: "Commands", data: (d?.top_users ?? []).map((u) => u.commands), color: palette(theme)[0] }],
           horizontal: true,
           valueLabels: true,
         },
-        mode,
+        theme,
       ),
-    [d?.top_users, mode],
+    [d?.top_users, theme],
   );
   const topDevices = React.useMemo(
     () =>
       barOption(
         {
           categories: (d?.top_devices ?? []).map((u) => u.device),
-          series: [{ name: "Commands", data: (d?.top_devices ?? []).map((u) => u.commands), color: palette(mode)[2] }],
+          series: [{ name: "Commands", data: (d?.top_devices ?? []).map((u) => u.commands), color: palette(theme)[2] }],
           horizontal: true,
           valueLabels: true,
           labelWidth: 130,
         },
-        mode,
+        theme,
       ),
-    [d?.top_devices, mode],
+    [d?.top_devices, theme],
   );
 
   if (q.error && !d) {
@@ -312,10 +334,107 @@ export default function DashboardPage() {
   const compliant = run ? run.devices.filter((x) => x.failed === 0).length : null;
   const failingDevices = run ? run.devices.filter((x) => x.failed > 0).length : null;
   const critical = run ? run.failures.filter((f) => f.severity === "critical").length : null;
+  const summary = d ? (
+    <>
+              {formatNumber(healthy)} of {formatNumber(d.devices.total)} devices have a healthy last backup
+              {failing ? `, ${formatNumber(failing)} ${failing === 1 ? "is" : "are"} failing` : ""}.{" "}
+              {can("configs:read")
+                ? backupStats.unplanned24
+                  ? `${backupStats.unplanned24} unplanned config change${backupStats.unplanned24 === 1 ? "" : "s"} in the last 24 hours need${backupStats.unplanned24 === 1 ? "s" : ""} a look`
+                  : "No unplanned config changes in the last 24 hours"
+                : null}
+              {scoreDelta != null
+                ? `${can("configs:read") ? ", and the" : " The"} compliance score ${scoreDelta > 0.05 ? `rose ${scoreDelta.toFixed(1)} points` : scoreDelta < -0.05 ? `fell ${Math.abs(scoreDelta).toFixed(1)} points` : "held steady"} since the previous run.`
+                : can("configs:read")
+                  ? "."
+                  : ""}
+    </>
+  ) : null;
+
+  // Meridian editorial hero: headline and summary built from live data, globe panel with stats.
+  const reachEntries = Object.entries(d?.devices.by_reachability ?? {});
+  const reachableCount = reachEntries.filter(([k]) => isReachable(k)).reduce((a, [, v]) => a + v, 0);
+  const unreachable = reachEntries.filter(([k]) => !isReachable(k) && k.toLowerCase() !== "unknown").reduce((a, [, v]) => a + v, 0);
+  const troubled = failing + unreachable;
+  const mood = !d || troubled === 0 ? "steady" : troubled <= Math.max(1, d.devices.total * 0.05) ? "mostly steady" : "under strain";
+  const attention = !d
+    ? ""
+    : can("configs:read") && backupStats.unplanned24
+      ? `${countWord(backupStats.unplanned24)} unplanned change${backupStats.unplanned24 === 1 ? "" : "s"} deserve${backupStats.unplanned24 === 1 ? "s" : ""} a second look.`
+      : failing
+        ? `${countWord(failing)} device${failing === 1 ? "" : "s"} need${failing === 1 ? "s" : ""} a fresh backup.`
+        : d.open_changes
+          ? `${countWord(d.open_changes)} open change${d.open_changes === 1 ? "" : "s"} await${d.open_changes === 1 ? "s" : ""} review.`
+          : "Nothing needs your attention right now.";
+  const stamp = new Date(now);
+  const dateLine = `${stamp.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · ${stamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`.toUpperCase();
+  const meridianHero = (
+    <section className="rise grid items-stretch gap-[22px] lg:grid-cols-[1.15fr_1fr]">
+      <div className="flex min-w-0 flex-col justify-center gap-3.5">
+        <span className="font-mono text-[12.5px] tracking-[0.08em] text-label">{dateLine}</span>
+        {loading ? (
+          <Skeleton className="h-24 w-full max-w-[560px]" />
+        ) : (
+          <h1 className="font-display text-[34px] font-semibold leading-[1.08] tracking-[-0.025em] sm:text-[46px]">
+            {me ? <span className="sr-only">{`${greeting(now)}, ${firstName(me)}. `}</span> : null}
+            Your network is <em className="italic text-primary">{mood}</em>.
+            {attention ? (
+              <>
+                <br />
+                {attention}
+              </>
+            ) : null}
+          </h1>
+        )}
+        {loading ? <Skeleton className="h-10 w-full max-w-[560px]" /> : summary ? <p className="max-w-[560px] text-base leading-relaxed text-ink-3">{summary}</p> : null}
+        <div className="mt-1 flex flex-wrap gap-2.5">
+          {can("changes:read") ? (
+            <Button asChild className="h-11 px-[18px] text-sm">
+              <Link href="/changes">{d?.open_changes ? `Review ${d.open_changes} open change${d.open_changes === 1 ? "" : "s"}` : "Review changes"}</Link>
+            </Button>
+          ) : null}
+          {can("compliance:read") ? (
+            <Button asChild variant="outline" className="h-11 px-[18px] text-sm">
+              <Link href={runId ? `/compliance/runs/${runId}` : "/compliance"}>Open compliance report</Link>
+            </Button>
+          ) : can("configs:read") ? (
+            <Button asChild variant="outline" className="h-11 px-[18px] text-sm">
+              <Link href={failing ? "/backups?status=failed" : "/backups"}>{failing ? "Open failed backups" : "Open backups"}</Link>
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className="relative h-[260px] overflow-hidden rounded-[26px] bg-hero-panel sm:h-[300px]">
+        <MeridianGlobeScene className="absolute inset-0 h-full w-full" />
+        <FloatingStat className="bottom-5 left-5" label="Devices reachable" value={d ? `${formatNumber(reachableCount)} / ${formatNumber(d.devices.total)}` : "—"} />
+        <FloatingStat
+          className="right-5 top-5"
+          label={d?.compliance.score != null ? "Compliance score" : "Open alerts"}
+          value={
+            d?.compliance.score != null ? (
+              <>
+                {d.compliance.score.toFixed(1)}
+                {scoreDelta != null ? (
+                  <span className="ml-2 font-sans text-[13px] font-semibold text-primary">
+                    {scoreDelta >= 0 ? "▲" : "▼"} {Math.abs(scoreDelta).toFixed(1)}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              formatNumber(d?.open_alerts ?? 0)
+            )
+          }
+        />
+      </div>
+    </section>
+  );
 
   return (
     <div className="flex flex-col gap-5">
-      {/* hero ------------------------------------------------------------------------------- */}
+      {design === "meridian" ? (
+        meridianHero
+      ) : (
+        /* hero (Aurora) ------------------------------------------------------------------------- */
       <section className="rise relative flex items-center gap-6 overflow-hidden rounded-2xl border bg-card px-5 py-6 sm:px-[30px] sm:py-[26px]">
         <div className="z-[1] flex min-w-0 flex-1 flex-col gap-2">
           <span className="inline-flex items-center gap-2 text-[12.5px] font-bold text-success">
@@ -329,20 +448,7 @@ export default function DashboardPage() {
           {loading ? (
             <Skeleton className="h-10 w-full max-w-[560px]" />
           ) : d ? (
-            <p className="max-w-[580px] text-[14.5px] leading-relaxed text-ink-3">
-              {formatNumber(healthy)} of {formatNumber(d.devices.total)} devices have a healthy last backup
-              {failing ? `, ${formatNumber(failing)} are failing` : ""}.{" "}
-              {can("configs:read")
-                ? backupStats.unplanned24
-                  ? `${backupStats.unplanned24} unplanned config change${backupStats.unplanned24 === 1 ? "" : "s"} in the last 24 hours need${backupStats.unplanned24 === 1 ? "s" : ""} a look`
-                  : "No unplanned config changes in the last 24 hours"
-                : null}
-              {scoreDelta != null
-                ? `${can("configs:read") ? ", and the" : " The"} compliance score ${scoreDelta > 0.05 ? `rose ${scoreDelta.toFixed(1)} points` : scoreDelta < -0.05 ? `fell ${Math.abs(scoreDelta).toFixed(1)} points` : "held steady"} since the previous run.`
-                : can("configs:read")
-                  ? "."
-                  : ""}
-            </p>
+            <p className="max-w-[580px] text-[14.5px] leading-relaxed text-ink-3">{summary}</p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-2.5">
             {can("changes:read") ? (
@@ -366,6 +472,7 @@ export default function DashboardPage() {
         <HeroNetwork className="hidden h-[170px] w-[420px] shrink-0 xl:block" />
         <HeroNetwork className="hidden h-[120px] w-[300px] shrink-0 md:block xl:hidden" />
       </section>
+      )}
 
       {/* KPIs --------------------------------------------------------------------------------- */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -377,7 +484,7 @@ export default function DashboardPage() {
           value={formatNumber(d?.devices.total)}
           tone={deviceStats.newThisWeek ? "success" : "default"}
           sub={devices.data ? (deviceStats.newThisWeek ? `+${deviceStats.newThisWeek} this week` : "no new this week") : undefined}
-          spark={devices.data && deviceStats.complete ? { labels: deviceStats.labels, data: deviceStats.cumulative, name: "Devices", color: palette(mode)[0] } : null}
+          spark={devices.data && deviceStats.complete ? { labels: deviceStats.labels, data: deviceStats.cumulative, name: "Devices", color: palette(theme)[0] } : null}
           delay={0}
         />
         <KpiTile
@@ -390,7 +497,7 @@ export default function DashboardPage() {
           sub={d ? (d.backups.failures_24h ? `${formatNumber(d.backups.failures_24h)} failed` : d.backups.last_24h ? "no failures" : "no runs") : undefined}
           spark={
             backups.data
-              ? { labels: backupStats.labels, data: backupStats.rate.map((v) => v ?? Number.NaN), name: "Success rate", color: palette(mode)[2], format: (v) => (Number.isFinite(v) ? `${v}%` : "no runs") }
+              ? { labels: backupStats.labels, data: backupStats.rate.map((v) => v ?? Number.NaN), name: "Success rate", color: palette(theme)[2], format: (v) => (Number.isFinite(v) ? `${v}%` : "no runs") }
               : null
           }
           delay={1}
@@ -402,7 +509,7 @@ export default function DashboardPage() {
           href="/tacacs?tab=events"
           value={compactNumber(tacacs24)}
           sub={activity.series ? `peak ${compactNumber(activityPeak)}/${perUnit}${range === "24h" ? "" : ` · ${range}`}` : undefined}
-          spark={activity.series ? { labels: activity.series.labels, data: activityTotals, name: "Requests", color: palette(mode)[1] } : can("accounting:read") ? null : undefined}
+          spark={activity.series ? { labels: activity.series.labels, data: activityTotals, name: "Requests", color: palette(theme)[1] } : can("accounting:read") ? null : undefined}
           delay={2}
         />
         <KpiTile
@@ -413,7 +520,7 @@ export default function DashboardPage() {
           value={can("configs:read") ? formatNumber(backupStats.changed24) : "—"}
           tone={backupStats.unplanned24 ? "warning" : "default"}
           sub={backups.data ? `${backupStats.unplanned24} unplanned` : undefined}
-          spark={backups.data ? { labels: backupStats.labels, data: backupStats.changes, name: "Changes", color: palette(mode)[3] } : null}
+          spark={backups.data ? { labels: backupStats.labels, data: backupStats.changes, name: "Changes", color: palette(theme)[3] } : null}
           delay={3}
         />
       </section>

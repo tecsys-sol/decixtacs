@@ -2,70 +2,28 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 
 import { RelativeTime } from "@/components/common/relative-time";
 import { MiniNetwork } from "@/components/illustrations";
 import { useAuth } from "@/hooks/use-auth";
-import { useDashboard } from "@/hooks/use-dashboard";
 import { useNow } from "@/hooks/use-now";
 import { api } from "@/lib/api";
-import { NAV, type NavBadge, type NavItem } from "@/lib/nav";
-import type { Dashboard, TacacsServer } from "@/lib/types";
-import { cn, formatNumber, parseDate } from "@/lib/utils";
+import type { TacacsServer } from "@/lib/types";
+import { cn, parseDate } from "@/lib/utils";
 
 import { Logo } from "./logo";
+import { BADGE_CLS, useNavGroups } from "./nav-model";
 
 /** a TACACS+ agent that has not checked in for this long counts as unhealthy */
 export const HEARTBEAT_STALE_MS = 5 * 60_000;
 
-function isActive(item: NavItem, pathname: string, tab: string | null): boolean {
-  const [path, query] = item.href.split("?");
-  if (query) {
-    const want = new URLSearchParams(query);
-    return pathname === path && [...want.entries()].every(([k, v]) => (k === "tab" ? tab === v : true));
-  }
-  if (pathname === path || pathname.startsWith(`${path}/`)) {
-    // "/users" must not be highlighted when a "/users?tab=..." sibling is active
-    return !(path === "/users" && tab === "logins");
-  }
-  return false;
-}
-
-function badgeFor(kind: NavBadge | undefined, d: Dashboard | undefined): { text: string; tone: "plain" | "warning" | "danger" | "brand"; label: string } | null {
-  if (!kind || !d) return null;
-  switch (kind) {
-    case "devices":
-      return { text: formatNumber(d.devices.total), tone: "plain", label: `${d.devices.total} devices` };
-    case "backups":
-      return d.backups.devices_failing ? { text: String(d.backups.devices_failing), tone: "danger", label: `${d.backups.devices_failing} devices failing backup` } : null;
-    case "changes":
-      return d.open_changes ? { text: String(d.open_changes), tone: "brand", label: `${d.open_changes} open changes` } : null;
-    case "alerts":
-      return d.open_alerts ? { text: String(d.open_alerts), tone: "warning", label: `${d.open_alerts} open alerts` } : null;
-  }
-}
-
-const BADGE_CLS = {
-  plain: "text-muted-foreground font-semibold",
-  warning: "rounded-full bg-warning-soft px-[7px] py-0.5 font-bold text-warning",
-  danger: "rounded-full bg-danger-soft px-[7px] py-0.5 font-bold text-danger",
-  brand: "rounded-full bg-accent px-[7px] py-0.5 font-bold text-accent-foreground",
-} as const;
-
 export function SidebarNav({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
-  const pathname = usePathname();
-  const params = useSearchParams();
-  const tab = params.get("tab");
-  const { can, me } = useAuth();
-  const dashboard = useDashboard();
+  const groups = useNavGroups();
 
   return (
     <nav className="flex flex-col gap-0.5" aria-label="Main">
-      {NAV.map((group, gi) => {
-        const items = group.items.filter((i) => !i.permission || can(i.permission));
-        if (!items.length || !me) return null;
+      {groups.map((group, gi) => {
         return (
           <div key={group.title} className="flex flex-col gap-0.5">
             {collapsed ? (
@@ -74,9 +32,7 @@ export function SidebarNav({ collapsed, onNavigate }: { collapsed?: boolean; onN
               <span className={cn("section-label px-2.5 pb-1.5", gi === 0 ? "pt-1.5" : "pt-3.5")}>{group.title}</span>
             )}
             <ul className="flex flex-col gap-0.5">
-              {items.map((item) => {
-                const active = isActive(item, pathname, tab);
-                const badge = badgeFor(item.badge, dashboard.data);
+              {group.items.map(({ item, active, badge }) => {
                 return (
                   <li key={item.href}>
                     <Link

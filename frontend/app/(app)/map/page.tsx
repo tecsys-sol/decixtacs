@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CircleCheck, CircleHelp, CircleX, Waypoints } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { PageHeader } from "@/components/common/page-header";
@@ -15,20 +15,20 @@ import { Segmented } from "@/components/ui/tabs";
 import { useSites } from "@/hooks/use-lookups";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
-import { networkGraphOption, STATUS, type GraphLayout } from "@/lib/charts";
+import { networkGraphOption, type GraphLayout } from "@/lib/charts";
 import type { Topology } from "@/lib/types";
 
 function Legend({ topo }: { topo: Topology }) {
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const counts = topo.nodes.reduce<Record<string, number>>((acc, n) => {
     const k = n.status === "up" || n.status === "down" ? n.status : "unknown";
     acc[k] = (acc[k] ?? 0) + 1;
     return acc;
   }, {});
   const items = [
-    { key: "up", label: "Up", icon: CircleCheck, color: STATUS[mode].success },
-    { key: "down", label: "Down", icon: CircleX, color: STATUS[mode].danger },
-    { key: "unknown", label: "Unknown", icon: CircleHelp, color: STATUS[mode].neutral },
+    { key: "up", label: "Up", icon: CircleCheck, color: theme.status.success },
+    { key: "down", label: "Down", icon: CircleX, color: theme.status.danger },
+    { key: "unknown", label: "Unknown", icon: CircleHelp, color: theme.status.neutral },
   ];
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-3">
@@ -48,7 +48,7 @@ function Legend({ topo }: { topo: Topology }) {
 
 export default function MapPage() {
   const router = useRouter();
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const sites = useSites();
   const [f, setF] = useUrlState({ site: "", layout: "clustered" });
   const layout: GraphLayout = f.layout === "force" ? "force" : "clustered";
@@ -57,7 +57,7 @@ export default function MapPage() {
     queryFn: () => api.get<Topology>("/topology", { site_id: f.site }),
     refetchInterval: 60_000,
   });
-  const option = React.useMemo(() => (q.data && q.data.nodes.length ? networkGraphOption(q.data, mode, layout) : null), [q.data, mode, layout]);
+  const option = React.useMemo(() => (q.data && q.data.nodes.length ? networkGraphOption(q.data, theme, layout) : null), [q.data, theme, layout]);
 
   return (
     <>

@@ -11,10 +11,19 @@ function isTyping(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
-/** Global keyboard shortcuts: Cmd/Ctrl+K, "g <key>" navigation, "?" help. */
-export function useGlobalShortcuts({ onSearch, onHelp }: { onSearch: () => void; onHelp: () => void }) {
+/** Global keyboard shortcuts: Cmd/Ctrl+K, "g <key>" navigation, "t t" design theme, "?" help. */
+export function useGlobalShortcuts({
+  onSearch,
+  onHelp,
+  onToggleDesign,
+}: {
+  onSearch: () => void;
+  onHelp: () => void;
+  onToggleDesign?: () => void;
+}) {
   const router = useRouter();
   const pendingG = useRef<number | null>(null);
+  const pendingT = useRef<number | null>(null);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -36,6 +45,21 @@ export function useGlobalShortcuts({ onSearch, onHelp }: { onSearch: () => void;
         }
         return;
       }
+      if (pendingT.current !== null) {
+        window.clearTimeout(pendingT.current);
+        pendingT.current = null;
+        if (e.key.toLowerCase() === "t" && onToggleDesign) {
+          e.preventDefault();
+          onToggleDesign();
+          return;
+        }
+      }
+      if (e.key === "t" && onToggleDesign) {
+        pendingT.current = window.setTimeout(() => {
+          pendingT.current = null;
+        }, 1200);
+        return;
+      }
       if (e.key === "g") {
         pendingG.current = window.setTimeout(() => {
           pendingG.current = null;
@@ -54,6 +78,7 @@ export function useGlobalShortcuts({ onSearch, onHelp }: { onSearch: () => void;
     return () => {
       window.removeEventListener("keydown", onKey);
       if (pendingG.current !== null) window.clearTimeout(pendingG.current);
+      if (pendingT.current !== null) window.clearTimeout(pendingT.current);
     };
-  }, [router, onSearch, onHelp]);
+  }, [router, onSearch, onHelp, onToggleDesign]);
 }

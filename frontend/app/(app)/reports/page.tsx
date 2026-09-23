@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Download, FileBarChart, FileSpreadsheet, FileText, Plus } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { Field } from "@/components/common/field";
@@ -134,17 +134,17 @@ export default function ReportsPage() {
   };
 
   const data = report.data;
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const preview = React.useMemo(() => (data ? reportPreview(data) : null), [data]);
   const previewOption = React.useMemo(
     () =>
       preview
         ? barOption(
             { categories: preview.items.map((i) => i.name), series: [{ name: preview.valueLabel, data: preview.items.map((i) => i.value) }], horizontal: true, valueLabels: true, labelWidth: 160 },
-            mode,
+            theme,
           )
         : null,
-    [preview, mode],
+    [preview, theme],
   );
   return (
     <>

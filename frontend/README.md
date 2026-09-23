@@ -8,12 +8,19 @@ Built with Next.js 16 (App Router), React 19, TypeScript (strict), Tailwind CSS,
 Radix-based shadcn/ui-style components, TanStack Query, Apache ECharts (tree-shaken
 `echarts/core`, including the network map), `asciinema-player` and `cmdk`.
 
-The visual language is the "Aurora" design: light theme first (dark mode available), Sora /
-Manrope / JetBrains Mono, indigo brand, inline line-art illustrations and restrained motion
-that is switched off under `prefers-reduced-motion`. Chart styling and the colour-blind-safe
+Two user-switchable design themes ship, each with light and dark modes:
+
+- **Aurora** (default): Sora / Manrope / JetBrains Mono, indigo brand, left sidebar, inline
+  line-art illustrations.
+- **Meridian**: warm ivory surfaces, Fraunces serif headings with italic teal accents, IBM Plex
+  Sans / Mono, pill-shaped controls, a horizontal pill navigation on desktop, an editorial
+  dashboard hero and globe / plant / wave / seal illustrations.
+
+Motion is switched off under `prefers-reduced-motion`. Chart styling and the colour-blind-safe
 palettes live in `lib/charts.ts`; data aggregation for charts in `lib/aggregate.ts`.
 
 ![Dashboard](docs/screenshots/dashboard.png)
+![Meridian dashboard](docs/screenshots/meridian-dashboard.png)
 
 ## Requirements
 
@@ -107,6 +114,37 @@ tests/                   Vitest unit tests
 - Superusers get a tenant switcher (populated from `GET /api/v1/tenants`); the selected slug
   is sent as `X-Tenant` on every request and all cached data is dropped on switch.
 
+### Design themes
+
+The theme has two independent axes:
+
+| Axis        | Values                        | Stored as                                          | Applied as                          |
+| ----------- | ----------------------------- | -------------------------------------------------- | ----------------------------------- |
+| Design      | `aurora` / `meridian`         | `localStorage["nom.design"]` + cookie `nom-design` | `data-design` on `<html>`           |
+| Colour mode | `light` / `dark` / `system`   | `localStorage["theme"]` (next-themes)              | `.dark` class on `<html>`           |
+
+- `app/globals.css` declares every token (colours as HSL triplets, plus fonts, radii, shadows
+  and illustration colours) for `:root` (Aurora light), `.dark`, `[data-design="meridian"]` and
+  `[data-design="meridian"].dark`. `tailwind.config.ts` maps colours, `rounded-*` and
+  `font-sans/display/mono` to those variables, so components switch without branching.
+  `meridian:` / `aurora:` Tailwind variants cover the few CSS-only structural differences.
+- All six font families are loaded with `next/font` as CSS variables; the design picks which
+  ones `--font-display`, `--font-body` and `--font-code` point at.
+- An inline script in `app/layout.tsx` (`DESIGN_INIT_SCRIPT` in `lib/theme.ts`) sets
+  `data-design` before first paint. `hooks/use-design.ts` reads the attribute with
+  `useSyncExternalStore` (so every consumer re-renders together, across tabs too) and exposes
+  `useDesign()`, `useColorMode()` and `useChartTheme()`.
+- Structural variants: the app shell (`components/layout/app-shell.tsx` renders the Aurora
+  sidebar or `meridian-header.tsx`; both use the nav model in `components/layout/nav-model.ts`),
+  `PageHeader`, the dashboard hero, the compliance fleet-score card and "Most-failed rules".
+- Charts: `lib/charts.ts` holds one `ChartTheme` token object per design × mode (categorical
+  palette in fixed order, sequential ramp, diverging pair, status and severity colours, fonts,
+  tooltip style, axis colours). Builders take the theme (or a bare mode, meaning Aurora); pages
+  get it from `useChartTheme()` and rebuild options when it changes (`setOption` with
+  `notMerge`).
+- Switch themes from the palette menu in the top bar, Settings → Appearance, the command
+  palette ("Switch to Meridian theme") or `t t`.
+
 ### Keyboard shortcuts
 
 | Keys             | Action                      |
@@ -117,10 +155,16 @@ tests/                   Vitest unit tests
 | `g b`            | Backups                     |
 | `g c`            | Changes                     |
 | `g a`            | Audit log                   |
+| `t t`            | Toggle design theme         |
 | `?`              | Shortcut help               |
 
 ## Tests
 
+`tests/theme-contrast.test.ts` parses `app/globals.css` and asserts WCAG AA (4.5:1) for every
+text/background token pair in all four design × mode combinations, plus chart text and 3:1
+for categorical chart colours; `tests/chart-themes.test.ts` checks that options differ per theme,
+that palettes keep their fixed order, that chart builders contain no hard-coded colours, and that
+the design is restored from localStorage / cookie before paint.
 `tests/diff-viewer.test.tsx` covers the diff viewer (row types, colours, intraline
 highlighting, mode switching, risk panel) and `tests/api-client.test.ts` covers the API
 client (bearer/tenant headers, proactive and 401-triggered refresh, refresh-token rotation,

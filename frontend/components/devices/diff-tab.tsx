@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftRight, GitCommitHorizontal, GitCompare, ShieldCheck } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
@@ -14,15 +14,15 @@ import { Button } from "@/components/ui/button";
 import { SimpleSelect } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { divergingBarOption, gaugeOption, lineOption, STATUS, type ChartMode } from "@/lib/charts";
+import { divergingBarOption, gaugeOption, lineOption, type ChartTheme } from "@/lib/charts";
 import { riskLevel } from "@/lib/status";
 import type { Backup, CommitInfo, Device, DiffOut, Page } from "@/lib/types";
 import { cn, formatDate, formatDateTime, humanize, parseDate, shortSha } from "@/lib/utils";
 
 import { useDeviceHistory } from "./use-device-history";
 
-function riskColor(level: string, mode: ChartMode): string {
-  const s = STATUS[mode];
+function riskColor(level: string, theme: ChartTheme): string {
+  const s = theme.status;
   return level === "low" ? s.success : level === "medium" ? s.warning : s.danger;
 }
 
@@ -90,7 +90,7 @@ function CommitList({
                 title={parent ? `Compare with ${shortSha(parent.sha)}` : "Oldest revision - nothing to compare with"}
                 className={cn(
                   "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default",
-                  on ? "border-[#c9c3fb] bg-[var(--ill-softer)] dark:border-[#4a4590]" : "border-border/70 bg-card hover:bg-row-hover",
+                  on ? "border-[var(--ill-soft)] bg-[var(--ill-softer)]" : "border-border/70 bg-card hover:bg-row-hover",
                 )}
               >
                 <span className={cn("mt-[5px] h-[9px] w-[9px] shrink-0 rounded-full", DOT_CLS[kind])} role="img" aria-label={DOT_LABEL[kind]} />
@@ -129,7 +129,7 @@ export function DiffTab({
   newRev: string;
   onChange: (oldRev: string, newRev: string) => void;
 }) {
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const history = useDeviceHistory(device.id);
   const backups = useDeviceBackups(device.id);
   const commits = React.useMemo(() => history.data ?? [], [history.data]);
@@ -170,10 +170,10 @@ export function DiffTab({
           removed: changed.map((b) => b.lines_removed),
           details: changed.map((b) => `${shortSha(b.commit_sha, 7)} · ${b.reason ?? humanize(b.trigger)} · ${b.author ?? "unknown"} · ${formatDate(b.collected_at)}`),
         },
-        mode,
+        theme,
       ),
     };
-  }, [backups.data, mode]);
+  }, [backups.data, theme]);
 
   const size = React.useMemo(() => {
     const rows = (backups.data?.items ?? [])
@@ -192,16 +192,16 @@ export function DiffTab({
           markMax: rows.length > 2,
           showSymbols: rows.length <= 12,
         },
-        mode,
+        theme,
       ),
     };
-  }, [backups.data, mode]);
+  }, [backups.data, theme]);
 
   const risk = diff.data?.risk;
   const level = risk ? (risk.level as string) || riskLevel(risk.score) : "low";
   const riskOption = React.useMemo(
-    () => gaugeOption({ value: risk ? risk.score : null, variant: "ring", label: risk ? `${humanize(level)} risk` : "No diff selected", color: riskColor(level, mode) }, mode),
-    [risk, level, mode],
+    () => gaugeOption({ value: risk ? risk.score : null, variant: "ring", label: risk ? `${humanize(level)} risk` : "No diff selected", color: riskColor(level, theme) }, theme),
+    [risk, level, theme],
   );
 
   const options = commits.map((c) => ({ value: c.sha, label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}` }));

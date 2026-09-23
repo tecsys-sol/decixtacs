@@ -7,7 +7,7 @@ import { Plus, Workflow } from "lucide-react";
 import * as React from "react";
 
 import { ChangeFormDialog } from "@/components/changes/change-form-dialog";
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
@@ -25,16 +25,15 @@ import { useAuth } from "@/hooks/use-auth";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { countBy } from "@/lib/aggregate";
-import { barOption, donutOption, funnelOption, palette, STATUS, type ChartMode } from "@/lib/charts";
+import { barOption, donutOption, funnelOption, severityColor, type ChartTheme } from "@/lib/charts";
 import { CHANGE_RISKS, CHANGE_STATES, PAGE_SIZE } from "@/lib/constants";
 import type { Change, Page } from "@/lib/types";
 import { formatDateTime, humanize } from "@/lib/utils";
 
 const STAGES = ["draft", "pending_approval", "approved", "implemented", "closed"];
 
-function riskColor(risk: string, mode: ChartMode): string {
-  const s = STATUS[mode];
-  return risk === "critical" ? s.danger : risk === "high" ? palette(mode)[1] : risk === "medium" ? s.warning : s.info;
+function riskColor(risk: string, theme: ChartTheme): string {
+  return severityColor(risk, theme);
 }
 
 export default function ChangesPage() {
@@ -48,7 +47,7 @@ export default function ChangesPage() {
     placeholderData: (p) => p,
   });
   const items = q.data?.items ?? [];
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const all = useQuery({ queryKey: ["changes", "stats"], queryFn: () => api.get<Page<Change>>("/changes", { limit: 500 }), staleTime: 60_000 });
   const charts = React.useMemo(() => {
     const rows = all.data?.items ?? [];
@@ -58,12 +57,12 @@ export default function ChangesPage() {
     const states = countBy(rows, (c) => c.state);
     return {
       n: rows.length,
-      funnel: funnelOption(funnel, mode),
-      risk: donutOption({ items: risks.map((r) => ({ name: humanize(r.name), value: r.value, color: riskColor(r.name, mode) })), centerValue: String(rows.length), centerLabel: "changes" }, mode),
-      states: barOption({ categories: states.map((x) => humanize(x.name)), series: [{ name: "Changes", data: states.map((x) => x.value) }], horizontal: true, valueLabels: true }, mode),
+      funnel: funnelOption(funnel, theme),
+      risk: donutOption({ items: risks.map((r) => ({ name: humanize(r.name), value: r.value, color: riskColor(r.name, theme) })), centerValue: String(rows.length), centerLabel: "changes" }, theme),
+      states: barOption({ categories: states.map((x) => humanize(x.name)), series: [{ name: "Changes", data: states.map((x) => x.value) }], horizontal: true, valueLabels: true }, theme),
       statesN: states.length,
     };
-  }, [all.data, mode]);
+  }, [all.data, theme]);
   const params = useSearchParams();
   const router = useRouter();
   // the top-bar "New change" button links to /changes?new=1

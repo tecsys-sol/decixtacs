@@ -1,99 +1,258 @@
 /**
- * Aurora chart theme and ECharts option builders.
+ * Chart themes and ECharts option builders.
  *
  * Builders are pure functions (data in, option out) so they can be unit-tested without a canvas.
- * Colours are literal hex values because the canvas renderer cannot read CSS variables; keep them
- * in sync with app/globals.css.
+ * Every colour, font and tooltip style comes from a `ChartTheme` token object — one per design
+ * (Aurora / Meridian) × colour mode (light / dark). Colours are literal hex values because the
+ * canvas renderer cannot read CSS variables; keep them in sync with app/globals.css.
  *
- * Colour rules: categorical hues are assigned in the FIXED order of `palette()` (validated for
- * colour-vision deficiency in both modes); magnitude uses the single-hue indigo ramp; polarity
- * (lines added / removed) uses the blue/red diverging pair; status colours are reserved for state
- * and always paired with a text label in the legend / tooltip.
+ * Colour rules: categorical hues are assigned in the FIXED order of `categorical` (validated for
+ * colour-vision deficiency against each theme's card surface); magnitude uses the single-hue
+ * sequential ramp; polarity (lines added / removed) uses the diverging pair; status and severity
+ * colours are reserved for state and always paired with a text label in the legend / tooltip.
+ *
+ * Builders accept either a `ChartTheme` or a bare mode ("light" | "dark"), which means Aurora.
  */
 import type { EChartsOption } from "echarts";
 
+import type { Design } from "@/lib/theme";
+
 export type ChartMode = "light" | "dark";
 
-/** Categorical palette, fixed order. Light is the approved Aurora set; dark is re-stepped for #1d1d36. */
-export const CATEGORICAL: Record<ChartMode, string[]> = {
-  light: ["#5b4ee6", "#dc6a22", "#0e9f7e", "#b88400", "#d9467a"],
-  dark: ["#7a6fee", "#d9732c", "#1aa283", "#bb8a12", "#d9548a"],
-};
+export interface StatusColors {
+  success: string;
+  warning: string;
+  danger: string;
+  neutral: string;
+  info: string;
+}
 
-/** Sequential single-hue indigo ramp (light -> dark magnitude). */
-export const SEQUENTIAL: Record<ChartMode, string[]> = {
-  light: ["#f1f0fd", "#c9c3fb", "#8f85f0", "#5b4ee6", "#3326b8"],
-  dark: ["#23233f", "#3a3670", "#5b54a8", "#8f85f0", "#c9c3fb"],
-};
-
-/** Diverging pair for polarity (added / removed). */
-export const DIVERGING: Record<ChartMode, { added: string; removed: string }> = {
-  light: { added: "#2a78d6", removed: "#e34948" },
-  dark: { added: "#4f93e6", removed: "#f06a69" },
-};
-
-/** Reserved status mark colours (never used as a categorical series colour). */
-export const STATUS: Record<ChartMode, { success: string; warning: string; danger: string; neutral: string; info: string }> = {
-  light: { success: "#0e9f7e", warning: "#d69a00", danger: "#e0452b", neutral: "#b4b6cc", info: "#2a78d6" },
-  dark: { success: "#2fbf98", warning: "#e0b040", danger: "#f06a55", neutral: "#5a5c7a", info: "#4f93e6" },
-};
+export interface SeverityColors {
+  critical: string;
+  high: string;
+  medium: string;
+  low: string;
+}
 
 export interface ChartTokens {
   ink: string;
   ink2: string;
   label: string;
   axisLine: string;
+  /** stronger baseline (diverging zero line) */
+  axisStrong: string;
   split: string;
   surface: string;
   track: string;
   brand: string;
   brand2: string;
+  /** healthy topology link */
+  link: string;
+  /** text on a filled brand mark */
+  onBrand: string;
   tooltipBorder: string;
+  tooltipRadius: number;
   tooltipShadow: string;
   pointer: string;
   shadowFill: string;
 }
 
-export const TOKENS: Record<ChartMode, ChartTokens> = {
-  light: {
+export interface ChartFonts {
+  body: string;
+  display: string;
+  mono: string;
+}
+
+export interface ChartTheme {
+  design: Design;
+  mode: ChartMode;
+  /** categorical palette, fixed order — never cycled or re-sorted */
+  categorical: string[];
+  /** single-hue sequential ramp, low -> high magnitude */
+  sequential: string[];
+  diverging: { added: string; removed: string };
+  status: StatusColors;
+  severity: SeverityColors;
+  tokens: ChartTokens;
+  fonts: ChartFonts;
+}
+
+/** next/font registers the real family names; canvas fonts cannot use CSS variables. */
+const AURORA_FONTS: ChartFonts = {
+  body: "Manrope, 'Manrope Fallback', system-ui, sans-serif",
+  display: "Sora, 'Sora Fallback', Manrope, sans-serif",
+  mono: "'JetBrains Mono', 'JetBrains Mono Fallback', ui-monospace, monospace",
+};
+const MERIDIAN_FONTS: ChartFonts = {
+  body: "'IBM Plex Sans', 'IBM Plex Sans Fallback', system-ui, sans-serif",
+  display: "Fraunces, 'Fraunces Fallback', Georgia, serif",
+  mono: "'IBM Plex Mono', 'IBM Plex Mono Fallback', ui-monospace, monospace",
+};
+
+const tooltipShadow = (shadow: string, radius: number) => `box-shadow:${shadow};border-radius:${radius}px;`;
+
+const AURORA_LIGHT: ChartTheme = {
+  design: "aurora",
+  mode: "light",
+  categorical: ["#5b4ee6", "#dc6a22", "#0e9f7e", "#b88400", "#d9467a"],
+  sequential: ["#f1f0fd", "#c9c3fb", "#8f85f0", "#5b4ee6", "#3326b8"],
+  diverging: { added: "#2a78d6", removed: "#e34948" },
+  status: { success: "#0e9f7e", warning: "#d69a00", danger: "#e0452b", neutral: "#b4b6cc", info: "#2a78d6" },
+  severity: { critical: "#e0452b", high: "#dc6a22", medium: "#d69a00", low: "#2a78d6" },
+  tokens: {
     ink: "#14142b",
     ink2: "#34364f",
     label: "#5d5f7a",
     axisLine: "#e4e5f1",
+    axisStrong: "#c7c9dc",
     split: "#eff0f6",
     surface: "#ffffff",
     track: "#eeedfb",
     brand: "#5b4ee6",
     brand2: "#8f85f0",
+    link: "#c9c3fb",
+    onBrand: "#ffffff",
     tooltipBorder: "#e4e5f1",
-    tooltipShadow: "box-shadow:0 8px 24px rgba(20,20,43,.12);border-radius:10px;",
+    tooltipRadius: 10,
+    tooltipShadow: tooltipShadow("0 8px 24px rgba(20,20,43,.12)", 10),
     pointer: "#b9b2f5",
     shadowFill: "rgba(91,78,230,.06)",
   },
-  dark: {
+  fonts: AURORA_FONTS,
+};
+
+const AURORA_DARK: ChartTheme = {
+  design: "aurora",
+  mode: "dark",
+  categorical: ["#7a6fee", "#d9732c", "#1aa283", "#bb8a12", "#d9548a"],
+  sequential: ["#23233f", "#3a3670", "#5b54a8", "#8f85f0", "#c9c3fb"],
+  diverging: { added: "#4f93e6", removed: "#f06a69" },
+  status: { success: "#2fbf98", warning: "#e0b040", danger: "#f06a55", neutral: "#5a5c7a", info: "#4f93e6" },
+  severity: { critical: "#f06a55", high: "#d9732c", medium: "#e0b040", low: "#4f93e6" },
+  tokens: {
     ink: "#ebebf5",
     ink2: "#d6d6e8",
     label: "#a3a4bf",
     axisLine: "#2c2c4a",
+    axisStrong: "#3a3a5e",
     split: "#26264a",
     surface: "#1d1d36",
     track: "#2a2750",
     brand: "#8f85f0",
     brand2: "#b9b2f5",
+    link: "#4a4590",
+    onBrand: "#ffffff",
     tooltipBorder: "#34345a",
-    tooltipShadow: "box-shadow:0 8px 24px rgba(0,0,0,.45);border-radius:10px;",
+    tooltipRadius: 10,
+    tooltipShadow: tooltipShadow("0 8px 24px rgba(0,0,0,.45)", 10),
     pointer: "#5b54a8",
     shadowFill: "rgba(143,133,240,.08)",
   },
+  fonts: AURORA_FONTS,
 };
 
-export function palette(mode: ChartMode): string[] {
-  return CATEGORICAL[mode];
+/*
+ * Meridian. Light categorical set is the approved mockup palette; the dark set is re-stepped into
+ * the dark lightness band for the #211d17 card surface. Both pass the CVD / normal-vision /
+ * contrast checks of the dataviz palette validator (adjacent ΔE >= 8 protan/deutan, >= 3:1 vs
+ * surface).
+ */
+const MERIDIAN_LIGHT: ChartTheme = {
+  design: "meridian",
+  mode: "light",
+  categorical: ["#009683", "#e0673a", "#4f6bd8", "#b88400", "#b0527e"],
+  sequential: ["#eef4ef", "#bfe0d6", "#7fc3b3", "#2e9c89", "#0b5f59"],
+  diverging: { added: "#3a64c9", removed: "#c2502a" },
+  status: { success: "#2e9c89", warning: "#c99a1a", danger: "#b3261e", neutral: "#cbc2b1", info: "#4f6bd8" },
+  severity: { critical: "#b3261e", high: "#c2502a", medium: "#b88400", low: "#7c7a70" },
+  tokens: {
+    ink: "#1f1b16",
+    ink2: "#3d372e",
+    label: "#5f5545",
+    axisLine: "#e6dfd0",
+    axisStrong: "#cfc6b3",
+    split: "#efe9dc",
+    surface: "#fffdf8",
+    track: "#f1ece1",
+    brand: "#0b5f59",
+    brand2: "#2e9c89",
+    link: "#bfe0d6",
+    onBrand: "#fbf8f1",
+    tooltipBorder: "#e6dfd0",
+    tooltipRadius: 12,
+    tooltipShadow: tooltipShadow("0 10px 26px rgba(31,27,22,.12)", 12),
+    pointer: "#8cbcb0",
+    shadowFill: "rgba(11,95,89,.05)",
+  },
+  fonts: MERIDIAN_FONTS,
+};
+
+const MERIDIAN_DARK: ChartTheme = {
+  design: "meridian",
+  mode: "dark",
+  categorical: ["#10a18b", "#e06f43", "#6f86e6", "#b58a00", "#c7689a"],
+  sequential: ["#26221b", "#1d3f39", "#1f6e62", "#3fb8a8", "#a3e6d9"],
+  diverging: { added: "#7f95ec", removed: "#ec8a62" },
+  status: { success: "#3fb8a8", warning: "#e0b040", danger: "#f07560", neutral: "#5a5145", info: "#8397ee" },
+  severity: { critical: "#f07560", high: "#ec8a62", medium: "#d9a932", low: "#9d978a" },
+  tokens: {
+    ink: "#f1ebdf",
+    ink2: "#e2d9c8",
+    label: "#b5aa96",
+    axisLine: "#3a332a",
+    axisStrong: "#4d4539",
+    split: "#2e2821",
+    surface: "#211d17",
+    track: "#2e2821",
+    brand: "#3fb8a8",
+    brand2: "#7fd3c4",
+    link: "#2d5a53",
+    onBrand: "#10201d",
+    tooltipBorder: "#3a332a",
+    tooltipRadius: 12,
+    tooltipShadow: tooltipShadow("0 10px 26px rgba(0,0,0,.5)", 12),
+    pointer: "#4c6d66",
+    shadowFill: "rgba(63,184,168,.08)",
+  },
+  fonts: MERIDIAN_FONTS,
+};
+
+export const CHART_THEMES: Record<Design, Record<ChartMode, ChartTheme>> = {
+  aurora: { light: AURORA_LIGHT, dark: AURORA_DARK },
+  meridian: { light: MERIDIAN_LIGHT, dark: MERIDIAN_DARK },
+};
+
+export function chartTheme(design: Design, mode: ChartMode): ChartTheme {
+  return CHART_THEMES[design][mode];
 }
 
-/** next/font registers the real family names ("Manrope", "Sora"); canvas fonts cannot use CSS variables. */
-export const FONT_BODY = "Manrope, 'Manrope Fallback', system-ui, sans-serif";
-export const FONT_DISPLAY = "Sora, 'Sora Fallback', Manrope, sans-serif";
+/** A theme object, or a bare mode (= Aurora in that mode). */
+export type ThemeArg = ChartTheme | ChartMode;
+
+export function resolveTheme(theme: ThemeArg): ChartTheme {
+  return typeof theme === "string" ? CHART_THEMES.aurora[theme] : theme;
+}
+
+// Aurora aliases (kept for callers / tests that address colours by mode)
+export const CATEGORICAL: Record<ChartMode, string[]> = { light: AURORA_LIGHT.categorical, dark: AURORA_DARK.categorical };
+export const SEQUENTIAL: Record<ChartMode, string[]> = { light: AURORA_LIGHT.sequential, dark: AURORA_DARK.sequential };
+export const DIVERGING: Record<ChartMode, { added: string; removed: string }> = { light: AURORA_LIGHT.diverging, dark: AURORA_DARK.diverging };
+export const STATUS: Record<ChartMode, StatusColors> = { light: AURORA_LIGHT.status, dark: AURORA_DARK.status };
+export const TOKENS: Record<ChartMode, ChartTokens> = { light: AURORA_LIGHT.tokens, dark: AURORA_DARK.tokens };
+
+export function palette(theme: ThemeArg): string[] {
+  return resolveTheme(theme).categorical;
+}
+
+export function statusColors(theme: ThemeArg): StatusColors {
+  return resolveTheme(theme).status;
+}
+
+export function severityColor(severity: string, theme: ThemeArg): string {
+  const s = resolveTheme(theme).severity;
+  const k = severity.toLowerCase();
+  return k === "critical" ? s.critical : k === "high" ? s.high : k === "medium" ? s.medium : s.low;
+}
 
 /** Hex (#rrggbb) + alpha (0..1) -> rgba() */
 export function alpha(hex: string, a: number): string {
@@ -129,44 +288,45 @@ export function compact(v: number): string {
   return String(v);
 }
 
-function tooltipBase(mode: ChartMode) {
-  const t = TOKENS[mode];
+function tooltipBase(th: ChartTheme) {
+  const t = th.tokens;
   return {
     backgroundColor: t.surface,
     borderColor: t.tooltipBorder,
     borderWidth: 1,
     padding: [8, 12] as [number, number],
-    textStyle: { color: t.ink, fontSize: 12, fontFamily: FONT_BODY },
+    textStyle: { color: t.ink, fontSize: 12, fontFamily: th.fonts.body },
     extraCssText: t.tooltipShadow,
     confine: true,
   };
 }
 
-function legendBase(mode: ChartMode) {
+function legendBase(th: ChartTheme) {
   return {
     icon: "roundRect",
     itemWidth: 10,
     itemHeight: 10,
     itemGap: 14,
-    textStyle: { color: TOKENS[mode].ink2, fontSize: 12, fontFamily: FONT_BODY },
+    textStyle: { color: th.tokens.ink2, fontSize: 12, fontFamily: th.fonts.body },
   };
 }
 
-function axisLabel(mode: ChartMode, extra: Record<string, unknown> = {}) {
-  return { color: TOKENS[mode].label, fontSize: 11, fontFamily: FONT_BODY, ...extra };
+function axisLabel(th: ChartTheme, extra: Record<string, unknown> = {}) {
+  return { color: th.tokens.label, fontSize: 11, fontFamily: th.fonts.body, ...extra };
 }
 
 /** Shared base: font, animation, tooltip look, aria description. */
-export function baseOption(mode: ChartMode): EChartsOption {
+export function baseOption(theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
   return {
     backgroundColor: "transparent",
-    color: palette(mode),
-    textStyle: { fontFamily: FONT_BODY, color: TOKENS[mode].label },
+    color: th.categorical,
+    textStyle: { fontFamily: th.fonts.body, color: th.tokens.label },
     animationDuration: 1200,
     animationEasing: "cubicOut",
     animationDurationUpdate: 600,
     aria: { enabled: true },
-    tooltip: tooltipBase(mode),
+    tooltip: tooltipBase(th),
   };
 }
 
@@ -183,8 +343,8 @@ interface AxisParam {
 }
 
 /** Axis tooltip: label line, then one row per series with the value in ink (swatch carries identity). */
-function axisTooltip(mode: ChartMode, fmt: ValueFormatter, opts: { total?: boolean; abs?: boolean } = {}) {
-  const t = TOKENS[mode];
+function axisTooltip(th: ChartTheme, fmt: ValueFormatter, opts: { total?: boolean; abs?: boolean } = {}) {
+  const t = th.tokens;
   return (raw: unknown) => {
     const params = (Array.isArray(raw) ? raw : [raw]) as AxisParam[];
     if (!params.length) return "";
@@ -216,19 +376,20 @@ export interface SparklineInput {
   format?: ValueFormatter;
 }
 
-export function sparklineOption(input: SparklineInput, mode: ChartMode): EChartsOption {
-  const color = input.color ?? palette(mode)[0];
-  const t = TOKENS[mode];
+export function sparklineOption(input: SparklineInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const color = input.color ?? th.categorical[0];
+  const t = th.tokens;
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     grid: { left: 0, right: 0, top: 6, bottom: 2 },
     xAxis: { type: "category", show: false, boundaryGap: false, data: input.labels },
     yAxis: { type: "value", show: false, min: "dataMin" },
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "axis",
       axisPointer: { type: "line", lineStyle: { color: t.pointer } },
-      formatter: axisTooltip(mode, input.format ?? plain),
+      formatter: axisTooltip(th, input.format ?? plain),
     },
     series: [
       {
@@ -261,8 +422,9 @@ export interface GaugeInput {
   gradient?: boolean;
 }
 
-export function gaugeOption(input: GaugeInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
+export function gaugeOption(input: GaugeInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
   const color = input.color ?? t.brand;
   const ring = input.variant === "ring";
   const width = ring ? 14 : 16;
@@ -272,7 +434,7 @@ export function gaugeOption(input: GaugeInput, mode: ChartMode): EChartsOption {
   const value = input.value ?? 0;
   const fmt = input.format ?? ((v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1)));
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     tooltip: { show: false },
     series: [
       {
@@ -284,19 +446,19 @@ export function gaugeOption(input: GaugeInput, mode: ChartMode): EChartsOption {
         radius: ring ? "88%" : "96%",
         center: ring ? ["50%", "50%"] : ["50%", "58%"],
         progress: { show: value > 0, width, roundCap: true, itemStyle: { color: progressColor } },
-        axisLine: { roundCap: true, lineStyle: { width, color: [[1, input.track ?? (ring ? alpha(color, mode === "light" ? 0.14 : 0.22) : t.track)]] } },
+        axisLine: { roundCap: true, lineStyle: { width, color: [[1, input.track ?? (ring ? alpha(color, th.mode === "light" ? 0.14 : 0.22) : t.track)]] } },
         pointer: { show: false },
         axisTick: { show: false },
         splitLine: { show: false },
         axisLabel: { show: false },
         anchor: { show: false },
-        title: { offsetCenter: [0, ring ? "30%" : "34%"], color: t.label, fontSize: 12, fontFamily: FONT_BODY },
+        title: { offsetCenter: [0, ring ? "30%" : "34%"], color: t.label, fontSize: 12, fontFamily: th.fonts.body },
         detail: {
           valueAnimation: true,
           offsetCenter: [0, ring ? "-6%" : "0%"],
           fontSize: ring ? 30 : 38,
           fontWeight: 700,
-          fontFamily: FONT_DISPLAY,
+          fontFamily: th.fonts.display,
           color: t.ink,
           formatter: input.value === null ? () => "—" : (v: number) => fmt(v),
         },
@@ -323,17 +485,18 @@ export interface DonutInput {
   legend?: "bottom" | "right" | false;
 }
 
-export function donutOption(input: DonutInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
+export function donutOption(input: DonutInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
   const fmt = input.format ?? plain;
-  const colors = palette(mode);
+  const colors = th.categorical;
   const legendPos = input.legend ?? "bottom";
   const center: [string, string] = legendPos === "right" ? ["36%", "50%"] : ["50%", "44%"];
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     color: colors,
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "item",
       formatter: (p: unknown) => {
         const q = p as { name: string; value: number; percent: number; color: string };
@@ -344,7 +507,7 @@ export function donutOption(input: DonutInput, mode: ChartMode): EChartsOption {
       legendPos === false || input.items.length < 2
         ? { show: false }
         : {
-            ...legendBase(mode),
+            ...legendBase(th),
             icon: "circle",
             itemWidth: 8,
             itemHeight: 8,
@@ -366,12 +529,12 @@ export function donutOption(input: DonutInput, mode: ChartMode): EChartsOption {
               show: input.centerValue !== undefined,
               position: "center",
               formatter: () => `${input.centerValue ?? ""}\n{s|${input.centerLabel ?? ""}}`,
-              fontFamily: FONT_DISPLAY,
+              fontFamily: th.fonts.display,
               fontSize: 22,
               fontWeight: 700,
               color: t.ink,
               lineHeight: 26,
-              rich: { s: { fontSize: 12, fontWeight: 500, color: t.label, fontFamily: FONT_BODY } },
+              rich: { s: { fontSize: 12, fontWeight: 500, color: t.label, fontFamily: th.fonts.body } },
             },
         emphasis: { scale: true, scaleSize: 6, label: { show: input.centerValue !== undefined && !input.rose } },
         labelLine: { show: false },
@@ -407,9 +570,10 @@ export interface BarInput {
   axisLabelInterval?: number | "auto";
 }
 
-export function barOption(input: BarInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
-  const colors = palette(mode);
+export function barOption(input: BarInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const colors = th.categorical;
   const fmt = input.format ?? plain;
   const stackedKeys = new Set(input.series.filter((s) => s.stack).map((s) => s.stack));
   const horizontal = !!input.horizontal;
@@ -419,7 +583,7 @@ export function barOption(input: BarInput, mode: ChartMode): EChartsOption {
     inverse: horizontal,
     axisTick: { show: false },
     axisLine: { show: !horizontal, lineStyle: { color: t.axisLine } },
-    axisLabel: axisLabel(mode, {
+    axisLabel: axisLabel(th, {
       interval: input.axisLabelInterval ?? "auto",
       ...(horizontal ? { width: input.labelWidth ?? 110, overflow: "truncate", color: t.ink2, fontSize: 12 } : { hideOverlap: true }),
     }),
@@ -428,18 +592,18 @@ export function barOption(input: BarInput, mode: ChartMode): EChartsOption {
     type: "value" as const,
     minInterval: 1,
     splitLine: { lineStyle: { color: t.split } },
-    axisLabel: axisLabel(mode, { formatter: (v: number) => compact(v) }),
+    axisLabel: axisLabel(th, { formatter: (v: number) => compact(v) }),
   };
   const multi = input.series.length > 1;
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     grid: { left: 8, right: input.valueLabels ? 44 : 12, top: multi ? 34 : 12, bottom: 8, containLabel: true },
-    legend: multi ? { ...legendBase(mode), top: 0, right: 0 } : { show: false },
+    legend: multi ? { ...legendBase(th), top: 0, right: 0 } : { show: false },
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "axis",
       axisPointer: { type: "shadow", shadowStyle: { color: t.shadowFill } },
-      formatter: axisTooltip(mode, fmt, { total: stackedKeys.size > 0 }),
+      formatter: axisTooltip(th, fmt, { total: stackedKeys.size > 0 }),
     },
     xAxis: horizontal ? valAxis : catAxis,
     yAxis: horizontal ? catAxis : valAxis,
@@ -482,15 +646,16 @@ export interface DivergingInput {
   showCategoryLabels?: boolean;
 }
 
-export function divergingBarOption(input: DivergingInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
-  const d = DIVERGING[mode];
+export function divergingBarOption(input: DivergingInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const d = th.diverging;
   return {
-    ...baseOption(mode),
-    legend: { ...legendBase(mode), top: 0, right: 0, data: ["Added", "Removed"] },
+    ...baseOption(th),
+    legend: { ...legendBase(th), top: 0, right: 0, data: ["Added", "Removed"] },
     grid: { left: 8, right: 8, top: 30, bottom: 6, containLabel: true },
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "axis",
       axisPointer: { type: "shadow", shadowStyle: { color: t.shadowFill } },
       formatter: (raw: unknown) => {
@@ -510,14 +675,14 @@ export function divergingBarOption(input: DivergingInput, mode: ChartMode): ECha
       type: "category",
       data: input.categories,
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: mode === "light" ? "#c7c9dc" : "#3a3a5e" } },
-      axisLabel: input.showCategoryLabels ? axisLabel(mode, { hideOverlap: true }) : { show: false },
+      axisLine: { lineStyle: { color: t.axisStrong } },
+      axisLabel: input.showCategoryLabels ? axisLabel(th, { hideOverlap: true }) : { show: false },
     },
     yAxis: {
       type: "value",
       minInterval: 1,
       splitLine: { lineStyle: { color: t.split } },
-      axisLabel: axisLabel(mode, { formatter: (v: number) => compact(Math.abs(v)) }),
+      axisLabel: axisLabel(th, { formatter: (v: number) => compact(Math.abs(v)) }),
     },
     series: [
       { name: "Added", type: "bar", stack: "d", data: input.added, barMaxWidth: 12, itemStyle: { color: d.added, borderRadius: [4, 4, 0, 0] } },
@@ -543,20 +708,21 @@ export interface LineInput {
   showSymbols?: boolean;
 }
 
-export function lineOption(input: LineInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
-  const colors = palette(mode);
+export function lineOption(input: LineInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const colors = th.categorical;
   const fmt = input.format ?? plain;
   const multi = input.series.length > 1;
   return {
-    ...baseOption(mode),
-    legend: multi ? { ...legendBase(mode), top: 0, right: 0 } : { show: false },
+    ...baseOption(th),
+    legend: multi ? { ...legendBase(th), top: 0, right: 0 } : { show: false },
     grid: { left: 8, right: 12, top: multi ? 34 : 14, bottom: 6, containLabel: true },
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "axis",
       axisPointer: { type: "line", lineStyle: { color: t.pointer } },
-      formatter: axisTooltip(mode, fmt, { total: !!input.stacked }),
+      formatter: axisTooltip(th, fmt, { total: !!input.stacked }),
     },
     xAxis: {
       type: "category",
@@ -564,7 +730,7 @@ export function lineOption(input: LineInput, mode: ChartMode): EChartsOption {
       data: input.categories,
       axisLine: { lineStyle: { color: t.axisLine } },
       axisTick: { show: false },
-      axisLabel: axisLabel(mode, { interval: input.labelInterval ?? "auto", hideOverlap: true }),
+      axisLabel: axisLabel(th, { interval: input.labelInterval ?? "auto", hideOverlap: true }),
     },
     yAxis: {
       type: "value",
@@ -572,7 +738,7 @@ export function lineOption(input: LineInput, mode: ChartMode): EChartsOption {
       max: input.max,
       minInterval: input.max === 100 ? undefined : 1,
       splitLine: { lineStyle: { color: t.split } },
-      axisLabel: axisLabel(mode, { formatter: input.axisFormat ?? ((v: number) => compact(v)) }),
+      axisLabel: axisLabel(th, { formatter: input.axisFormat ?? ((v: number) => compact(v)) }),
     },
     series: input.series.map((s, i) => {
       const color = s.color ?? colors[i % colors.length];
@@ -594,7 +760,7 @@ export function lineOption(input: LineInput, mode: ChartMode): EChartsOption {
           ? {
               symbolSize: 34,
               itemStyle: { color },
-              label: { fontSize: 10, fontWeight: 700, color: "#fff", formatter: (p: { value: unknown }) => compact(Number(p.value)) },
+              label: { fontSize: 10, fontWeight: 700, color: t.onBrand, formatter: (p: { value: unknown }) => compact(Number(p.value)) },
               data: [{ type: "max" as const, name: "Peak" }],
             }
           : undefined,
@@ -614,13 +780,14 @@ export interface HeatmapInput {
   tooltip?: (x: string, y: string, v: number) => string;
 }
 
-export function heatmapOption(input: HeatmapInput, mode: ChartMode): EChartsOption {
-  const t = TOKENS[mode];
+export function heatmapOption(input: HeatmapInput, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
   const max = Math.max(1, input.max ?? input.cells.reduce((m, c) => Math.max(m, c[2]), 0));
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       formatter: (p: unknown) => {
         const v = (p as { value: [number, number, number] }).value;
         const x = input.xLabels[v[0]];
@@ -635,14 +802,14 @@ export function heatmapOption(input: HeatmapInput, mode: ChartMode): EChartsOpti
       splitArea: { show: false },
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: axisLabel(mode, { interval: 3 }),
+      axisLabel: axisLabel(th, { interval: 3 }),
     },
     yAxis: {
       type: "category",
       data: input.yLabels,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: axisLabel(mode),
+      axisLabel: axisLabel(th),
     },
     visualMap: {
       min: 0,
@@ -655,7 +822,7 @@ export function heatmapOption(input: HeatmapInput, mode: ChartMode): EChartsOpti
       itemHeight: 120,
       text: ["More", "Less"],
       textStyle: { color: t.label, fontSize: 11 },
-      inRange: { color: SEQUENTIAL[mode] },
+      inRange: { color: th.sequential },
     },
     series: [
       {
@@ -670,15 +837,16 @@ export function heatmapOption(input: HeatmapInput, mode: ChartMode): EChartsOpti
 
 // --- funnel ----------------------------------------------------------------------------------
 
-export function funnelOption(items: PieItem[], mode: ChartMode, format: ValueFormatter = plain): EChartsOption {
-  const t = TOKENS[mode];
-  const ramp = SEQUENTIAL[mode];
+export function funnelOption(items: PieItem[], theme: ThemeArg, format: ValueFormatter = plain): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const ramp = th.sequential;
   // stages share one hue (magnitude of the same measure), darkest first
   const steps = [ramp[4], ramp[3], ramp[2], ramp[1]];
   return {
-    ...baseOption(mode),
+    ...baseOption(th),
     tooltip: {
-      ...tooltipBase(mode),
+      ...tooltipBase(th),
       trigger: "item",
       formatter: (p: unknown) => {
         const q = p as { name: string; value: number };
@@ -701,7 +869,7 @@ export function funnelOption(items: PieItem[], mode: ChartMode, format: ValueFor
           color: t.ink2,
           fontSize: 12,
           formatter: (p: { name: string; value: unknown }) => `${p.name}  {v|${format(Number(p.value))}}`,
-          rich: { v: { fontWeight: 700, color: t.ink, fontFamily: FONT_DISPLAY } },
+          rich: { v: { fontWeight: 700, color: t.ink, fontFamily: th.fonts.display } },
         },
         labelLine: { show: true, lineStyle: { color: t.axisLine } },
         itemStyle: { borderColor: t.surface, borderWidth: 2, borderRadius: 4 },
@@ -726,9 +894,9 @@ export interface GraphInput {
 export type GraphLayout = "clustered" | "force";
 
 /** healthy nodes are hollow (surface fill, site-coloured ring); problems are filled */
-function statusColor(status: string, mode: ChartMode) {
-  const s = STATUS[mode];
-  return status === "up" ? TOKENS[mode].surface : status === "down" ? s.danger : s.neutral;
+function statusColor(status: string, th: ChartTheme) {
+  const s = th.status;
+  return status === "up" ? th.tokens.surface : status === "down" ? s.danger : s.neutral;
 }
 
 function hashSeed(s: string): number {
@@ -819,9 +987,10 @@ function speedLabel(mbps: number | null): string {
   return mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`;
 }
 
-export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: GraphLayout = "clustered"): EChartsOption {
-  const t = TOKENS[mode];
-  const colors = palette(mode);
+export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: GraphLayout = "clustered"): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const colors = th.categorical;
   const siteName = new Map(input.sites.map((s) => [s.id, s.name]));
   const siteKeys = [...new Set(input.nodes.map((n) => n.site_id ?? "__none__"))].sort((a, b) =>
     (siteName.get(a) ?? "~").localeCompare(siteName.get(b) ?? "~"),
@@ -853,11 +1022,11 @@ export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: G
       y: p?.[1],
       symbolSize: 14 + Math.min(12, (degree.get(n.id) ?? 0) * 2),
       itemStyle: {
-        color: statusColor(n.status, mode),
+        color: statusColor(n.status, th),
         borderColor: categories[cat].itemStyle.color,
         borderWidth: 3,
         shadowBlur: n.status === "down" ? 10 : 0,
-        shadowColor: n.status === "down" ? alpha(STATUS[mode].danger, 0.5) : "transparent",
+        shadowColor: n.status === "down" ? alpha(th.status.danger, 0.5) : "transparent",
       },
       label: { show: showLabels },
       // carried through to tooltips / click handlers
@@ -880,7 +1049,7 @@ export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: G
       speed: speedLabel(e.speed_mbps),
       status: e.status,
       lineStyle: {
-        color: e.status === "up" ? (mode === "light" ? "#c9c3fb" : "#4a4590") : STATUS[mode].danger,
+        color: e.status === "up" ? t.link : th.status.danger,
         width: e.speed_mbps && e.speed_mbps >= 100_000 ? 3 : 2,
         type: e.status === "up" ? ("solid" as const) : ("dashed" as const),
         curveness: 0.08,
@@ -888,7 +1057,7 @@ export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: G
     }));
 
   const tooltip = {
-    ...tooltipBase(mode),
+    ...tooltipBase(th),
     formatter: (raw: unknown) => {
       const p = raw as { dataType: string; data: Record<string, unknown> };
       if (p.dataType === "edge") {
@@ -918,7 +1087,7 @@ export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: G
       color: t.ink2,
       fontSize: 11,
       fontWeight: 600,
-      fontFamily: FONT_BODY,
+      fontFamily: th.fonts.body,
       backgroundColor: alpha(t.surface, 0.8),
       padding: [1, 3],
       borderRadius: 3,
@@ -931,11 +1100,11 @@ export function networkGraphOption(input: GraphInput, mode: ChartMode, layout: G
   };
 
   const option: EChartsOption = {
-    ...baseOption(mode),
+    ...baseOption(th),
     color: categories.map((c) => c.itemStyle.color),
     tooltip,
     legend: {
-      ...legendBase(mode),
+      ...legendBase(th),
       icon: "circle",
       type: "scroll",
       bottom: 0,

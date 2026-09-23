@@ -3,9 +3,18 @@
 @tailwind utilities;
 
 /*
- * Aurora design tokens. Colours are HSL triplets consumed by tailwind.config.ts
- * (`hsl(var(--token) / <alpha>)`). Chart colours for the canvas renderer live in lib/charts.ts
- * and must be kept in sync with these values.
+ * Design tokens for every design theme × colour mode:
+ *
+ *   :root                          Aurora light (default)
+ *   .dark                          Aurora dark
+ *   [data-design="meridian"]       Meridian light
+ *   [data-design="meridian"].dark  Meridian dark
+ *
+ * `data-design` is set on <html> before first paint (see lib/theme.ts), `.dark` by next-themes.
+ * Colours are HSL triplets consumed by tailwind.config.ts (`hsl(var(--token) / <alpha>)`); fonts
+ * and radii are plain values. Chart colours for the canvas renderer live in lib/charts.ts and
+ * must be kept in sync; tests/theme-contrast.test.ts checks WCAG contrast of every text pair
+ * parsed from this file.
  */
 @layer base {
   :root {
@@ -42,7 +51,7 @@
     --ring: 245 75.2% 60.4%;
     --ink-2: 236 20.6% 25.7%; /* #34364f */
     --ink-3: 236 18% 37.5%; /* #4f5170 */
-    --label: 236 11.2% 47.3%; /* #6b6d86 section labels */
+    --label: 235.6 11.5% 46.1%; /* #686a83 section labels (4.6:1 on the page background) */
     --row-hover: 240 60% 98%; /* #f7f7fd */
     --nav-hover: 244 87.5% 96.9%; /* #f1f0fe */
     --sidebar: 0 0% 100%;
@@ -67,6 +76,34 @@
     --shadow-brand: 0 6px 16px rgba(91, 78, 230, 0.28);
     --shadow-pop: 0 8px 24px rgba(20, 20, 43, 0.12);
     --radius: 0.75rem;
+    --sev-critical: 12.3 72.5% 37.1%; /* #a3361a */
+    --sev-high: 17.4 72.6% 37.3%; /* #a4421a */
+    --sev-medium: 37.9 100% 23.9%; /* #7a4d00 */
+    --sev-low: 213.3 71.2% 42.2%; /* #1f63b8 */
+    --overlay: 240 36.5% 12.4%; /* #14142b */
+    --avatar: 20.5 100% 92%; /* #ffe4d6 */
+    --avatar-foreground: 20 76.9% 30.6%; /* #8a3a12 */
+    --hero-panel: 247.5 80% 96.1%; /* #efedfd */
+    --pill-active: 248 80% 96.1%;
+    --pill-active-foreground: 244 61.8% 48.2%;
+    --ill-blue: #2a78d6;
+    --ill-gold: #d69a00;
+    --ill-wave: #dcd8fb;
+    --ill-wave-2: #efedfd;
+    --ill-leaf: #b9b2f5;
+    /* typography: next/font variables are declared on <html> by app/layout.tsx */
+    --font-display: var(--font-sora), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+    --font-body: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+    --font-code: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+    --heading-weight: 700;
+    /* radii */
+    --radius-sm: 7px;
+    --radius-md: 10px;
+    --radius-xl: 16px;
+    --radius-2xl: 20px;
+    --radius-btn: 10px;
+    --radius-pill: 9px;
+    --rise-distance: 14px;
   }
 
   .dark {
@@ -126,6 +163,183 @@
     --ill-lilac: #5b54a8;
     --shadow-brand: 0 6px 16px rgba(143, 133, 240, 0.25);
     --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --sev-critical: 12.3 100% 75.1%; /* #ff9a80 */
+    --sev-high: 23 86.2% 71.6%; /* #f5a878 */
+    --sev-medium: 40 82.8% 65.9%; /* #f0c060 */
+    --sev-low: 214.6 76.4% 75.1%; /* #8fb8f0 */
+    --overlay: 0 0% 0%; /* #000000 */
+    --avatar: 20.5 100% 92%; /* #ffe4d6 */
+    --avatar-foreground: 20 76.9% 30.6%; /* #8a3a12 */
+    --hero-panel: 244.4 34.5% 23.3%; /* #2a2750 */
+    --pill-active: 244 34.5% 23.3%;
+    --pill-active-foreground: 246 87.5% 87.5%;
+    --ill-blue: #4f93e6;
+    --ill-gold: #e0b040;
+    --ill-wave: #3a3670;
+    --ill-wave-2: #25234a;
+    --ill-leaf: #5b54a8;
+  }
+
+  /* --- Meridian ---------------------------------------------------------------------------- */
+
+  [data-design="meridian"] {
+    --background: 40 40% 94.1%; /* #f6f2ea */
+    --foreground: 33.3 17% 10.4%; /* #1f1b16 */
+    --card: 42.9 100% 98.6%; /* #fffdf8 */
+    --card-foreground: 33.3 17% 10.4%; /* #1f1b16 */
+    --popover: 42.9 100% 98.6%; /* #fffdf8 */
+    --popover-foreground: 33.3 17% 10.4%; /* #1f1b16 */
+    --primary: 175.7 79.2% 20.8%; /* #0b5f59 */
+    --primary-hover: 175.8 82.6% 13.5%; /* #063f3b */
+    --primary-foreground: 42 55.6% 96.5%; /* #fbf8f1 */
+    --secondary: 41.3 36.4% 91.4%; /* #f1ece1 */
+    --secondary-foreground: 36 14% 21%; /* #3d372e */
+    --muted: 41.3 36.4% 91.4%; /* #f1ece1 */
+    --muted-foreground: 36.9 15.9% 32.2%; /* #5f5545 */
+    --accent: 150 27.3% 91.4%; /* #e3efe9 */
+    --accent-foreground: 175.7 79.2% 20.8%; /* #0b5f59 */
+    --destructive: 3.2 71.3% 41%; /* #b3261e */
+    --destructive-foreground: 0 0% 100%; /* #ffffff */
+    --success: 161 64.1% 25.1%; /* #17694f */
+    --success-foreground: 0 0% 100%; /* #ffffff */
+    --success-soft: 145.7 31.8% 91.4%; /* #e2f0e8 */
+    --warning: 40.3 100% 23.9%; /* #7a5200 */
+    --warning-foreground: 0 0% 100%; /* #ffffff */
+    --warning-soft: 42.6 67.9% 89%; /* #f6ebd0 */
+    --danger: 15.1 70.6% 38.6%; /* #a8401d */
+    --danger-soft: 20 68.2% 91.4%; /* #f8e4da */
+    --info: 228.2 49.8% 46.1%; /* #3b52b0 */
+    --info-foreground: 0 0% 100%; /* #ffffff */
+    --info-soft: 226.7 60% 94.1%; /* #e7ebf9 */
+    --border: 40.9 30.6% 85.9%; /* #e6dfd0 */
+    --input: 40.8 26.9% 81.8%; /* #ddd5c4 */
+    --ring: 175.7 79.2% 20.8%; /* #0b5f59 */
+    --ink-2: 36 14% 21%; /* #3d372e */
+    --ink-3: 36 15.6% 25.1%; /* #4a4236 */
+    --label: 36 16.3% 36.1%; /* #6b5f4d */
+    --row-hover: 40 54.5% 95.7%; /* #faf6ee */
+    --nav-hover: 41.1 33.3% 88.8%; /* #ece6d9 */
+    --sidebar: 42.9 100% 98.6%; /* #fffdf8 */
+    --sidebar-foreground: 36 14% 21%; /* #3d372e */
+    --sidebar-border: 40.9 30.6% 85.9%; /* #e6dfd0 */
+    --diff-add-bg: 150 33.3% 91.8%; /* #e3f1ea */
+    --diff-add-fg: 165 79.2% 20.8%; /* #0b5f4a */
+    --diff-del-bg: 13.3 77.1% 93.1%; /* #fbe6e0 */
+    --diff-del-fg: 7.5 71.1% 35.3%; /* #9a2a1a */
+    --diff-mod-bg: 42.2 69.8% 89.6%; /* #f7ecd2 */
+    --diff-mod-fg: 42.7 100% 21.8%; /* #6f4f00 */
+    --sev-critical: 3.2 73% 34.9%; /* #9a1f18 */
+    --sev-high: 15.5 69.6% 36.1%; /* #9c3d1c */
+    --sev-medium: 42.7 100% 21.8%; /* #6f4f00 */
+    --sev-low: 36.9 15.9% 32.2%; /* #5f5545 */
+    --pill-active: 33.3 17% 10.4%; /* #1f1b16 */
+    --pill-active-foreground: 42 55.6% 96.5%; /* #fbf8f1 */
+    --overlay: 33.3 17% 10.4%; /* #1f1b16 */
+    --avatar: 175.7 79.2% 20.8%; /* #0b5f59 */
+    --avatar-foreground: 42 55.6% 96.5%; /* #fbf8f1 */
+    --hero-panel: 135 20% 92.2%; /* #e7efe9 */
+    --ill-brand: #0b5f59;
+    --ill-brand-2: #2e9c89;
+    --ill-soft: #8cbcb0;
+    --ill-softer: #eef4ef;
+    --ill-ground: #ece6d9;
+    --ill-surface: #fffdf8;
+    --ill-green: #009683;
+    --ill-orange: #e0673a;
+    --ill-lilac: #b9d6cc;
+    --ill-blue: #4f6bd8;
+    --ill-gold: #b88400;
+    --ill-wave: #b9d6cc;
+    --ill-wave-2: #cfe2da;
+    --ill-leaf: #8cbcb0;
+    --shadow-brand: 0 6px 16px rgba(11, 95, 89, 0.22);
+    --shadow-pop: 0 10px 30px rgba(31, 27, 22, 0.1);
+    --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+    --font-body: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+    --font-code: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    --heading-weight: 600;
+    --radius: 14px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-xl: 18px;
+    --radius-2xl: 24px;
+    --radius-btn: 99px;
+    --radius-pill: 99px;
+    --rise-distance: 16px;
+  }
+
+  [data-design="meridian"].dark {
+    --background: 37.5 21.1% 7.5%; /* #17140f */
+    --foreground: 40 39.1% 91%; /* #f1ebdf */
+    --card: 36 17.9% 11%; /* #211d17 */
+    --card-foreground: 40 39.1% 91%; /* #f1ebdf */
+    --popover: 36 17.9% 11%; /* #211d17 */
+    --popover-foreground: 40 39.1% 91%; /* #f1ebdf */
+    --primary: 172.1 49% 48.4%; /* #3fb8a8 */
+    --primary-hover: 171 50.2% 58.2%; /* #5fcaba */
+    --primary-foreground: 168.8 33.3% 9.4%; /* #10201d */
+    --secondary: 35 16.2% 14.5%; /* #2b261f */
+    --secondary-foreground: 39.2 31% 83.5%; /* #e2d9c8 */
+    --muted: 35 16.2% 14.5%; /* #2b261f */
+    --muted-foreground: 38.7 17.3% 64.9%; /* #b5aa96 */
+    --accent: 170.4 30.9% 15.9%; /* #1c3531 */
+    --accent-foreground: 169.9 52.4% 71.2%; /* #8fdccf */
+    --destructive: 8.5 82.2% 71.4%; /* #f28b7a */
+    --destructive-foreground: 37.5 21.1% 7.5%; /* #17140f */
+    --success: 158 53.8% 59.2%; /* #5fcfa6 */
+    --success-foreground: 168.8 33.3% 9.4%; /* #10201d */
+    --success-soft: 165.6 35.2% 13.9%; /* #17302a */
+    --warning: 40.1 75.9% 62.5%; /* #e8b857 */
+    --warning-foreground: 37.5 21.1% 7.5%; /* #17140f */
+    --warning-soft: 41.2 47.1% 13.3%; /* #322812 */
+    --danger: 14.2 79.7% 71%; /* #f0967a */
+    --danger-soft: 14.5 39.8% 16.3%; /* #3a2119 */
+    --info: 228.4 77.2% 77.6%; /* #9aabf2 */
+    --info-foreground: 37.5 21.1% 7.5%; /* #17140f */
+    --info-soft: 229.1 34.7% 18.6%; /* #1f2540 */
+    --border: 33.8 16% 19.6%; /* #3a332a */
+    --input: 34.7 15.7% 23.7%; /* #463e33 */
+    --ring: 172.1 49% 48.4%; /* #3fb8a8 */
+    --ink-2: 39.2 31% 83.5%; /* #e2d9c8 */
+    --ink-3: 38.7 24.4% 75.1%; /* #cfc4b0 */
+    --label: 38.7 17.3% 64.9%; /* #b5aa96 */
+    --row-hover: 35 17.6% 13.3%; /* #28231c */
+    --nav-hover: 34.3 17.9% 15.3%; /* #2e2820 */
+    --sidebar: 40 20% 8.8%; /* #1b1812 */
+    --sidebar-foreground: 39.2 31% 83.5%; /* #e2d9c8 */
+    --sidebar-border: 33.8 16% 19.6%; /* #3a332a */
+    --diff-add-bg: 165.6 35.2% 13.9%; /* #17302a */
+    --diff-add-fg: 158.2 52.4% 71.2%; /* #8fdcc0 */
+    --diff-del-bg: 10.6 41.5% 16.1%; /* #3a1e18 */
+    --diff-del-fg: 11.4 82.6% 77.5%; /* #f5a896 */
+    --diff-mod-bg: 43.3 54.5% 12.9%; /* #33290f */
+    --diff-mod-fg: 42.6 74.7% 67.5%; /* #eac66e */
+    --sev-critical: 11.4 82.6% 77.5%; /* #f5a896 */
+    --sev-high: 18.9 79.2% 71.8%; /* #f0a27e */
+    --sev-medium: 42.4 74.7% 64.3%; /* #e8c060 */
+    --sev-low: 39.3 19.2% 70.4%; /* #c2b8a5 */
+    --pill-active: 40 39.1% 91%; /* #f1ebdf */
+    --pill-active-foreground: 37.5 21.1% 7.5%; /* #17140f */
+    --overlay: 0 0% 0%; /* #000000 */
+    --avatar: 172.1 49% 48.4%; /* #3fb8a8 */
+    --avatar-foreground: 168.8 33.3% 9.4%; /* #10201d */
+    --hero-panel: 162.9 20% 13.7%; /* #1c2a26 */
+    --ill-brand: #3fb8a8;
+    --ill-brand-2: #7fd3c4;
+    --ill-soft: #2f5a53;
+    --ill-softer: #1d2a26;
+    --ill-ground: #2b261f;
+    --ill-surface: #211d17;
+    --ill-green: #34b39f;
+    --ill-orange: #ec8a62;
+    --ill-lilac: #3a5a53;
+    --ill-blue: #7f95ec;
+    --ill-gold: #d9a932;
+    --ill-wave: #2f4a44;
+    --ill-wave-2: #243832;
+    --ill-leaf: #4f8a7e;
+    --shadow-brand: 0 6px 16px rgba(63, 184, 168, 0.2);
+    --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5);
   }
 
   * {
@@ -148,6 +362,11 @@
   h2,
   h3 {
     @apply font-display;
+  }
+
+  /* Fraunces reads best slightly lighter and with optical sizing */
+  [data-design="meridian"] .font-display {
+    font-optical-sizing: auto;
   }
 
   a {
@@ -186,7 +405,7 @@
 @keyframes aurora-rise {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(var(--rise-distance, 14px));
   }
   to {
     opacity: 1;
@@ -285,7 +504,79 @@
   animation: aurora-shimmer 1.4s infinite;
 }
 
+/* --- Meridian motion ---------------------------------------------------------------------- */
+
+@keyframes meridian-sway {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
+}
+@keyframes meridian-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-120px);
+  }
+}
+@keyframes meridian-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes meridian-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes meridian-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(1.4) rotate(-12deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-8deg);
+  }
+}
+
+[data-design="meridian"] .rise {
+  animation-duration: 0.8s;
+}
+.sway {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: meridian-sway 6s ease-in-out infinite;
+}
+.drift {
+  animation: meridian-drift 14s linear infinite;
+}
+.orbit {
+  transform-box: view-box;
+  animation: meridian-orbit 22s linear infinite;
+}
+.grow-bar {
+  transform-origin: left;
+  animation: meridian-grow 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.stamp {
+  transform: rotate(-8deg);
+  animation: meridian-stamp 0.6s 0.5s cubic-bezier(0.2, 0.7, 0.2, 1.4) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .sway,
+  .drift,
+  .orbit,
+  .grow-bar,
+  .stamp,
   .rise,
   .live,
   .flow,

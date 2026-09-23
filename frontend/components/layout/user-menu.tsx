@@ -28,7 +28,7 @@ export function UserMenu({ onShowShortcuts }: { onShowShortcuts: () => void }) {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-[#ffe4d6] text-[13px] font-extrabold text-[#8a3a12] transition-shadow hover:ring-2 hover:ring-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-avatar text-[13px] font-extrabold text-avatar-foreground transition-shadow hover:ring-2 hover:ring-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-label={`Account menu for ${display}`}
         >
           {initials(display)}

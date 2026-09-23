@@ -1,5 +1,8 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// theme-driven radii (tailwind.config.ts) must merge like the built-in ones
+const twMerge = extendTailwindMerge({ extend: { theme: { radius: ["btn", "pill"] } } });
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

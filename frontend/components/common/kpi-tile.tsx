@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { sparklineOption, type SparklineInput } from "@/lib/charts";
 import { cn } from "@/lib/utils";
@@ -46,8 +46,8 @@ export function KpiTile({
   spark?: SparklineInput | null;
   delay?: number;
 }) {
-  const mode = useChartMode();
-  const option = React.useMemo(() => (spark ? sparklineOption(spark, mode) : null), [spark, mode]);
+  const theme = useChartTheme();
+  const option = React.useMemo(() => (spark ? sparklineOption(spark, theme) : null), [spark, theme]);
   const body = (
     <article
       className={cn(

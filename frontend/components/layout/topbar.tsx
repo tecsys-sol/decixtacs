@@ -16,18 +16,19 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useTimeRange } from "@/hooks/use-time-range";
 import { TIME_RANGES, type TimeRange } from "@/lib/aggregate";
+import { cn } from "@/lib/utils";
 
 import { TenantSwitcher } from "./tenant-switcher";
-import { ThemeToggle } from "./theme-toggle";
+import { ThemeMenu } from "./theme-menu";
 import { UserMenu } from "./user-menu";
 
-function TimeRangePill() {
+export function TimeRangePill({ className }: { className?: string }) {
   const { range, setRange } = useTimeRange();
   const current = TIME_RANGES.find((r) => r.value === range) ?? TIME_RANGES[0];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" className="hidden h-[38px] gap-2 px-3.5 font-semibold md:inline-flex" aria-label={`Time range: ${current.long}`}>
+        <Button variant="outline" className={cn("hidden h-[38px] gap-2 px-3.5 font-semibold md:inline-flex", className)} aria-label={`Time range: ${current.long}`}>
           {current.long}
           <ChevronDown className="h-3.5 w-3.5" aria-hidden />
         </Button>
@@ -75,7 +76,7 @@ export function Topbar({
       <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2.5">
         <TenantSwitcher />
         <TimeRangePill />
-        <ThemeToggle />
+        <ThemeMenu />
         {can("changes:write") ? (
           <Button asChild className="h-[38px] px-3 sm:px-4">
             <Link href="/changes?new=1" aria-label="New change">

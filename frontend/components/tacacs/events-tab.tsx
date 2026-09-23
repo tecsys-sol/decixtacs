@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fingerprint } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
@@ -25,13 +25,13 @@ import { useTimeRange } from "@/hooks/use-time-range";
 import { useOnChange } from "@/hooks/use-reset";
 import { api } from "@/lib/api";
 import { bucketSeries, countBy, rangeStart, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
-import { barOption, donutOption, STATUS, type ChartMode } from "@/lib/charts";
+import { barOption, donutOption, type ChartTheme } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { AuthEvent, Page } from "@/lib/types";
 import { formatNumber, humanize, parseDate } from "@/lib/utils";
 
-function resultColor(result: string, mode: ChartMode): string {
-  const s = STATUS[mode];
+function resultColor(result: string, theme: ChartTheme): string {
+  const s = theme.status;
   const r = result.toLowerCase();
   if (["pass", "permit", "success"].includes(r)) return s.success;
   if (["fail", "deny", "denied"].includes(r)) return s.danger;
@@ -53,7 +53,7 @@ export function EventsTab() {
     refetchInterval: 30_000,
   });
   const items = q.data?.items ?? [];
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const now = useNow();
   const { range, setRange } = useTimeRange();
   const recent = useAuthEvents();
@@ -66,19 +66,19 @@ export function EventsTab() {
     const series = bucketSeries(inRange, (e) => e.timestamp, range, now, { group: (e) => e.result, groupOrder: order });
     return {
       n: inRange.length,
-      pie: donutOption({ items: results.map((r) => ({ name: humanize(r.name), value: r.value, color: resultColor(r.name, mode) })), centerValue: formatNumber(inRange.length), centerLabel: "events" }, mode),
+      pie: donutOption({ items: results.map((r) => ({ name: humanize(r.name), value: r.value, color: resultColor(r.name, theme) })), centerValue: formatNumber(inRange.length), centerLabel: "events" }, theme),
       bars: barOption(
         {
           categories: series.labels,
-          series: series.series.map((x) => ({ name: humanize(x.name), data: x.data, stack: "r", color: resultColor(x.name, mode) })),
+          series: series.series.map((x) => ({ name: humanize(x.name), data: x.data, stack: "r", color: resultColor(x.name, theme) })),
           axisLabelInterval: range === "30d" ? 4 : 3,
           barWidth: 12,
         },
-        mode,
+        theme,
       ),
       kinds: countBy(inRange, (e) => KIND_LABEL[e.kind] ?? e.kind),
     };
-  }, [recent.data, range, now, mode]);
+  }, [recent.data, range, now, theme]);
   const truncated = (recent.data?.total ?? 0) > (recent.data?.items.length ?? 0);
   const rangeLabel = TIME_RANGES.find((r) => r.value === range)?.long.toLowerCase();
 

@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
+import plugin from "tailwindcss/plugin";
 
 const hsl = (v: string) => `hsl(var(${v}) / <alpha-value>)`;
 
@@ -31,6 +32,11 @@ const config: Config = {
         "row-hover": hsl("--row-hover"),
         "nav-hover": hsl("--nav-hover"),
         sidebar: { DEFAULT: hsl("--sidebar"), foreground: hsl("--sidebar-foreground"), border: hsl("--sidebar-border") },
+        overlay: hsl("--overlay"),
+        avatar: { DEFAULT: hsl("--avatar"), foreground: hsl("--avatar-foreground") },
+        "hero-panel": hsl("--hero-panel"),
+        pill: { active: hsl("--pill-active"), "active-foreground": hsl("--pill-active-foreground") },
+        sev: { critical: hsl("--sev-critical"), high: hsl("--sev-high"), medium: hsl("--sev-medium"), low: hsl("--sev-low") },
         diff: {
           "add-bg": hsl("--diff-add-bg"),
           "add-fg": hsl("--diff-add-fg"),
@@ -40,17 +46,23 @@ const config: Config = {
           "mod-fg": hsl("--diff-mod-fg"),
         },
       },
+      // radii and fonts follow the active design theme (CSS variables in app/globals.css)
       borderRadius: {
-        "2xl": "20px",
-        xl: "16px",
+        "2xl": "var(--radius-2xl)",
+        xl: "var(--radius-xl)",
         lg: "var(--radius)",
-        md: "10px",
-        sm: "7px",
+        md: "var(--radius-md)",
+        sm: "var(--radius-sm)",
+        btn: "var(--radius-btn)",
+        pill: "var(--radius-pill)",
       },
       fontFamily: {
-        sans: ["var(--font-manrope)", "ui-sans-serif", "system-ui", "sans-serif"],
-        display: ["var(--font-sora)", "var(--font-manrope)", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["var(--font-jetbrains)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: ["var(--font-body)"],
+        display: ["var(--font-display)"],
+        mono: ["var(--font-code)"],
+      },
+      fontWeight: {
+        heading: "var(--heading-weight)",
       },
       keyframes: {
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
@@ -58,7 +70,15 @@ const config: Config = {
       },
     },
   },
-  plugins: [animate],
+  plugins: [
+    animate,
+    // `meridian:` / `aurora:` variants for the few structural differences that CSS can express
+    // (works before hydration, so server-rendered pages never flash the wrong layout)
+    plugin(({ addVariant }) => {
+      addVariant("meridian", ':is([data-design="meridian"] &)');
+      addVariant("aurora", ':is(:root:not([data-design="meridian"]) &)');
+    }),
+  ],
 };
 
 export default config;

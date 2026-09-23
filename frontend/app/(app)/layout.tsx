@@ -13,7 +13,7 @@ import { api, ApiError } from "@/lib/api";
 function FullPageLoader() {
   return (
     <div className="flex min-h-screen">
-      <div className="hidden w-[244px] flex-col gap-3 border-r bg-sidebar px-4 py-[22px] lg:flex">
+      <div className="hidden w-[244px] flex-col gap-3 border-r bg-sidebar px-4 py-[22px] lg:flex meridian:hidden">
         <Logo className="mb-3 px-2" />
         {Array.from({ length: 10 }).map((_, i) => (
           <Skeleton key={i} className="h-8" />

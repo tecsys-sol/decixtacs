@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, ExternalLink, Network, RadioTower } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { countBy } from "@/lib/aggregate";
-import { barOption, compact, donutOption, palette, STATUS } from "@/lib/charts";
+import { barOption, compact, donutOption, palette } from "@/lib/charts";
 import type { IxpMember, RouteServerClient } from "@/lib/types";
 import { cn, formatNumber, humanize } from "@/lib/utils";
 
@@ -95,7 +95,7 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
   const [open, setOpen] = React.useState<Set<string>>(new Set());
   const members = useQuery({ queryKey: ["ixp", "members", q], queryFn: () => api.get<IxpMember[]>("/ixp/members", { q }) });
   const list = React.useMemo(() => members.data ?? [], [members.data]);
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const charts = React.useMemo(() => {
     const policy = countBy(list, (m) => humanize(m.peering_policy ?? "unknown"), 5);
     const types = countBy(list, (m) => humanize(m.member_type ?? "unknown"), 5);
@@ -104,12 +104,12 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
       (p) => speed(p.speed_mbps),
     ).sort((a, b) => speedValue(a.name) - speedValue(b.name));
     return {
-      policy: donutOption({ items: policy, centerValue: formatNumber(list.length), centerLabel: "members" }, mode),
-      types: donutOption({ items: types, centerValue: String(types.length), centerLabel: types.length === 1 ? "type" : "types" }, mode),
-      speeds: barOption({ categories: speeds.map((x) => x.name), series: [{ name: "Ports", data: speeds.map((x) => x.value), color: palette(mode)[2] }], barWidth: 26 }, mode),
+      policy: donutOption({ items: policy, centerValue: formatNumber(list.length), centerLabel: "members" }, theme),
+      types: donutOption({ items: types, centerValue: String(types.length), centerLabel: types.length === 1 ? "type" : "types" }, theme),
+      speeds: barOption({ categories: speeds.map((x) => x.name), series: [{ name: "Ports", data: speeds.map((x) => x.value), color: palette(theme)[2] }], barWidth: 26 }, theme),
       nSpeeds: speeds.length,
     };
-  }, [list, mode]);
+  }, [list, theme]);
   const toggle = (id: string) =>
     setOpen((s) => {
       const n = new Set(s);
@@ -208,7 +208,7 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
     queryFn: () => api.get<RouteServerClient[]>("/ixp/route-server-clients", { asn: /^\d+$/.test(asnNum) ? Number(asnNum) : undefined, only_problems: problems || undefined }),
   });
   const list = React.useMemo(() => q.data ?? [], [q.data]);
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const charts = React.useMemo(() => {
     const top = [...list].sort((a, b) => (b.accepted ?? 0) + (b.filtered ?? 0) - ((a.accepted ?? 0) + (a.filtered ?? 0))).slice(0, 15);
     const cats = top.map((c) => `AS${c.asn} ${c.afi}${c.member ? ` · ${c.member}` : ""}`);
@@ -229,12 +229,12 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
     const tone = (name: string) => {
       const k = name.toLowerCase();
       return ["valid", "ok", "pass", "accepted"].some((x) => k.includes(x)) && !k.includes("invalid")
-        ? STATUS[mode].success
+        ? theme.status.success
         : ["invalid", "fail", "filtered", "reject"].some((x) => k.includes(x))
-          ? STATUS[mode].danger
+          ? theme.status.danger
           : k.includes("not") || k.includes("unknown")
-            ? STATUS[mode].neutral
-            : STATUS[mode].warning;
+            ? theme.status.neutral
+            : theme.status.warning;
     };
     return {
       n: top.length,
@@ -242,19 +242,19 @@ function RsTab({ asn, setAsn }: { asn: string; setAsn: (v: string) => void }) {
         {
           categories: cats,
           series: [
-            { name: "Accepted", data: top.map((c) => c.accepted ?? 0), stack: "p", color: palette(mode)[0] },
-            { name: "Filtered", data: top.map((c) => c.filtered ?? 0), stack: "p", color: palette(mode)[1] },
+            { name: "Accepted", data: top.map((c) => c.accepted ?? 0), stack: "p", color: palette(theme)[0] },
+            { name: "Filtered", data: top.map((c) => c.filtered ?? 0), stack: "p", color: palette(theme)[1] },
           ],
           horizontal: true,
           labelWidth: 170,
         },
-        mode,
+        theme,
       ),
-      rpki: donutOption({ items: rpki.map((r) => ({ ...r, color: tone(r.name) })), centerValue: compact(rpkiTotal), centerLabel: rpkiUnit }, mode),
+      rpki: donutOption({ items: rpki.map((r) => ({ ...r, color: tone(r.name) })), centerValue: compact(rpkiTotal), centerLabel: rpkiUnit }, theme),
       rpkiUnit,
-      irr: donutOption({ items: irr.map((r) => ({ ...r, color: tone(r.name) })), centerValue: formatNumber(list.length), centerLabel: "sessions" }, mode),
+      irr: donutOption({ items: irr.map((r) => ({ ...r, color: tone(r.name) })), centerValue: formatNumber(list.length), centerLabel: "sessions" }, theme),
     };
-  }, [list, mode]);
+  }, [list, theme]);
   return (
     <div className="grid gap-4">
     <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[1.6fr_1fr_1fr]">

@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, History, ShieldAlert, ShieldCheck } from "lucide-react";
 import * as React from "react";
 
-import { Chart, useChartMode } from "@/components/charts/chart";
+import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
@@ -35,7 +35,7 @@ const DEFAULTS = { actor: "", action: "", target_type: "", start: "", end: "", o
 
 export default function AuditPage() {
   const [f, setF] = useUrlState(DEFAULTS);
-  const mode = useChartMode();
+  const theme = useChartTheme();
   const now = useNow();
   const { range, setRange } = useTimeRange();
   const offset = Number(f.offset) || 0;
@@ -98,14 +98,14 @@ export default function AuditPage() {
     return {
       n: rows.length,
       inRange: series.counted,
-      actions: barOption({ categories: actions.map((a) => a.name), series: [{ name: "Events", data: actions.map((a) => a.value) }], horizontal: true, valueLabels: true, labelWidth: 150 }, mode),
+      actions: barOption({ categories: actions.map((a) => a.name), series: [{ name: "Events", data: actions.map((a) => a.value) }], horizontal: true, valueLabels: true, labelWidth: 150 }, theme),
       actionsN: actions.length,
       timeline: barOption(
         { categories: series.labels, series: series.series.map((x) => ({ name: x.name, data: x.data, stack: "a" })), axisLabelInterval: range === "30d" ? 4 : 3, barWidth: 12 },
-        mode,
+        theme,
       ),
     };
-  }, [stats.data, range, now, mode]);
+  }, [stats.data, range, now, theme]);
   const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${formatNumber(stats.data.items.length)} of ${formatNumber(stats.data.total)}` : "";
 
   return (
