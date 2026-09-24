@@ -324,3 +324,18 @@ def test_netbox_token_scheme_and_error_detail():
 
         with pytest.raises(NetBoxError, match="HTTP 403: Invalid v1 token - check the API token"):
             list(NetBoxClient("https://nb.t", "abc").paginate("/api/dcim/sites/"))
+
+
+def test_netbox_v2_secret_only_hint():
+    from app.services.integrations.netbox import NetBoxClient, NetBoxError
+
+    with respx.mock:
+        respx.get("https://nb.t/api/dcim/sites/").mock(
+            return_value=httpx.Response(403, json={"detail": "Invalid v1 token"})
+        )
+        import pytest
+
+        with pytest.raises(NetBoxError, match="only the secret of a NetBox v2 token"):
+            list(NetBoxClient("https://nb.t", "yxcphP6gYcm8PG2tSRVL3z0jk2TYXx6foVJkMTzt").paginate("/api/dcim/sites/"))
+        with pytest.raises(NetBoxError, match="check the API token"):  # a genuine (hex) v1 token: generic hint
+            list(NetBoxClient("https://nb.t", "0123456789abcdef0123456789abcdef01234567").paginate("/api/dcim/sites/"))

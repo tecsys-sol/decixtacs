@@ -63,7 +63,14 @@ class NetBoxError(httpx.HTTPStatusError):
     pass
 
 
-def _check(r: httpx.Response) -> None:
+def _v2_secret_only(token: str) -> bool:
+    """A NetBox 4.5 v2 token copied without its ``nbt_<key>.`` part looks like a 40-char non-hex string
+    (v1 tokens are 40 hex chars)."""
+    t = token.strip()
+    return len(t) == 40 and t.isalnum() and not all(c in "0123456789abcdef" for c in t)
+
+
+def _check(r: httpx.Response, token: str = "") -> None:
     """raise_for_status, but carry NetBox's own reason (e.g. "Invalid v1 token") in the message."""
     if r.is_success:
         return
@@ -72,7 +79,12 @@ def _check(r: httpx.Response) -> None:
     except ValueError:
         detail = r.text
     hint = ""
-    if r.status_code in (401, 403):
+    if r.status_code in (401, 403) and "Invalid v1 token" in str(detail) and _v2_secret_only(token):
+        hint = (
+            " - this looks like only the secret of a NetBox v2 token: enter it as nbt_<key>.<secret>, where <key>"
+            " is the 12-character key shown for the token in NetBox's API token list"
+        )
+    elif r.status_code in (401, 403):
         hint = (
             " - check the API token: it must be valid, enabled, not expired, allowed from this"
             " server's IP and have read permission on DCIM/IPAM/tenancy objects"
@@ -86,6 +98,7 @@ def _check(r: httpx.Response) -> None:
 
 class NetBoxClient:
     def __init__(self, base_url: str, token: str, verify: bool = True, timeout: float = 30):
+        self.token = token
         self.http = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": auth_header(token), "Accept": "application/json"},
@@ -98,14 +111,14 @@ class NetBoxClient:
         p = {"limit": 1000, **(params or {})}
         while url:
             r = self.http.get(url, params=p)
-            _check(r)
+            _check(r, self.token)
             data = r.json()
             yield from data.get("results", [])
             url = data.get("next")
             p = None  # ``next`` already carries the query string
 
     def patch_device(self, netbox_id: int, payload: dict) -> None:
-        _check(self.http.patch(f"/api/dcim/devices/{netbox_id}/", json=payload))
+        _check(self.http.patch(f"/api/dcim/devices/{netbox_id}/", json=payload), self.token)
 
 
 def map_platform(netbox_platform: dict | None, manufacturer: str | None, mapping: dict[str, str]) -> str | None:
