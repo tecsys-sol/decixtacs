@@ -166,3 +166,30 @@ def test_imported_config_accepted_by_tac_plus_ng(admin, db, tenant, tmp_path):
     cfg.write_text(render_for_tenant(db, tenant.id).content)
     proc = subprocess.run([_tacplus_bin(), "-P", str(cfg)], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_second_server_import_reports_conflicts(admin):
+    assert admin.post("/api/v1/tacacs/import", json={"content": SHRUBBERY, "dry_run": False}).status_code == 200
+    server2 = (
+        SHRUBBERY.replace('key = "mx-key"', 'key = "mx-key-OTHER"')  # NAS key differs
+        .replace('login = cleartext "Pr1ya-Old-Pass"', 'login = cleartext "Pr1ya-Other!"')  # password differs
+        .replace('login = des "ab01FAX.bQRSU"', 'login = des "zz9fQkR2mJxYw"')  # hash differs
+        .replace("service = exec { priv-lvl = 7 }", "service = exec { priv-lvl = 10 }")  # policy differs
+        .replace(
+            "    member = readonly\n    cmd = configure", "    member = readonly\n    member = noc\n    cmd = configure"
+        )
+        + '\nuser = meera {\n    login = des "mm12aBcDeFgHi"\n    member = readonly\n}\n'
+    )
+    r = admin.post("/api/v1/tacacs/import", json={"content": server2}).json()
+    c = "\n".join(r["conflicts"])
+    assert "NAS 10.20.0.1: shared key differs" in c
+    assert "user priya: password differs" in c
+    assert "user shashank: password hash differs" in c
+    assert "policy imp-noc" in c and "priv-lvl 7 in portal vs 10 in file" in c
+    assert r["created"]["mappings"] == ["meera"]
+    assert any("arjun: added to group(s) noc" in u for u in r["updated"])
+    # unchanged objects are not reported as conflicts
+    assert "readonly" not in c and "10.30.0.0/24" not in c
+    # identical file -> no conflicts at all
+    same = admin.post("/api/v1/tacacs/import", json={"content": SHRUBBERY}).json()
+    assert same["conflicts"] == [] and not any(same["created"].values())

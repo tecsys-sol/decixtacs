@@ -655,6 +655,8 @@ class ImportOut(BaseModel):
     skipped: dict[str, list[str]]
     warnings: list[str]
     users_needing_password: list[str]
+    conflicts: list[str] = []  # same object, different definition: portal's version kept
+    updated: list[str] = []  # changes applied to existing objects
     rendered: str  # resulting tac_plus-ng config, keys redacted
 
 
@@ -681,6 +683,8 @@ def import_tac_plus(body: ImportIn, ctx: Ctx = Depends(require("tacacs:write")))
         skipped=res.skipped,
         warnings=res.warnings,
         users_needing_password=res.users_needing_password,
+        conflicts=res.conflicts,
+        updated=res.updated,
         rendered=rendered,
     )
     if body.dry_run:

@@ -11750,6 +11750,22 @@
             "type": "array",
             "title": "Users Needing Password"
           },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conflicts",
+            "default": []
+          },
+          "updated": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Updated",
+            "default": []
+          },
           "rendered": {
             "type": "string",
             "title": "Rendered"
