@@ -69,8 +69,10 @@ def test_tacacs_end_to_end(admin, client):
     rev = admin.post(f"/api/v1/tacacs/servers/{srv['id']}/deploy").json()
     assert rev["version"] == 1
     r = agent.get("/api/v1/tacacs/agent/config")
-    assert r.status_code == 200 and "***" not in r.text and r.headers["ETag"] == rev["sha256"]
-    assert agent.get("/api/v1/tacacs/agent/config", headers={"If-None-Match": rev["sha256"]}).status_code == 304
+    assert r.status_code == 200 and "***" not in r.text and r.headers["ETag"] == f'"{rev["sha256"]}"'
+    assert r.headers["X-Config-Sha256"] == rev["sha256"] and "no-transform" in r.headers["Cache-Control"]
+    for inm in (rev["sha256"], f'"{rev["sha256"]}"', f'W/"{rev["sha256"]}-gzip"'):  # as rewritten by proxies
+        assert agent.get("/api/v1/tacacs/agent/config", headers={"If-None-Match": inm}).status_code == 304
     # idempotent deploy
     assert admin.post(f"/api/v1/tacacs/servers/{srv['id']}/deploy").json()["version"] == 1
     # changing policy without deploying: agent refuses to serve an unapproved render

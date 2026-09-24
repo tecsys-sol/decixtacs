@@ -568,9 +568,18 @@ def agent_config(
     if r.sha256 != s.config_sha256:
         # Only hand out what an operator explicitly deployed.
         raise HTTPException(409, "rendered configuration differs from the deployed revision; redeploy")
-    if if_none_match == s.config_sha256:
+    if if_none_match and s.config_sha256 in if_none_match.lower():  # tolerate quotes, W/, -gzip suffixes
         return PlainTextResponse("", status_code=304)
-    return PlainTextResponse(r.content, headers={"ETag": s.config_sha256, "X-Config-Version": str(s.config_version)})
+    return PlainTextResponse(
+        r.content,
+        headers={
+            "ETag": f'"{s.config_sha256}"',
+            # proxies may rewrite ETag (Caddy's encode appends -gzip); agents verify against this header
+            "X-Config-Sha256": s.config_sha256,
+            "X-Config-Version": str(s.config_version),
+            "Cache-Control": "no-store, no-transform",
+        },
+    )
 
 
 class HeartbeatIn(BaseModel):

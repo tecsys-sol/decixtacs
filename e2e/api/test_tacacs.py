@@ -43,7 +43,7 @@ def test_agent_installed_deployed_revision(admin: Api, tacacs_env: dict):
 def test_agent_config_endpoint_conditional_get(tacacs_env: dict, agent_http: httpx.Client):
     sha = tacacs_env["revision"]["sha256"]
     r = agent_http.get("/tacacs/agent/config")
-    assert r.status_code == 200 and r.headers["etag"] == sha
+    assert r.status_code == 200 and r.headers["etag"] == f'"{sha}"' and r.headers["x-config-sha256"] == sha
     assert agent_http.get("/tacacs/agent/config", headers={"If-None-Match": sha}).status_code == 304
     assert httpx.get(STACK["api_url"] + "/api/v1/tacacs/agent/config",
                      headers={"Authorization": "Bearer nomagent_wrong"}).status_code == 401  # fmt: skip

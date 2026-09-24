@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -22,6 +23,20 @@ from nom_tacacs_agent import __version__
 log = logging.getLogger(__name__)
 
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def config_sha256(headers) -> str | None:
+    """sha256 of the deployed config. Prefer X-Config-Sha256 (proxies leave custom headers alone);
+    fall back to the ETag, which reverse proxies may rewrite - Caddy's ``encode`` appends ``-gzip``,
+    others add ``W/`` or quotes - so extract the 64-hex digest from it."""
+    for value in (headers.get("X-Config-Sha256"), headers.get("ETag")):
+        m = _SHA256.search((value or "").lower())
+        if m:
+            return m.group(0)
+    return None
 
 
 class ApiError(Exception):
@@ -112,7 +127,7 @@ class AgentAPI:
         return ConfigResponse(
             "changed",
             content=r.text,
-            etag=(r.headers.get("ETag") or "").strip('"') or None,
+            etag=config_sha256(r.headers),
             version=int(version) if version and version.isdigit() else None,
         )
 
