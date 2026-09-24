@@ -50,11 +50,45 @@ MIRRORED = {
 }
 
 
+def auth_header(token: str) -> str:
+    """NetBox < 4.5 and v1 tokens use ``Token <key>``; NetBox 4.5+ v2 tokens (``nbt_<id>.<secret>``)
+    must be sent as ``Bearer``. A value pasted with its scheme is used as-is."""
+    token = token.strip()
+    if token.lower().startswith(("token ", "bearer ")):
+        return token
+    return f"Bearer {token}" if token.startswith("nbt_") else f"Token {token}"
+
+
+class NetBoxError(httpx.HTTPStatusError):
+    pass
+
+
+def _check(r: httpx.Response) -> None:
+    """raise_for_status, but carry NetBox's own reason (e.g. "Invalid v1 token") in the message."""
+    if r.is_success:
+        return
+    try:
+        detail = r.json().get("detail") or r.text
+    except ValueError:
+        detail = r.text
+    hint = ""
+    if r.status_code in (401, 403):
+        hint = (
+            " - check the API token: it must be valid, enabled, not expired, allowed from this"
+            " server's IP and have read permission on DCIM/IPAM/tenancy objects"
+        )
+    raise NetBoxError(
+        f"NetBox {r.request.method} {r.request.url.path} -> HTTP {r.status_code}: {str(detail)[:300]}{hint}",
+        request=r.request,
+        response=r,
+    )
+
+
 class NetBoxClient:
     def __init__(self, base_url: str, token: str, verify: bool = True, timeout: float = 30):
         self.http = httpx.Client(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Token {token}", "Accept": "application/json"},
+            headers={"Authorization": auth_header(token), "Accept": "application/json"},
             verify=verify,
             timeout=timeout,
         )
@@ -64,14 +98,14 @@ class NetBoxClient:
         p = {"limit": 1000, **(params or {})}
         while url:
             r = self.http.get(url, params=p)
-            r.raise_for_status()
+            _check(r)
             data = r.json()
             yield from data.get("results", [])
             url = data.get("next")
             p = None  # ``next`` already carries the query string
 
     def patch_device(self, netbox_id: int, payload: dict) -> None:
-        self.http.patch(f"/api/dcim/devices/{netbox_id}/", json=payload).raise_for_status()
+        _check(self.http.patch(f"/api/dcim/devices/{netbox_id}/", json=payload))
 
 
 def map_platform(netbox_platform: dict | None, manufacturer: str | None, mapping: dict[str, str]) -> str | None:

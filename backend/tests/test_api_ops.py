@@ -308,3 +308,19 @@ def test_alert_channel_delivery(admin):
         admin.post("/api/v1/backups/run", json={"run_async": False})  # no credential -> backup_failed
         assert hook.called
         assert "Backup failed: r1" in hook.calls[0].request.content.decode()
+
+
+def test_netbox_token_scheme_and_error_detail():
+    from app.services.integrations.netbox import NetBoxClient, NetBoxError, auth_header
+
+    assert auth_header("0123456789abcdef") == "Token 0123456789abcdef"  # classic / v1
+    assert auth_header(" nbt_AbC123.s3cr3t ") == "Bearer nbt_AbC123.s3cr3t"  # NetBox 4.5+ v2
+    assert auth_header("Bearer nbt_x.y") == "Bearer nbt_x.y" and auth_header("Token abc") == "Token abc"
+    with respx.mock:
+        respx.get("https://nb.t/api/dcim/sites/").mock(
+            return_value=httpx.Response(403, json={"detail": "Invalid v1 token"})
+        )
+        import pytest
+
+        with pytest.raises(NetBoxError, match="HTTP 403: Invalid v1 token - check the API token"):
+            list(NetBoxClient("https://nb.t", "abc").paginate("/api/dcim/sites/"))
