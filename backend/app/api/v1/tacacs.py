@@ -630,3 +630,61 @@ def auth_events(
     if result:
         stmt = stmt.where(TacacsAuthEvent.result == result)
     return paginate(ctx.db, stmt, AuthEventOut, limit, offset)
+
+
+# --- import an existing Shrubbery tac_plus configuration ----------------------------------------
+
+
+class ImportIn(BaseModel):
+    content: str
+    dry_run: bool = True
+
+
+class ImportOut(BaseModel):
+    dry_run: bool
+    created: dict[str, list[str]]
+    skipped: dict[str, list[str]]
+    warnings: list[str]
+    users_needing_password: list[str]
+    rendered: str  # resulting tac_plus-ng config, keys redacted
+
+
+@router.post("/import", response_model=ImportOut)
+def import_tac_plus(body: ImportIn, ctx: Ctx = Depends(require("tacacs:write"))):
+    """Import a classic Shrubbery ``tac_plus`` (F4.0.4.x) config: NAS clients with their existing keys,
+    groups, users with their existing password hashes, and command authorization as policies.
+    ``dry_run`` (default) shows what would be created plus the resulting tac_plus-ng config, and
+    changes nothing."""
+    from app.services.tacacs.importer import import_config
+    from app.services.tacacs.shrubbery import ParseError
+
+    if len(body.content) > 5_000_000:
+        raise HTTPException(413, "configuration too large")
+    try:
+        res = import_config(ctx.db, ctx.tenant_id, body.content)
+    except ParseError as e:
+        ctx.db.rollback()
+        raise HTTPException(422, f"could not parse tac_plus config: {e}") from e
+    rendered = redact_keys(render_for_tenant(ctx.db, ctx.tenant_id).content)
+    out = ImportOut(
+        dry_run=body.dry_run,
+        created=res.created,
+        skipped=res.skipped,
+        warnings=res.warnings,
+        users_needing_password=res.users_needing_password,
+        rendered=rendered,
+    )
+    if body.dry_run:
+        ctx.db.rollback()
+        return out
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="tacacs.import",
+        actor=ctx.user,
+        target_type="tacacs",
+        after={k: len(v) for k, v in res.created.items()},
+        source_ip=ctx.ip,
+    )
+    ctx.db.commit()
+    return out

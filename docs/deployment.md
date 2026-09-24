@@ -285,6 +285,34 @@ kept in Redis (10 min, single use), so no session affinity is needed with severa
    the result. Every later policy/user/NAS change requires a new deploy (the agent receives `409`
    until then and keeps the running configuration).
 
+### Migrating from classic Shrubbery tac_plus (F4.0.4.x)
+
+The platform manages **tac_plus-ng**; the classic `tac_plus` daemon uses a different configuration
+language and cannot be driven by the agent. Migrate without touching devices or passwords:
+
+1. **Import.** TACACS+ → *Import tac_plus config* (or `POST /api/v1/tacacs/import` with
+   `{"content": "...", "dry_run": true}`). The preview shows what will be created and the resulting
+   tac_plus-ng config; nothing changes until you confirm.
+   * `host = X { key = … }` → NAS clients with the **same shared keys** (matched to inventory devices by
+     management IP); the global `key` becomes catch-all NAS clients `0.0.0.0/0` and `::/0`.
+   * `group` → platform group + policy (`member =` inheritance flattened; child settings win).
+   * `user` → platform user + TACACS mapping. `login = des …` hashes (from `tac_pwd`) are kept - tac_plus-ng
+     verifies them with crypt(3) - and `cleartext` passwords are re-hashed with SHA-512.
+   * `service = exec|shell { priv-lvl }`, `junos-exec { local-user-name, allow/deny-commands }`,
+     `fortigate { admin_prof }` and `cmd = X { permit|deny regex }` become privilege level, vendor attributes
+     and ordered command rules. A user's own `service`/`cmd` entries become a personal policy that takes
+     precedence over group policies.
+   * Reported, not imported: `acl` (source restrictions), `enable`/`pap`/`chap` passwords,
+     `login = file|PAM` and `default authentication = file …` (those users must get a password or use
+     LDAP), `before/after authorization` scripts, `accounting file`. Re-importing skips existing objects.
+2. **Review** the policies, set passwords for the users listed as needing one, compare *Config preview*
+   with the old file.
+3. **Cut over one server at a time.** Either point devices at the platform's own `tacacs` container, or
+   install tac_plus-ng + the agent on the old host (build: `e2e/scripts/build-tac-plus-ng.sh`), stop the
+   old `tac_plus`, start tac_plus-ng on port 49, add the server in the portal, set up the agent (above)
+   and *Deploy*. Test logins and command authorization per vendor; roll back by stopping tac_plus-ng and
+   starting the old daemon.
+
 ## 9. Integrations
 
 All integrations are per tenant: `POST /api/v1/integrations` (permission `integrations:write`),

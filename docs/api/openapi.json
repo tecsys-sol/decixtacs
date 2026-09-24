@@ -4881,6 +4881,71 @@
         }
       }
     },
+    "/api/v1/tacacs/import": {
+      "post": {
+        "tags": [
+          "tacacs"
+        ],
+        "summary": "Import Tac Plus",
+        "description": "Import a classic Shrubbery ``tac_plus`` (F4.0.4.x) config: NAS clients with their existing keys,\ngroups, users with their existing password hashes, and command authorization as policies.\n``dry_run`` (default) shows what would be created plus the resulting tac_plus-ng config, and\nchanges nothing.",
+        "operationId": "import_tac_plus_api_v1_tacacs_import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/backups": {
       "get": {
         "tags": [
@@ -11626,6 +11691,80 @@
         },
         "type": "object",
         "title": "HeartbeatIn"
+      },
+      "ImportIn": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "ImportIn"
+      },
+      "ImportOut": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run"
+          },
+          "created": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Created"
+          },
+          "skipped": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Skipped"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "users_needing_password": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Users Needing Password"
+          },
+          "rendered": {
+            "type": "string",
+            "title": "Rendered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dry_run",
+          "created",
+          "skipped",
+          "warnings",
+          "users_needing_password",
+          "rendered"
+        ],
+        "title": "ImportOut"
       },
       "IndexOut": {
         "properties": {
