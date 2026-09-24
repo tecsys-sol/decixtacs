@@ -30,7 +30,7 @@ RUN git checkout "$EDS_REF" && git rev-parse HEAD > /EDS_COMMIT
 # those files (and not the builder's Python installation that also lives in /usr/local).
 RUN touch /tmp/.before-install \
  && ./configure tac_plus-ng \
- && make -j"$(nproc)" \
+ && make \
  && make install \
  && find /usr/local -newer /tmp/.before-install \( -type f -o -type l \) -print > /tmp/installed.txt \
  && tar -cf /tmp/eds.tar -T /tmp/installed.txt \
