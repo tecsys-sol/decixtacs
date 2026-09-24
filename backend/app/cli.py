@@ -9,14 +9,14 @@ import sys
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from app.db.session import SessionLocal
-
 
 def cmd_init(args) -> None:
     from app.models import Tenant
     from app.services.bootstrap import create_tenant, integrations_from_env, seed_global
 
     password = args.password or getpass.getpass("Admin password: ")
+    from app.db.session import SessionLocal  # lazy: genkey must work without config
+
     with SessionLocal() as db:
         seed_global(db)
         t = db.scalar(select(Tenant).where(Tenant.slug == args.slug))
@@ -44,6 +44,7 @@ def _tenant(db, slug: str):
 
 
 def cmd_sync_integrations(args) -> None:
+    from app.db.session import SessionLocal  # lazy: genkey must work without config
     from app.services.bootstrap import integrations_from_env
 
     with SessionLocal() as db:
@@ -55,6 +56,7 @@ def cmd_sync_integrations(args) -> None:
 
 
 def cmd_seed_demo(args) -> None:
+    from app.db.session import SessionLocal  # lazy: genkey must work without config
     from app.services.demo import DemoExists, seed_demo
 
     with SessionLocal() as db:
@@ -83,6 +85,8 @@ def cmd_rotate_secrets(_args) -> None:
         User: ["mfa_secret_enc"],
     }
     n = 0
+    from app.db.session import SessionLocal  # lazy: genkey must work without config
+
     with SessionLocal() as db:
         for model, cols in fields.items():
             for row in db.scalars(select(model)):
