@@ -74,7 +74,7 @@ def device_relpath(device: Device) -> str:
 
 
 def build_target(device: Device) -> CollectTarget | None:
-    if not device.platform or not device.credential:
+    if not device.platform or not device.credential or not device.management_ip:
         return None
     cred = device.credential
     return CollectTarget(

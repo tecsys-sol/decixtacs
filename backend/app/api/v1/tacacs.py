@@ -169,6 +169,8 @@ def import_from_inventory(device_group_id: uuid.UUID | None = None, ctx: Ctx = D
     have = set(ctx.db.scalars(select(TacacsDevice.device_id).where(TacacsDevice.tenant_id == ctx.tenant_id)))
     created = []
     for d in ctx.db.scalars(stmt):
+        if not d.management_ip:
+            continue  # no address (e.g. synced from NetBox without a primary IP)
         if d.id in have:
             continue
         vendor = d.vendor.slug if d.vendor and d.vendor.slug in VENDORS else "generic"

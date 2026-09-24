@@ -79,16 +79,18 @@ def test_netbox_sync(admin):
 
     i = admin.post("/api/v1/integrations", json={"kind": "netbox", "name": "nb", "base_url": NB, "token": "t0k"}).json()
     stats = admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False}).json()
-    assert stats["devices"] == 2 and stats["links"] == 1 and stats["vlan"] == 1 and stats["racks"] == 2
+    assert stats["devices"] == 3 and stats["links"] == 1 and stats["vlan"] == 1 and stats["racks"] == 2
+    assert stats["devices_without_ip"] == 1 and stats["devices_without_ip_examples"] == ["no-ip-device"]
     devs = {d["hostname"]: d for d in admin.get("/api/v1/devices").json()["items"]}
     assert devs["mx204-blr"]["platform"]["slug"] == "junos" and devs["eos-sw1"]["platform"]["slug"] == "eos"
     assert devs["mx204-blr"]["serial"] == "ABC123" and devs["mx204-blr"]["site"]["name"] == "Bangalore"
+    assert devs["no-ip-device"]["management_ip"] == "" and devs["no-ip-device"]["backup_enabled"] is False
     topo = admin.get("/api/v1/topology").json()
-    assert len(topo["nodes"]) == 2 and topo["edges"][0]["label"] == "et-0/0/0 - Ethernet1"
+    assert len(topo["nodes"]) == 3 and topo["edges"][0]["label"] == "et-0/0/0 - Ethernet1"
     assert admin.get("/api/v1/external-objects", params={"object_type": "vlan"}).json()[0]["display"] == "IX-LAN (446)"
     # idempotent
     admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False})
-    assert admin.get("/api/v1/devices").json()["total"] == 2
+    assert admin.get("/api/v1/devices").json()["total"] == 3
     # auth header sent
     assert respx.calls[0].request.headers["Authorization"] == "Token t0k"
 

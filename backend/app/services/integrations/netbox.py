@@ -193,12 +193,23 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
     }
     by_name = {d.hostname: d for d in db.scalars(select(Device).where(Device.tenant_id == tenant_id))}
     seen = 0
+    no_ip: list[str] = []
+    unnamed = 0
     for nb in client.paginate("/api/dcim/devices/", filters.get("devices")):
-        ip = _strip_prefix(
-            (nb.get("primary_ip4") or nb.get("primary_ip6") or nb.get("primary_ip") or {}).get("address")
-        )
-        if not nb.get("name") or not ip:
+        if not nb.get("name"):
+            unnamed += 1  # NetBox allows unnamed devices (e.g. patch panels); nothing to manage
             continue
+        ip = _strip_prefix(
+            (
+                nb.get("primary_ip4")
+                or nb.get("primary_ip6")
+                or nb.get("primary_ip")
+                or nb.get("oob_ip")  # NetBox 4 out-of-band management address
+                or {}
+            ).get("address")
+        )
+        if not ip:
+            no_ip.append(nb["name"])
         manu = (nb.get("device_type") or {}).get("manufacturer") or {}
         vendor = vendors.get(manu.get("slug", ""))
         if vendor is None and manu.get("slug"):
@@ -208,9 +219,16 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
             vendors[vendor.slug] = vendor
         d = by_nb.get(nb["id"]) or by_name.get(nb["name"])
         if d is None:
-            d = Device(tenant_id=tenant_id, hostname=_fit(nb["name"], 128), management_ip=ip)
+            # Devices without an address are imported for inventory/topology; backups stay off until
+            # NetBox gets a primary or OOB IP for them.
+            d = Device(
+                tenant_id=tenant_id, hostname=_fit(nb["name"], 128), management_ip=ip or "", backup_enabled=bool(ip)
+            )
             db.add(d)
-        d.hostname, d.management_ip, d.netbox_id = _fit(nb["name"], 128), ip, nb["id"]
+        elif ip and not d.management_ip:
+            d.backup_enabled = True  # address assigned in NetBox since the last sync
+        d.hostname, d.netbox_id = _fit(nb["name"], 128), nb["id"]
+        d.management_ip = ip or d.management_ip or ""
         d.site_id = sites[nb["site"]["id"]].id if nb.get("site") and nb["site"]["id"] in sites else d.site_id
         d.rack_id = racks[nb["rack"]["id"]].id if nb.get("rack") and nb["rack"]["id"] in racks else None
         d.vendor_id = vendor.id if vendor else d.vendor_id
@@ -236,6 +254,11 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
         seen += 1
     db.flush()
     stats["devices"] = seen
+    stats["devices_without_ip"] = len(no_ip)
+    stats["devices_unnamed_skipped"] = unnamed
+    stats["devices_without_platform"] = sum(1 for d in by_nb.values() if d.platform_id is None)
+    if no_ip:
+        stats["devices_without_ip_examples"] = sorted(no_ip)[:20]
 
     # --- cables -> links (topology) ----------------------------------------
     if opts.get("sync_cables", True):
