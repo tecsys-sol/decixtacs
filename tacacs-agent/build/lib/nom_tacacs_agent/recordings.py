@@ -36,9 +36,8 @@ def recording_metadata(cast: Path) -> dict[str, str] | None:
         except ValueError:
             return None
         if meta.get("username") and meta.get("device_address"):
-            return {
-                k: str(meta[k]) for k in ("username", "device_address", "source_address", "started_at") if meta.get(k)
-            }
+            return {k: str(meta[k]) for k in ("username", "device_address", "source_address", "started_at")
+                    if meta.get(k)}
         return None
     parts = cast.stem.split("@")
     if len(parts) >= 3:
@@ -50,18 +49,9 @@ def recording_metadata(cast: Path) -> dict[str, str] | None:
 
 
 class RecordingUploader:
-    def __init__(
-        self,
-        api: AgentAPI,
-        spool_dir: Path,
-        *,
-        settle_seconds: float = 10.0,
-        keep: bool = False,
-        interval: float = 15.0,
-        clock: Callable[[], float] = time.time,
-        stop: threading.Event | None = None,
-        backoff: Backoff | None = None,
-    ):
+    def __init__(self, api: AgentAPI, spool_dir: Path, *, settle_seconds: float = 10.0, keep: bool = False,
+                 interval: float = 15.0, clock: Callable[[], float] = time.time,
+                 stop: threading.Event | None = None, backoff: Backoff | None = None):
         self.api = api
         self.spool = Path(spool_dir)
         self.settle = settle_seconds

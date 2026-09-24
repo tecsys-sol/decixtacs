@@ -82,7 +82,8 @@ class Settings:
             ca_file=g("CA_FILE") or None,
             http_timeout=float(g("HTTP_TIMEOUT", "30")),
             config_path=Path(g("CONFIG_PATH", "/etc/tac_plus-ng/tac_plus-ng.cfg")),
-            bootstrap_config=Path(g("BOOTSTRAP_CONFIG", "/usr/local/share/nom-tacacs-agent/tac_plus-ng.bootstrap.cfg")),
+            bootstrap_config=Path(g("BOOTSTRAP_CONFIG",
+                                    "/usr/local/share/nom-tacacs-agent/tac_plus-ng.bootstrap.cfg")),
             tacplus_bin=g("TACPLUS_BIN", "/usr/local/sbin/tac_plus-ng"),
             tacplus_args=(g("TACPLUS_ARGS", "") or "").split(),
             listen_port=int(g("LISTEN_PORT", "49")),
@@ -107,10 +108,8 @@ class Settings:
         if not self.api_url:
             problems.append("NOM_AGENT_API_URL is not set")
         if not self.token:
-            problems.append(
-                "NOM_AGENT_TOKEN / NOM_AGENT_TOKEN_FILE is not set "
-                "(create the server with POST /api/v1/tacacs/servers to obtain one)"
-            )
+            problems.append("NOM_AGENT_TOKEN / NOM_AGENT_TOKEN_FILE is not set "
+                            "(create the server with POST /api/v1/tacacs/servers to obtain one)")
         if self.reload_mode not in ("signal", "command", "none"):
             problems.append("NOM_AGENT_RELOAD_MODE must be signal, command or none")
         if self.reload_mode == "command" and not self.reload_command:

@@ -72,20 +72,13 @@ def cmd_run(s: Settings) -> int:
         signal.signal(sig, lambda *_: stop.set())
     api = _api(s)
     threads = [
-        threading.Thread(
-            target=_config_loop, args=(build_deployer(s, api), s.poll_interval, stop), name="config", daemon=True
-        ),
+        threading.Thread(target=_config_loop, args=(build_deployer(s, api), s.poll_interval, stop),
+                         name="config", daemon=True),
         threading.Thread(target=build_shipper(s, api, stop).run, name="shipper", daemon=True),
     ]
     if s.spool_dir:
-        up = RecordingUploader(
-            api,
-            s.spool_dir,
-            settle_seconds=s.spool_settle_seconds,
-            keep=s.spool_keep,
-            interval=s.spool_interval,
-            stop=stop,
-        )
+        up = RecordingUploader(api, s.spool_dir, settle_seconds=s.spool_settle_seconds, keep=s.spool_keep,
+                               interval=s.spool_interval, stop=stop)
         threads.append(threading.Thread(target=up.run, name="recordings", daemon=True))
     log.info("nom-tacacs-agent %s -> %s", __version__, s.base_url)
     for t in threads:
@@ -146,29 +139,18 @@ def cmd_check_config(s: Settings) -> int:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="nom-tacacs-agent", description="NetworkOps Manager tac_plus-ng agent")
     p.add_argument("--version", action="version", version=__version__)
-    p.add_argument(
-        "command",
-        choices=["run", "supervise", "sync-once", "ship-once", "healthcheck", "check-config"],
-        nargs="?",
-        default="run",
-    )
+    p.add_argument("command", choices=["run", "supervise", "sync-once", "ship-once", "healthcheck", "check-config"],
+                   nargs="?", default="run")
     a = p.parse_args(argv)
     s = Settings.from_env()
-    logging.basicConfig(
-        level=getattr(logging, s.log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s",
-    )
+    logging.basicConfig(level=getattr(logging, s.log_level, logging.INFO),
+                        format="%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s")
     if a.command == "supervise":
         from nom_tacacs_agent.supervisor import Supervisor
 
         sys.exit(Supervisor(s).run())
-    fn = {
-        "run": cmd_run,
-        "sync-once": cmd_sync_once,
-        "ship-once": cmd_ship_once,
-        "healthcheck": cmd_healthcheck,
-        "check-config": cmd_check_config,
-    }[a.command]
+    fn = {"run": cmd_run, "sync-once": cmd_sync_once, "ship-once": cmd_ship_once,
+          "healthcheck": cmd_healthcheck, "check-config": cmd_check_config}[a.command]
     sys.exit(fn(s))
 
 

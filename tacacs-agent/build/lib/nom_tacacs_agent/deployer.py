@@ -15,9 +15,9 @@ import shlex
 import signal
 import subprocess
 import time
+from typing import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from nom_tacacs_agent.api import AgentAPI, ApiError, sha256_text
 
@@ -60,7 +60,8 @@ def tacplus_validator(binary: str, timeout: float = 60) -> Validator:
 
     def validate(path: Path) -> ValidationResult:
         try:
-            p = subprocess.run([binary, "-P", str(path)], capture_output=True, text=True, timeout=timeout, check=False)
+            p = subprocess.run([binary, "-P", str(path)], capture_output=True, text=True, timeout=timeout,
+                               check=False)
         except FileNotFoundError:
             return ValidationResult(False, f"validator binary not found: {binary}")
         except subprocess.TimeoutExpired:

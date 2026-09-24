@@ -153,8 +153,10 @@ def test_first_deploy_without_existing_file(tmp_path, fake_api):
 
 def fake_tacplus(tmp_path: Path) -> str:
     script = tmp_path / "tac_plus-ng"
-    script.write_text('#!/bin/sh\n[ "$1" = "-P" ] || exit 2\n'
-                      'if grep -q BROKEN "$2"; then echo "parse error: BROKEN" >&2; exit 1; fi\nexit 0\n')
+    script.write_text(
+        '#!/bin/sh\n[ "$1" = "-P" ] || exit 2\n'
+        'if grep -q BROKEN "$2"; then echo "parse error: BROKEN" >&2; exit 1; fi\nexit 0\n'
+    )
     script.chmod(0o755)
     return str(script)
 

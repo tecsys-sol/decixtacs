@@ -117,9 +117,14 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
 
   tacacs-agent:
-    name: TACACS agent (ruff, pytest)
-    runs-on: ubuntu-latest
+    name: TACACS agent (ruff, pytest, py${{ matrix.python }})
+    # 22.04: setup-python still provides 3.8 there; the agent runs on old TACACS hosts (Ubuntu 20.04)
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.8", "3.12"]
     defaults:
       run:
         working-directory: tacacs-agent
@@ -127,7 +132,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: pytest -q

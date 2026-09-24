@@ -7,8 +7,9 @@ import pytest
 
 from nom_tacacs_agent.tailer import FileTailer, OffsetStore
 
-L1 = ("2026-09-23 10:01:02 +0000\t10.0.0.1\talice\tssh\t192.0.2.10\tstop\ttask_id=1\tservice=shell"
-      "\tcmd=show version <cr>")
+L1 = (
+    "2026-09-23 10:01:02 +0000\t10.0.0.1\talice\tssh\t192.0.2.10\tstop\ttask_id=1\tservice=shell\tcmd=show version <cr>"
+)
 
 
 def append(path: Path, text: str) -> None:

@@ -35,16 +35,9 @@ class ShipperStats:
 
 
 class LogShipper:
-    def __init__(
-        self,
-        api: AgentAPI,
-        tailers: Sequence[FileTailer],
-        *,
-        batch_size: int = 500,
-        flush_interval: float = 2.0,
-        backoff: Backoff | None = None,
-        stop: threading.Event | None = None,
-    ):
+    def __init__(self, api: AgentAPI, tailers: Sequence[FileTailer], *, batch_size: int = 500,
+                 flush_interval: float = 2.0, backoff: Backoff | None = None,
+                 stop: threading.Event | None = None):
         self.api = api
         self.tailers = list(tailers)
         self.batch_size = batch_size

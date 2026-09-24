@@ -56,15 +56,8 @@ def sha256_text(content: str) -> str:
 
 
 class AgentAPI:
-    def __init__(
-        self,
-        base_url: str,
-        token: str,
-        *,
-        verify: bool | str = True,
-        timeout: float = 30.0,
-        transport: httpx.BaseTransport | None = None,
-    ):
+    def __init__(self, base_url: str, token: str, *, verify: bool | str = True, timeout: float = 30.0,
+                 transport: httpx.BaseTransport | None = None):
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {token}", "User-Agent": f"nom-tacacs-agent/{__version__}"},
@@ -91,9 +84,8 @@ class AgentAPI:
             detail = json.dumps(r.json().get("detail"))
         except (ValueError, AttributeError):
             pass
-        raise ApiError(
-            f"{r.request.method} {r.request.url.path} -> HTTP {r.status_code}: {detail}", r.status_code, body
-        )
+        raise ApiError(f"{r.request.method} {r.request.url.path} -> HTTP {r.status_code}: {detail}",
+                       r.status_code, body)
 
     # --- config -----------------------------------------------------------------------------
 
@@ -109,19 +101,13 @@ class AgentAPI:
         if r.status_code != 200:
             self._raise(r)
         version = r.headers.get("X-Config-Version")
-        return ConfigResponse(
-            "changed",
-            content=r.text,
-            etag=(r.headers.get("ETag") or "").strip('"') or None,
-            version=int(version) if version and version.isdigit() else None,
-        )
+        return ConfigResponse("changed", content=r.text, etag=(r.headers.get("ETag") or "").strip('"') or None,
+                              version=int(version) if version and version.isdigit() else None)
 
     def heartbeat(self, running_sha256: str | None, status: str = "ok", message: str | None = None) -> None:
-        r = self._request(
-            "POST",
-            "/tacacs/agent/heartbeat",
-            json={"running_sha256": running_sha256, "status": status, "message": (message or "")[:4000] or None},
-        )
+        r = self._request("POST", "/tacacs/agent/heartbeat",
+                          json={"running_sha256": running_sha256, "status": status,
+                                "message": (message or "")[:4000] or None})
         if r.status_code not in (200, 204):
             self._raise(r)
 
@@ -138,9 +124,8 @@ class AgentAPI:
     def upload_recording(self, path: Path, meta: dict[str, str]) -> dict:
         data = {k: v for k, v in meta.items() if v}
         with path.open("rb") as fh:
-            r = self._request(
-                "POST", "/sessions", data=data, files={"file": (path.name, fh, "application/x-asciicast")}
-            )
+            r = self._request("POST", "/sessions", data=data,
+                              files={"file": (path.name, fh, "application/x-asciicast")})
         if r.status_code not in (200, 201):
             self._raise(r)
         return r.json()

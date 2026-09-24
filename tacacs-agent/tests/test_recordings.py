@@ -17,13 +17,20 @@ def old(path, age=60):
 def test_metadata_from_sidecar_and_filename(tmp_path):
     a = tmp_path / "x.cast"
     a.write_text(CAST)
-    (tmp_path / "x.json").write_text(json.dumps({"username": "alice", "device_address": "192.0.2.1",
-                                                  "started_at": "2026-09-23T10:00:00Z"}))
-    assert recording_metadata(a) == {"username": "alice", "device_address": "192.0.2.1",
-                                     "started_at": "2026-09-23T10:00:00Z"}
+    (tmp_path / "x.json").write_text(
+        json.dumps({"username": "alice", "device_address": "192.0.2.1", "started_at": "2026-09-23T10:00:00Z"})
+    )
+    assert recording_metadata(a) == {
+        "username": "alice",
+        "device_address": "192.0.2.1",
+        "started_at": "2026-09-23T10:00:00Z",
+    }
     b = tmp_path / "bob@2001:db8::1@198.51.100.7@1790000000.cast"
-    assert recording_metadata(b) == {"username": "bob", "device_address": "2001:db8::1",
-                                     "source_address": "198.51.100.7"}
+    assert recording_metadata(b) == {
+        "username": "bob",
+        "device_address": "2001:db8::1",
+        "source_address": "198.51.100.7",
+    }
     assert recording_metadata(tmp_path / "nometa.cast") is None
 
 

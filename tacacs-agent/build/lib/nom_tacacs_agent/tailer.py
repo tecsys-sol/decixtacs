@@ -69,15 +69,8 @@ class OffsetStore:
 
 
 class FileTailer:
-    def __init__(
-        self,
-        path: str | Path,
-        store: OffsetStore,
-        *,
-        start_at: str = "beginning",
-        max_line_bytes: int = 65536,
-        chunk_size: int = 65536,
-    ):
+    def __init__(self, path: str | Path, store: OffsetStore, *, start_at: str = "beginning",
+                 max_line_bytes: int = 65536, chunk_size: int = 65536):
         self.path = Path(path)
         self.key = str(self.path)
         self.store = store
@@ -160,7 +153,7 @@ class FileTailer:
         while len(out) < want:
             nl = self._buf.find(b"\n")
             if nl >= 0:
-                line, self._buf = self._buf[:nl], self._buf[nl + 1 :]
+                line, self._buf = self._buf[:nl], self._buf[nl + 1:]
                 self._pos += nl + 1
                 out.append(line.rstrip(b"\r").decode("utf-8", errors="replace"))
                 continue
