@@ -24,8 +24,14 @@ def test_netbox_sync(admin):
     respx.get(f"{NB}/api/dcim/sites/").mock(
         return_value=_nb_page([{"id": 1, "name": "Bangalore", "slug": "blr", "latitude": 12.9, "longitude": 77.6}])
     )
+    long_rack = "Rack " + "x" * 95  # NetBox allows 100 characters
     respx.get(f"{NB}/api/dcim/racks/").mock(
-        return_value=_nb_page([{"id": 5, "name": "R01", "site": {"id": 1}, "u_height": 42}])
+        return_value=_nb_page(
+            [
+                {"id": 5, "name": "R01", "site": {"id": 1}, "u_height": 42},
+                {"id": 6, "name": long_rack, "site": {"id": 1}},
+            ]
+        )
     )
     devices = [
         {
@@ -73,7 +79,7 @@ def test_netbox_sync(admin):
 
     i = admin.post("/api/v1/integrations", json={"kind": "netbox", "name": "nb", "base_url": NB, "token": "t0k"}).json()
     stats = admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False}).json()
-    assert stats["devices"] == 2 and stats["links"] == 1 and stats["vlan"] == 1
+    assert stats["devices"] == 2 and stats["links"] == 1 and stats["vlan"] == 1 and stats["racks"] == 2
     devs = {d["hostname"]: d for d in admin.get("/api/v1/devices").json()["items"]}
     assert devs["mx204-blr"]["platform"]["slug"] == "junos" and devs["eos-sw1"]["platform"]["slug"] == "eos"
     assert devs["mx204-blr"]["serial"] == "ABC123" and devs["mx204-blr"]["site"]["name"] == "Bangalore"

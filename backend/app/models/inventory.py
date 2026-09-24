@@ -32,16 +32,16 @@ device_group_members = Table(
 class Region(UUIDPk, Timestamps, TenantScoped, Base):
     __tablename__ = "regions"
     __table_args__ = (UniqueConstraint("tenant_id", "slug"),)
-    name: Mapped[str] = mapped_column(String(128))
-    slug: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(128))
 
 
 class Site(UUIDPk, Timestamps, TenantScoped, Base):
     __tablename__ = "sites"
     __table_args__ = (UniqueConstraint("tenant_id", "slug"),)
 
-    name: Mapped[str] = mapped_column(String(128))
-    slug: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(128))
     region_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("regions.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(32), default="pop")  # pop|datacenter|office|ixp
     address: Mapped[str | None] = mapped_column(Text)
@@ -54,7 +54,7 @@ class Site(UUIDPk, Timestamps, TenantScoped, Base):
 
 class Rack(UUIDPk, Timestamps, TenantScoped, Base):
     __tablename__ = "racks"
-    name: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255))
     site_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("sites.id", ondelete="CASCADE"), index=True)
     u_height: Mapped[int] = mapped_column(Integer, default=42)
     netbox_id: Mapped[int | None] = mapped_column(Integer, index=True)
@@ -63,8 +63,8 @@ class Rack(UUIDPk, Timestamps, TenantScoped, Base):
 
 class Vendor(UUIDPk, Base):
     __tablename__ = "vendors"
-    name: Mapped[str] = mapped_column(String(64), unique=True)
-    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    slug: Mapped[str] = mapped_column(String(128), unique=True)
 
 
 class Platform(UUIDPk, Base):
@@ -90,7 +90,7 @@ class DeviceModel(UUIDPk, Base):
     __tablename__ = "device_models"
     __table_args__ = (UniqueConstraint("vendor_id", "name"),)
     vendor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vendors.id"))
-    name: Mapped[str] = mapped_column(String(128))
+    name: Mapped[str] = mapped_column(String(255))
     vendor: Mapped[Vendor] = relationship()
 
 
@@ -121,7 +121,7 @@ class Device(UUIDPk, Timestamps, TenantScoped, Base):
     credential_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("credentials.id", ondelete="SET NULL"))
     serial: Mapped[str | None] = mapped_column(String(128), index=True)
     os_version: Mapped[str | None] = mapped_column(String(128))
-    role: Mapped[str | None] = mapped_column(String(64))  # core|edge|route-server|firewall|ce|switch
+    role: Mapped[str | None] = mapped_column(String(128))  # core|edge|route-server|firewall|ce|switch
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|planned|offline|decommissioning
     reachability: Mapped[str] = mapped_column(String(16), default="unknown")  # up|down|unknown
     backup_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -162,9 +162,9 @@ class Link(UUIDPk, Timestamps, TenantScoped, Base):
 
     __tablename__ = "links"
     a_device_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="CASCADE"), index=True)
-    a_interface: Mapped[str] = mapped_column(String(64))
+    a_interface: Mapped[str] = mapped_column(String(128))
     b_device_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="CASCADE"), index=True)
-    b_interface: Mapped[str] = mapped_column(String(64))
+    b_interface: Mapped[str] = mapped_column(String(128))
     speed_mbps: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="up")
     source: Mapped[str] = mapped_column(String(16), default="netbox")

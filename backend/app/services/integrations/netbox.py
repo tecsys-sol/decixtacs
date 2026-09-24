@@ -50,6 +50,11 @@ MIRRORED = {
 }
 
 
+def _fit(value, limit: int):
+    """Trim a NetBox string to the portal column size (NetBox limits are usually smaller; this is a guard)."""
+    return value[:limit] if isinstance(value, str) else value
+
+
 def auth_header(token: str) -> str:
     """NetBox < 4.5 and v1 tokens use ``Token <key>``; NetBox 4.5+ v2 tokens (``nbt_<id>.<secret>``)
     must be sent as ``Bearer``. A value pasted with its scheme is used as-is."""
@@ -150,11 +155,13 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
         s.netbox_id: s for s in db.scalars(select(Site).where(Site.tenant_id == tenant_id, Site.netbox_id.is_not(None)))
     }
     for nb in client.paginate("/api/dcim/sites/", filters.get("sites")):
-        s = sites.get(nb["id"]) or db.scalar(select(Site).where(Site.tenant_id == tenant_id, Site.slug == nb["slug"]))
+        s = sites.get(nb["id"]) or db.scalar(
+            select(Site).where(Site.tenant_id == tenant_id, Site.slug == _fit(nb["slug"], 128))
+        )
         if s is None:
-            s = Site(tenant_id=tenant_id, slug=nb["slug"], name=nb["name"])
+            s = Site(tenant_id=tenant_id, slug=_fit(nb["slug"], 128), name=_fit(nb["name"], 255))
             db.add(s)
-        s.name, s.slug, s.netbox_id = nb["name"], nb["slug"], nb["id"]
+        s.name, s.slug, s.netbox_id = _fit(nb["name"], 255), _fit(nb["slug"], 128), nb["id"]
         s.address = nb.get("physical_address") or s.address
         s.latitude, s.longitude = nb.get("latitude"), nb.get("longitude")
         sites[nb["id"]] = s
@@ -170,9 +177,9 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
             continue
         r = racks.get(nb["id"])
         if r is None:
-            r = Rack(tenant_id=tenant_id, site_id=site.id, name=nb["name"], netbox_id=nb["id"])
+            r = Rack(tenant_id=tenant_id, site_id=site.id, name=_fit(nb["name"], 255), netbox_id=nb["id"])
             db.add(r)
-        r.name, r.site_id, r.u_height = nb["name"], site.id, nb.get("u_height") or 42
+        r.name, r.site_id, r.u_height = _fit(nb["name"], 255), site.id, int(nb.get("u_height") or 42)
         racks[nb["id"]] = r
     db.flush()
     stats["racks"] = len(racks)
@@ -195,22 +202,22 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
         manu = (nb.get("device_type") or {}).get("manufacturer") or {}
         vendor = vendors.get(manu.get("slug", ""))
         if vendor is None and manu.get("slug"):
-            vendor = Vendor(slug=manu["slug"], name=manu.get("name") or manu["slug"])
+            vendor = Vendor(slug=_fit(manu["slug"], 128), name=_fit(manu.get("name") or manu["slug"], 128))
             db.add(vendor)
             db.flush()
             vendors[vendor.slug] = vendor
         d = by_nb.get(nb["id"]) or by_name.get(nb["name"])
         if d is None:
-            d = Device(tenant_id=tenant_id, hostname=nb["name"], management_ip=ip)
+            d = Device(tenant_id=tenant_id, hostname=_fit(nb["name"], 128), management_ip=ip)
             db.add(d)
-        d.hostname, d.management_ip, d.netbox_id = nb["name"], ip, nb["id"]
+        d.hostname, d.management_ip, d.netbox_id = _fit(nb["name"], 128), ip, nb["id"]
         d.site_id = sites[nb["site"]["id"]].id if nb.get("site") and nb["site"]["id"] in sites else d.site_id
         d.rack_id = racks[nb["rack"]["id"]].id if nb.get("rack") and nb["rack"]["id"] in racks else None
         d.vendor_id = vendor.id if vendor else d.vendor_id
         pslug = map_platform(nb.get("platform"), manu.get("slug"), opts.get("platform_map", {}))
         if pslug and pslug in platforms:
             d.platform_id = platforms[pslug].id
-        model_name = (nb.get("device_type") or {}).get("model")
+        model_name = _fit((nb.get("device_type") or {}).get("model"), 255)
         if model_name and vendor:
             m = db.scalar(select(DeviceModel).where(DeviceModel.vendor_id == vendor.id, DeviceModel.name == model_name))
             if m is None:
@@ -218,9 +225,9 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
                 db.add(m)
                 db.flush()
             d.model_id = m.id
-        d.serial = nb.get("serial") or d.serial
+        d.serial = _fit(nb.get("serial"), 128) or d.serial
         role = nb.get("role") or nb.get("device_role") or {}
-        d.role = role.get("slug") or d.role
+        d.role = _fit(role.get("slug"), 128) or d.role
         status = (nb.get("status") or {}).get("value", "active")
         d.status = status if status in ("active", "planned", "offline", "decommissioning") else "active"
         d.tags = [t["slug"] for t in nb.get("tags", [])]
@@ -245,7 +252,7 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
             dbv = name_to_dev.get((b.get("device") or {}).get("name"))
             if not da or not dbv:
                 continue
-            key = (da.id, a.get("name", "?"), dbv.id, b.get("name", "?"))
+            key = (da.id, _fit(a.get("name", "?"), 128), dbv.id, _fit(b.get("name", "?"), 128))
             if key not in existing:
                 existing[key] = Link(
                     tenant_id=tenant_id,
