@@ -67,6 +67,29 @@ Backend containers run as uid 10001 with a read-only root filesystem, `no-new-pr
 all capabilities dropped. `make compose-up`, `make compose-init`, `make compose-logs` wrap the
 commands above.
 
+**Docker subnets must not overlap your management network.** Docker puts `docker0` on
+`172.17.0.0/16` and allocates Compose networks from `172.18.0.0/16` upwards (and
+`192.168.x.0/20`). If devices live in those ranges (for example `172.17.148.2`), the host
+routes their traffic into a local bridge: backups fail with *timed out reading from transport*
+and the device shows as down, although SSH works from other hosts. Check with
+`ip route get <device-ip>` - it must leave via the real interface (`eth0`/`ens5`), not
+`docker0`/`br-…`. Move Docker to an unused range before the first `up` (or afterwards, then
+`docker compose down && docker compose up -d` so the networks are recreated):
+
+`/etc/docker/daemon.json` (pick ranges used nowhere in your network):
+
+```json
+{
+  "bip": "192.168.200.1/24",
+  "default-address-pools": [{ "base": "192.168.208.0/20", "size": 24 }]
+}
+```
+
+```bash
+docker compose down && sudo systemctl restart docker && docker compose up -d
+ip route get 172.17.148.2         # now via the real interface
+```
+
 ## 4. Kubernetes
 
 Manifests: `deploy/k8s` (Kustomize).
