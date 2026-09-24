@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Building2,
+  KeyRound,
   ClipboardCheck,
   FileBarChart,
   FileClock,
@@ -95,6 +96,13 @@ export const NAV: NavGroup[] = [
         shortcut: "g b",
         keywords: ["git", "diff"],
         badge: "backups",
+      },
+      {
+        title: "Credentials",
+        href: "/credentials",
+        icon: KeyRound,
+        permission: "devices:read",
+        keywords: ["ssh", "password", "rancid", "backup login"],
       },
       {
         title: "Compliance",

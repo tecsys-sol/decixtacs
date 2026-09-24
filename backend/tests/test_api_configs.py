@@ -229,3 +229,30 @@ def test_audit_chain_survives_retention(admin):
         c.execute(text("SET LOCAL nom.allow_audit_purge = 'on'"))
         c.execute(text("DELETE FROM audit_events WHERE timestamp = (SELECT min(timestamp) FROM audit_events)"))
     assert admin.get("/api/v1/audit/verify").json()["intact"]
+
+
+def test_default_credential_used_for_devices_without_one(admin, fake_collector):
+    platforms = {p["slug"]: p["id"] for p in admin.get("/api/v1/platforms").json()}
+    dev = admin.post(
+        "/api/v1/devices",
+        json={"hostname": "blr-01-ixp01", "management_ip": "172.17.148.2", "platform_id": platforms["junos"]},
+    ).json()
+    b = _backup(admin)[0]
+    assert b["status"] == "failed" and "no credential" in b["error"] and "platform" not in b["error"]
+    r = admin.post(
+        "/api/v1/credentials", json={"name": "rancid", "username": "rancid", "password": "x", "make_default": True}
+    )
+    assert r.status_code == 201 and r.json()["is_default"]
+    assert _backup(admin)[0]["status"] == "success"  # falls back to the tenant default
+    creds = admin.get("/api/v1/credentials").json()
+    assert creds[0]["is_default"] and creds[0]["device_count"] == 0
+    # a device's own credential wins; deleting the default clears it
+    own = admin.post("/api/v1/credentials", json={"name": "own", "username": "u", "password": "p"}).json()
+    admin.patch(f"/api/v1/devices/{dev['id']}", json={"credential_id": own["id"]})
+    assert {c["name"]: c["device_count"] for c in admin.get("/api/v1/credentials").json()}["own"] == 1
+    assert admin.delete(f"/api/v1/credentials/{r.json()['id']}").status_code == 204
+    assert not any(c["is_default"] for c in admin.get("/api/v1/credentials").json())
+    assert admin.post(f"/api/v1/credentials/{own['id']}/default").json()["is_default"]
+    assert admin.delete("/api/v1/credentials/default").status_code == 204
+    actions = {a["action"] for a in admin.get("/api/v1/audit", params={"action": "credential.*"}).json()["items"]}
+    assert {"credential.create", "credential.set_default", "credential.clear_default", "credential.delete"} <= actions

@@ -29,7 +29,14 @@ from app.models import (
 )
 from app.services import audit
 from app.services import diff as diffsvc
-from app.services.backup.engine import build_target, device_relpath, run_backups, store_for
+from app.services.backup.engine import (
+    build_target,
+    default_credential,
+    device_relpath,
+    missing_for_backup,
+    run_backups,
+    store_for,
+)
 from app.services.compliance.engine import Rule, evaluate_rule
 from app.services.risk import analyse_diff
 
@@ -261,9 +268,10 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
                 raise HTTPException(409, "an approved change request covering this device is required")
     if not (d.platform and d.platform.supports_config_replace):
         raise HTTPException(422, "platform does not support atomic config replace")
-    target = build_target(d)
+    fallback = default_credential(ctx.db, ctx.tenant_id)
+    target = build_target(d, fallback)
     if target is None:
-        raise HTTPException(422, "device has no credential/platform")
+        raise HTTPException(422, missing_for_backup(d, fallback) or "device cannot be collected")
     config = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), b.commit_sha)
     if config and ("<removed>" in config or "&lt;removed&gt;" in config):
         # Backups taken with NOM_BACKUP_SANITIZE_SECRETS mask secrets; pushing them would overwrite
@@ -422,9 +430,10 @@ def drift_check(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:backup
     from app.services.drift import compare_running
 
     d = _device(ctx, device_id, "configs:backup")
-    target = build_target(d)
+    fallback = default_credential(ctx.db, ctx.tenant_id)
+    target = build_target(d, fallback)
     if target is None:
-        raise HTTPException(422, "device has no credential/platform")
+        raise HTTPException(422, missing_for_backup(d, fallback) or "device cannot be collected")
     res = engine.default_collect([target])[0]
     if not res.ok:
         raise HTTPException(502, f"collection failed: {res.error}")

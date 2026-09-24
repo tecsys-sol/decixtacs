@@ -14,7 +14,7 @@ from app.api.deps import Ctx, get_owned, require
 from app.api.v1.common import ORM, Page, paginate
 from app.core.security import encrypt_secret
 from app.db.base import utcnow
-from app.models import Credential, Device, DeviceGroup, Link, Platform, Rack, Region, Site, Vendor
+from app.models import Credential, Device, DeviceGroup, Link, Platform, Rack, Region, Site, Tenant, Vendor
 from app.services import audit, metrics
 from app.services.audit import model_snapshot
 
@@ -216,6 +216,7 @@ class CredentialIn(BaseModel):
     password: str | None = None
     ssh_key: str | None = None
     enable_secret: str | None = None
+    make_default: bool = False
 
 
 class CredentialOut(ORM):
@@ -224,18 +225,97 @@ class CredentialOut(ORM):
     username: str
     has_password: bool = False
     has_ssh_key: bool = False
+    has_enable_secret: bool = False
     rotated_at: datetime | None
+    is_default: bool = False
+    device_count: int = 0
 
 
-def _cred_out(c: Credential) -> CredentialOut:
+def _default_credential_id(ctx: Ctx) -> str | None:
+    tenant = ctx.db.get(Tenant, ctx.tenant_id)
+    return (tenant.settings or {}).get("default_credential_id") if tenant else None
+
+
+def _set_default_credential(ctx: Ctx, cred_id: uuid.UUID | None) -> None:
+    tenant = ctx.db.get(Tenant, ctx.tenant_id)
+    settings = dict(tenant.settings or {})  # new dict so the JSON column change is detected
+    if cred_id is None:
+        settings.pop("default_credential_id", None)
+    else:
+        settings["default_credential_id"] = str(cred_id)
+    tenant.settings = settings
+
+
+def _cred_out(c: Credential, default_id: str | None = None, counts: dict | None = None) -> CredentialOut:
     o = CredentialOut.model_validate(c)
     o.has_password, o.has_ssh_key = bool(c.password_enc), bool(c.ssh_key_enc)
+    o.has_enable_secret = bool(c.enable_secret_enc)
+    o.is_default = default_id == str(c.id)
+    o.device_count = (counts or {}).get(c.id, 0)
     return o
 
 
 @router.get("/credentials", response_model=list[CredentialOut])
 def list_credentials(ctx: Ctx = Depends(require("devices:read"))):
-    return [_cred_out(c) for c in ctx.db.scalars(select(Credential).where(Credential.tenant_id == ctx.tenant_id))]
+    counts = dict(
+        ctx.db.execute(
+            select(Device.credential_id, func.count())
+            .where(Device.tenant_id == ctx.tenant_id, Device.credential_id.is_not(None))
+            .group_by(Device.credential_id)
+        ).all()
+    )
+    default_id = _default_credential_id(ctx)
+    return [
+        _cred_out(c, default_id, counts)
+        for c in ctx.db.scalars(
+            select(Credential).where(Credential.tenant_id == ctx.tenant_id).order_by(Credential.name)
+        )
+    ]
+
+
+@router.post("/credentials/{cred_id}/default", response_model=CredentialOut)
+def make_default_credential(cred_id: uuid.UUID, ctx: Ctx = Depends(require("credentials:write"))):
+    """Use this credential for every device that has none of its own (e.g. the shared backup/RANCID account)."""
+    c = get_owned(ctx, Credential, cred_id, "credential")
+    _set_default_credential(ctx, c.id)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="credential.set_default",
+        actor=ctx.user,
+        target_type="credential",
+        target_id=c.id,
+        target_name=c.name,
+        source_ip=ctx.ip,
+    )
+    ctx.db.commit()
+    return _cred_out(c, str(c.id))
+
+
+@router.delete("/credentials/default", status_code=204)
+def clear_default_credential(ctx: Ctx = Depends(require("credentials:write"))):
+    _set_default_credential(ctx, None)
+    audit.record(ctx.db, tenant_id=ctx.tenant_id, action="credential.clear_default", actor=ctx.user, source_ip=ctx.ip)
+    ctx.db.commit()
+
+
+@router.delete("/credentials/{cred_id}", status_code=204)
+def delete_credential(cred_id: uuid.UUID, ctx: Ctx = Depends(require("credentials:write"))):
+    c = get_owned(ctx, Credential, cred_id, "credential")
+    if _default_credential_id(ctx) == str(c.id):
+        _set_default_credential(ctx, None)
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="credential.delete",
+        actor=ctx.user,
+        target_type="credential",
+        target_id=c.id,
+        target_name=c.name,
+        source_ip=ctx.ip,
+    )
+    ctx.db.delete(c)  # devices using it fall back to the default (FK ON DELETE SET NULL)
+    ctx.db.commit()
 
 
 @router.post("/credentials", response_model=CredentialOut, status_code=201)
@@ -261,8 +341,10 @@ def create_credential(body: CredentialIn, ctx: Ctx = Depends(require("credential
         target_name=c.name,
         source_ip=ctx.ip,
     )
+    if body.make_default:
+        _set_default_credential(ctx, c.id)
     ctx.db.commit()
-    return _cred_out(c)
+    return _cred_out(c, _default_credential_id(ctx))
 
 
 @router.put("/credentials/{cred_id}", response_model=CredentialOut)
@@ -286,8 +368,10 @@ def rotate_credential(cred_id: uuid.UUID, body: CredentialIn, ctx: Ctx = Depends
         target_name=c.name,
         source_ip=ctx.ip,
     )
+    if body.make_default:
+        _set_default_credential(ctx, c.id)
     ctx.db.commit()
-    return _cred_out(c)
+    return _cred_out(c, _default_credential_id(ctx))
 
 
 # --- devices ---------------------------------------------------------------------------

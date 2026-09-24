@@ -2610,7 +2610,174 @@
         }
       }
     },
+    "/api/v1/credentials/{cred_id}/default": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "Make Default Credential",
+        "description": "Use this credential for every device that has none of its own (e.g. the shared backup/RANCID account).",
+        "operationId": "make_default_credential_api_v1_credentials__cred_id__default_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cred_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cred Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/credentials/default": {
+      "delete": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "Clear Default Credential",
+        "operationId": "clear_default_credential_api_v1_credentials_default_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/credentials/{cred_id}": {
+      "delete": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "Delete Credential",
+        "operationId": "delete_credential_api_v1_credentials__cred_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cred_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cred Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "inventory"
@@ -10657,6 +10824,11 @@
               }
             ],
             "title": "Enable Secret"
+          },
+          "make_default": {
+            "type": "boolean",
+            "title": "Make Default",
+            "default": false
           }
         },
         "type": "object",
@@ -10691,6 +10863,11 @@
             "title": "Has Ssh Key",
             "default": false
           },
+          "has_enable_secret": {
+            "type": "boolean",
+            "title": "Has Enable Secret",
+            "default": false
+          },
           "rotated_at": {
             "anyOf": [
               {
@@ -10702,6 +10879,16 @@
               }
             ],
             "title": "Rotated At"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default",
+            "default": false
+          },
+          "device_count": {
+            "type": "integer",
+            "title": "Device Count",
+            "default": 0
           }
         },
         "type": "object",

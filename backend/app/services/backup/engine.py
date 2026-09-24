@@ -19,6 +19,7 @@ from app.models import (
     CommandLog,
     ConfigBackup,
     ConfigIndexEntry,
+    Credential,
     Device,
     DriftEvent,
     GoldenConfig,
@@ -73,10 +74,32 @@ def device_relpath(device: Device) -> str:
     return GitConfigStore.relpath(device.site.slug if device.site else None, device.hostname)
 
 
-def build_target(device: Device) -> CollectTarget | None:
-    if not device.platform or not device.credential or not device.management_ip:
+def default_credential(db: Session, tenant_id: uuid.UUID) -> Credential | None:
+    """Tenant-wide fallback credential (e.g. the shared RANCID/backup account) used by devices without their own."""
+    tenant = db.get(Tenant, tenant_id)
+    cid = (tenant.settings or {}).get("default_credential_id") if tenant else None
+    if not cid:
         return None
-    cred = device.credential
+    cred = db.get(Credential, uuid.UUID(str(cid)))
+    return cred if cred is not None and cred.tenant_id == tenant_id else None
+
+
+def missing_for_backup(device: Device, default_cred: Credential | None = None) -> str | None:
+    """Why a device cannot be collected, or None when it can."""
+    missing = []
+    if not device.management_ip:
+        missing.append("management IP")
+    if not device.platform:
+        missing.append("platform")
+    if not (device.credential or default_cred):
+        missing.append("credential (assign one or set a default under Credentials)")
+    return f"device has no {', no '.join(missing)}" if missing else None
+
+
+def build_target(device: Device, default_cred: Credential | None = None) -> CollectTarget | None:
+    if missing_for_backup(device, default_cred):
+        return None
+    cred = device.credential or default_cred
     return CollectTarget(
         device_id=str(device.id),
         hostname=device.hostname,
@@ -137,10 +160,11 @@ def run_backups(
         q = q.where(Device.id.in_(device_ids))
     devices = {str(d.id): d for d in db.scalars(q)}
     targets, backups = [], []
+    fallback = default_credential(db, tenant_id)
     for d in devices.values():
-        t = build_target(d)
+        t = build_target(d, fallback)
         if t is None:
-            backups.append(_record_failure(db, d, "device has no platform or credential assigned", trigger))
+            backups.append(_record_failure(db, d, missing_for_backup(d, fallback) or "not collectable", trigger))
         else:
             targets.append(t)
     if targets:

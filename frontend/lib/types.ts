@@ -191,7 +191,10 @@ export interface Credential {
   username: string;
   has_password?: boolean;
   has_ssh_key?: boolean;
+  has_enable_secret?: boolean;
   rotated_at: string | null;
+  is_default?: boolean;
+  device_count?: number;
 }
 
 export interface Device {
@@ -245,7 +248,13 @@ export interface DeviceGroup {
 }
 
 export interface Topology {
-  sites: { id: string; name: string; kind: string; lat: number | null; lon: number | null }[];
+  sites: {
+    id: string;
+    name: string;
+    kind: string;
+    lat: number | null;
+    lon: number | null;
+  }[];
   nodes: {
     id: string;
     label: string;
@@ -345,7 +354,11 @@ export interface RestoreOut {
 
 // --- compliance --------------------------------------------------------------------------
 
-export type ComplianceRuleType = "must_match" | "must_not_match" | "count_at_least" | "block_must_match";
+export type ComplianceRuleType =
+  | "must_match"
+  | "must_not_match"
+  | "count_at_least"
+  | "block_must_match";
 export type Severity = "low" | "medium" | "high" | "critical";
 
 export interface ComplianceRuleIn {
@@ -376,8 +389,19 @@ export interface ComplianceRun {
 
 export interface ComplianceRunDetail {
   run: ComplianceRun;
-  devices: { device_id: string; hostname: string; score: number; passed: number; failed: number }[];
-  failures: { device: string; rule: string; severity: string; detail: string }[];
+  devices: {
+    device_id: string;
+    hostname: string;
+    score: number;
+    passed: number;
+    failed: number;
+  }[];
+  failures: {
+    device: string;
+    rule: string;
+    severity: string;
+    detail: string;
+  }[];
   failures_by_rule: Record<string, number>;
 }
 
@@ -403,7 +427,15 @@ export interface TacacsServerCreated extends TacacsServer {
   agent_token: string;
 }
 
-export const TACACS_VENDORS = ["juniper", "cisco", "arista", "fortinet", "sophos", "mikrotik", "generic"] as const;
+export const TACACS_VENDORS = [
+  "juniper",
+  "cisco",
+  "arista",
+  "fortinet",
+  "sophos",
+  "mikrotik",
+  "generic",
+] as const;
 
 export interface NasIn {
   name: string;
@@ -625,7 +657,13 @@ export interface ChangeComment {
 export interface ChangeDetail {
   change: Change;
   comments: ChangeComment[];
-  backups: { id: string; device_id: string; commit_sha: string | null; collected_at: string; reason: string | null }[];
+  backups: {
+    id: string;
+    device_id: string;
+    commit_sha: string | null;
+    collected_at: string;
+    reason: string | null;
+  }[];
   allowed_transitions: string[];
 }
 
@@ -746,7 +784,13 @@ export interface Alert {
   acknowledged_at: string | null;
 }
 
-export const REPORT_TYPES = ["device_changes", "config_changes", "user_activity", "compliance", "tacacs"] as const;
+export const REPORT_TYPES = [
+  "device_changes",
+  "config_changes",
+  "user_activity",
+  "compliance",
+  "tacacs",
+] as const;
 export type ReportType = (typeof REPORT_TYPES)[number];
 export const REPORT_PERIODS = ["daily", "weekly", "monthly"] as const;
 export type ReportPeriod = (typeof REPORT_PERIODS)[number];
@@ -777,7 +821,12 @@ export interface Dashboard {
     by_reachability: Record<string, number>;
     by_site: { name: string; count: number }[];
   };
-  backups: { last: string | null; last_24h: number; failures_24h: number; devices_failing: number };
+  backups: {
+    last: string | null;
+    last_24h: number;
+    failures_24h: number;
+    devices_failing: number;
+  };
   compliance: { score: number | null; trend: { t: string; score: number }[] };
   tacacs: { auth_24h: Record<string, number>; accounting_24h: number };
   top_users: { user: string; commands: number }[];
@@ -794,7 +843,12 @@ export interface Dashboard {
     risk: number | null;
     commit: string | null;
   }[];
-  recent_audit: { at: string; actor: string; action: string; target: string | null }[];
+  recent_audit: {
+    at: string;
+    actor: string;
+    action: string;
+    target: string | null;
+  }[];
   open_changes: number;
   open_alerts: number;
 }
