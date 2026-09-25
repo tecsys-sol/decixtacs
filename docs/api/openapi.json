@@ -4756,6 +4756,61 @@
         }
       }
     },
+    "/api/v1/tacacs/servers/deploy-all": {
+      "post": {
+        "tags": [
+          "tacacs"
+        ],
+        "summary": "Deploy All",
+        "description": "Publish the current configuration to every enabled server in one step. Each agent pulls,\nvalidates and reloads independently; progress shows in ``GET /tacacs/servers``\n(``running_sha256`` == ``config_sha256`` once applied).",
+        "operationId": "deploy_all_api_v1_tacacs_servers_deploy_all_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployAllOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tacacs/servers/{server_id}/revisions": {
       "get": {
         "tags": [
@@ -5326,6 +5381,134 @@
         }
       }
     },
+    "/api/v1/backup-settings": {
+      "get": {
+        "tags": [
+          "configs"
+        ],
+        "summary": "Get Backup Settings",
+        "operationId": "get_backup_settings_api_v1_backup_settings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSettingsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backup-settings/{slug}": {
+      "put": {
+        "tags": [
+          "configs"
+        ],
+        "summary": "Put Backup Settings",
+        "description": "Tune collection for one platform, e.g. a longer timeout for large MX configs or fewer\nparallel sessions for devices with a low SSH session limit.",
+        "operationId": "put_backup_settings_api_v1_backup_settings__slug__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformBackupSettingsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSettingsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/devices/{device_id}/config": {
       "get": {
         "tags": [
@@ -5479,7 +5662,7 @@
           "configs"
         ],
         "summary": "Device Diff",
-        "description": "Diff two Git revisions (commit sha, ``HEAD~1`` ...) of a device configuration.",
+        "description": "Diff two Git revisions (commit sha, ``HEAD~1`` ...) of a device configuration.\n\nWith ``attribute`` (and ``accounting:read``), changed rows carry ``right_by``/``left_by``: the\nengineer and logged command that produced the line.",
         "operationId": "device_diff_api_v1_devices__device_id__diff_get",
         "security": [
           {
@@ -5534,6 +5717,16 @@
               "type": "boolean",
               "default": false,
               "title": "Include Inline"
+            }
+          },
+          {
+            "name": "attribute",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Attribute"
             }
           },
           {
@@ -9394,6 +9587,565 @@
           }
         }
       }
+    },
+    "/api/v1/rancid/import-credentials": {
+      "post": {
+        "tags": [
+          "rancid"
+        ],
+        "summary": "Import Credentials",
+        "description": "Turn RANCID's .cloginrc into credentials: devices sharing a login share one credential, the\nmost common login becomes the tenant default, the others are assigned per device.",
+        "operationId": "import_credentials_api_v1_rancid_import_credentials_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCredentialsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportCredentialsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rancid/configs": {
+      "post": {
+        "tags": [
+          "rancid"
+        ],
+        "summary": "Upload Configs",
+        "description": "Upload RANCID's configs as .tar.gz/.zip (``tar czf rancid.tgz -C /var/lib/rancid .``).\nReplaces previously uploaded copies of the same routers.",
+        "operationId": "upload_configs_api_v1_rancid_configs_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_configs_api_v1_rancid_configs_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "rancid"
+        ],
+        "summary": "Clear Configs",
+        "operationId": "clear_configs_api_v1_rancid_configs_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rancid/compare": {
+      "get": {
+        "tags": [
+          "rancid"
+        ],
+        "summary": "Compare",
+        "description": "Every uploaded RANCID config next to NOM's latest backup of the same device.",
+        "operationId": "compare_api_v1_rancid_compare_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CompareRow"
+                  },
+                  "title": "Response Compare Api V1 Rancid Compare Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rancid/compare/{rancid_id}": {
+      "get": {
+        "tags": [
+          "rancid"
+        ],
+        "summary": "Compare One",
+        "description": "Side-by-side diff: RANCID's copy (old/left) vs NOM's latest backup (new/right), both normalised.",
+        "operationId": "compare_one_api_v1_rancid_compare__rancid_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "rancid_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Rancid Id"
+            }
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "title": "Context"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ipam/summary": {
+      "get": {
+        "tags": [
+          "ipam"
+        ],
+        "summary": "Summary",
+        "operationId": "summary_api_v1_ipam_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ipam/{kind}": {
+      "get": {
+        "tags": [
+          "ipam"
+        ],
+        "summary": "List Objects",
+        "operationId": "list_objects_api_v1_ipam__kind__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site"
+            }
+          },
+          {
+            "name": "vrf",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vrf"
+            }
+          },
+          {
+            "name": "device",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device"
+            }
+          },
+          {
+            "name": "family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 6,
+                  "minimum": 4
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Family"
+            }
+          },
+          {
+            "name": "within",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "only prefixes/IPs inside this CIDR",
+              "title": "Within"
+            },
+            "description": "only prefixes/IPs inside this CIDR"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IpamPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -10030,6 +10782,32 @@
         "type": "object",
         "title": "BackupRequest"
       },
+      "BackupSettingsOut": {
+        "properties": {
+          "default_timeout": {
+            "type": "integer",
+            "title": "Default Timeout"
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "title": "Max Concurrency"
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformBackupSettings"
+            },
+            "type": "array",
+            "title": "Platforms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "default_timeout",
+          "max_concurrency",
+          "platforms"
+        ],
+        "title": "BackupSettingsOut"
+      },
       "BindingIn": {
         "properties": {
           "role_id": {
@@ -10177,6 +10955,20 @@
           "role"
         ],
         "title": "BindingOut"
+      },
+      "Body_upload_configs_api_v1_rancid_configs_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_configs_api_v1_rancid_configs_post"
       },
       "Body_upload_recording_api_v1_sessions_post": {
         "properties": {
@@ -10782,6 +11574,123 @@
         ],
         "title": "CommentIn"
       },
+      "CompareRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "rancid_name": {
+            "type": "string",
+            "title": "Rancid Name"
+          },
+          "rancid_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rancid Group"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "rancid_lines": {
+            "type": "integer",
+            "title": "Rancid Lines"
+          },
+          "portal_lines": {
+            "type": "integer",
+            "title": "Portal Lines"
+          },
+          "only_in_rancid": {
+            "type": "integer",
+            "title": "Only In Rancid"
+          },
+          "only_in_portal": {
+            "type": "integer",
+            "title": "Only In Portal"
+          },
+          "similarity": {
+            "type": "number",
+            "title": "Similarity"
+          },
+          "portal_collected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Portal Collected At"
+          },
+          "imported_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Imported At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "rancid_name",
+          "rancid_group",
+          "device_id",
+          "hostname",
+          "platform",
+          "status",
+          "rancid_lines",
+          "portal_lines",
+          "only_in_rancid",
+          "only_in_portal",
+          "similarity",
+          "portal_collected_at",
+          "imported_at"
+        ],
+        "title": "CompareRow"
+      },
       "CredentialIn": {
         "properties": {
           "name": {
@@ -10899,6 +11808,72 @@
           "rotated_at"
         ],
         "title": "CredentialOut"
+      },
+      "DeployAllItem": {
+        "properties": {
+          "server_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Server Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_id",
+          "name",
+          "version",
+          "sha256",
+          "created"
+        ],
+        "title": "DeployAllItem"
+      },
+      "DeployAllOut": {
+        "properties": {
+          "deployed": {
+            "items": {
+              "$ref": "#/components/schemas/DeployAllItem"
+            },
+            "type": "array",
+            "title": "Deployed"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deployed",
+          "skipped",
+          "warnings"
+        ],
+        "title": "DeployAllOut"
       },
       "DeviceGroupIn": {
         "properties": {
@@ -11543,6 +12518,29 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Risk"
+          },
+          "authors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Authors",
+            "default": []
+          },
+          "commands": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Commands",
+            "default": []
+          },
+          "attributed": {
+            "type": "boolean",
+            "title": "Attributed",
+            "default": false
           }
         },
         "type": "object",
@@ -11879,6 +12877,126 @@
         "type": "object",
         "title": "HeartbeatIn"
       },
+      "ImportCredentialsIn": {
+        "properties": {
+          "cloginrc": {
+            "type": "string",
+            "title": "Cloginrc"
+          },
+          "router_db": {
+            "type": "string",
+            "title": "Router Db",
+            "default": ""
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          },
+          "set_platforms": {
+            "type": "boolean",
+            "title": "Set Platforms",
+            "default": true
+          },
+          "overwrite": {
+            "type": "boolean",
+            "title": "Overwrite",
+            "default": false
+          },
+          "default_user": {
+            "type": "string",
+            "title": "Default User",
+            "default": "rancid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cloginrc"
+        ],
+        "title": "ImportCredentialsIn"
+      },
+      "ImportCredentialsOut": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/PlannedCredential"
+            },
+            "type": "array",
+            "title": "Credentials"
+          },
+          "assigned": {
+            "type": "integer",
+            "title": "Assigned"
+          },
+          "kept_existing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kept Existing"
+          },
+          "no_login": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "No Login"
+          },
+          "ssh_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ssh Keys"
+          },
+          "router_db_not_in_inventory": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Router Db Not In Inventory"
+          },
+          "router_db_down": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Router Db Down"
+          },
+          "platforms_set": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Platforms Set"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dry_run",
+          "credentials",
+          "assigned",
+          "kept_existing",
+          "no_login",
+          "ssh_keys",
+          "router_db_not_in_inventory",
+          "router_db_down",
+          "platforms_set",
+          "warnings"
+        ],
+        "title": "ImportCredentialsOut"
+      },
       "ImportIn": {
         "properties": {
           "content": {
@@ -12148,6 +13266,51 @@
           "last_sync_detail"
         ],
         "title": "IntegrationOut"
+      },
+      "IpamPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synced At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "synced_at"
+        ],
+        "title": "IpamPage"
       },
       "LoginIn": {
         "properties": {
@@ -13056,6 +14219,168 @@
           "description"
         ],
         "title": "PermissionOut"
+      },
+      "PlannedCredential": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "has_password": {
+            "type": "boolean",
+            "title": "Has Password"
+          },
+          "has_enable_secret": {
+            "type": "boolean",
+            "title": "Has Enable Secret"
+          },
+          "existing": {
+            "type": "boolean",
+            "title": "Existing"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "devices": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Devices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "username",
+          "has_password",
+          "has_enable_secret",
+          "existing",
+          "is_default",
+          "devices"
+        ],
+        "title": "PlannedCredential"
+      },
+      "PlatformBackupSettings": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "default_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Commands"
+          },
+          "commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commands"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout"
+          },
+          "concurrency": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concurrency"
+          },
+          "device_count": {
+            "type": "integer",
+            "title": "Device Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "default_commands",
+          "commands",
+          "timeout",
+          "concurrency",
+          "device_count"
+        ],
+        "title": "PlatformBackupSettings"
+      },
+      "PlatformBackupSettingsIn": {
+        "properties": {
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 900.0,
+                "minimum": 5.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout"
+          },
+          "concurrency": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concurrency"
+          },
+          "commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commands"
+          }
+        },
+        "type": "object",
+        "title": "PlatformBackupSettingsIn"
       },
       "PlatformOut": {
         "properties": {
@@ -14042,6 +15367,39 @@
             ],
             "title": "Last Heartbeat At"
           },
+          "running_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running Sha256"
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Status"
+          },
+          "agent_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Message"
+          },
           "agent_token": {
             "type": "string",
             "title": "Agent Token"
@@ -14161,6 +15519,39 @@
               }
             ],
             "title": "Last Heartbeat At"
+          },
+          "running_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running Sha256"
+          },
+          "agent_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Status"
+          },
+          "agent_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Message"
           }
         },
         "type": "object",
@@ -14538,6 +15929,32 @@
           "transition"
         ],
         "title": "TransitionIn"
+      },
+      "UploadOut": {
+        "properties": {
+          "files": {
+            "type": "integer",
+            "title": "Files"
+          },
+          "matched": {
+            "type": "integer",
+            "title": "Matched"
+          },
+          "unmatched": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmatched"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files",
+          "matched",
+          "unmatched"
+        ],
+        "title": "UploadOut"
       },
       "UserIn": {
         "properties": {

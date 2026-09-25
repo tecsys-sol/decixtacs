@@ -281,19 +281,63 @@ def _change_ops(st: DevState, rng: random.Random) -> list[tuple[str, Callable[[]
     return ops
 
 
-def _acct_lines(st: DevState, ip: str, user: str, when: datetime, reason: str) -> list[str]:
-    ts = lambda d: (when - timedelta(minutes=d)).strftime("%Y-%m-%d %H:%M:%S +0000")  # noqa: E731
-    pre = f"\t{ip}\t{user}\tssh\t192.0.2.{10 + len(user)}\tstop"
+def _config_commands(platform: str, before: str, after: str) -> list[str]:
+    """The commands an engineer would have typed to turn ``before`` into ``after``."""
+    old, new = before.splitlines(), after.splitlines()
+    removed = [ln for ln in old if ln not in set(new)]
+    added = [ln for ln in new if ln not in set(old)]
+    if platform == "junos":
+        return [f"delete {ln.removeprefix('set ')}" for ln in removed] + added
+    if platform == "fortios":
+        return []
+    cmds: list[str] = []
+    for ln in removed:
+        cmds.append(f"no {ln.strip()}")
+    parent = None
+    for ln in added:
+        if ln.startswith(" "):  # sub-command: enter its parent block first
+            idx = new.index(ln)
+            p = next((new[k] for k in range(idx, -1, -1) if not new[k].startswith(" ")), None)
+            if p and p != parent:
+                cmds.append(p)
+                parent = p
+        else:
+            parent = None
+        cmds.append(ln.strip())
+    return cmds
+
+
+def _acct_lines(
+    st: DevState,
+    ip: str,
+    user: str,
+    when: datetime,
+    reason: str,
+    commands: list[str] | None = None,
+    helper: str | None = None,
+) -> list[str]:
+    """Accounting records of one change; with ``helper`` a second engineer typed the last part."""
+    commands = commands or []
     if st.platform == "junos":
-        cmds = ["configure private", "show | compare", f'commit comment "{reason}"', "exit"]
+        head, tail = ["configure private"], ["show | compare", f'commit comment "{reason}"', "exit"]
         svc = "junos-exec"
     elif st.platform == "fortios":
-        cmds = ["config firewall policy", "edit 0", "end"]
+        head, tail = ["config firewall policy", "edit 0"], ["end"]
         svc = "fortigate"
     else:
-        cmds = ["configure terminal", "end", "write memory"]
+        head, tail = ["configure terminal"], ["end", "write memory"]
         svc = "shell"
-    return [f"{ts(8 - k)}{pre}\tservice={svc}\tcmd={c}" for k, c in enumerate(cmds)]
+    split = len(commands) - len(commands) // 3 if helper and len(commands) >= 3 else len(commands)
+    seq = [(user, c) for c in head + commands[:split]]
+    if split < len(commands):
+        seq += [(helper, c) for c in head + commands[split:]] + [(helper, "exit" if st.platform == "junos" else "end")]
+    seq += [(user, c) for c in tail]
+    total = len(seq)
+    out = []
+    for k, (u, c) in enumerate(seq):
+        ts = (when - timedelta(seconds=20 * (total - k) + 60)).strftime("%Y-%m-%d %H:%M:%S +0000")
+        out.append(f"{ts}\t{ip}\t{u}\tssh\t192.0.2.{10 + len(u)}\tstop\tservice={svc}\tcmd={c}")
+    return out
 
 
 class _Collector:
@@ -555,9 +599,13 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
         if not ops:
             return
         why, op = rng.choice(ops)
+        before = st.render()
         op()
         author = rng.choice(["alice", "alice", "bob", "dave"])
-        ingest_lines(db, tid, _acct_lines(st, devices[host].management_ip, author, when, why))
+        # now and then a colleague finishes part of the change in their own session
+        helper = rng.choice([u for u in ("alice", "bob", "dave") if u != author]) if rng.random() < 0.3 else None
+        cmds = _config_commands(st.platform, before, st.render())
+        ingest_lines(db, tid, _acct_lines(st, devices[host].management_ip, author, when, why, cmds, helper))
         snapshot([host], when)
         stats["changes"] += 1
 
@@ -642,8 +690,11 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
         db.flush()
 
     def cr_change(key: str, host: str, when: datetime, why: str, mutate: Callable[[DevState], object]) -> None:
-        mutate(states[host])
-        ingest_lines(db, tid, _acct_lines(states[host], devices[host].management_ip, "alice", when, why))
+        st = states[host]
+        before = st.render()
+        mutate(st)
+        cmds = _config_commands(st.platform, before, st.render())
+        ingest_lines(db, tid, _acct_lines(st, devices[host].management_ip, "alice", when, why, cmds))
         snapshot([host], when, trigger="change", change_request_id=crs[key].id)
         stats["changes"] += 1
 

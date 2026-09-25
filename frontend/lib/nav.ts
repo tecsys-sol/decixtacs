@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArchiveRestore,
+  Binary,
   Bell,
   Building2,
   KeyRound,
@@ -70,6 +72,13 @@ export const NAV: NavGroup[] = [
         keywords: ["pop", "datacenter", "rack", "netbox"],
       },
       {
+        title: "IPAM",
+        href: "/ipam",
+        icon: Binary,
+        permission: "devices:read",
+        keywords: ["prefix", "vlan", "ip address", "vrf", "netbox"],
+      },
+      {
         title: "Network map",
         href: "/map",
         icon: Waypoints,
@@ -103,6 +112,13 @@ export const NAV: NavGroup[] = [
         icon: KeyRound,
         permission: "devices:read",
         keywords: ["ssh", "password", "rancid", "backup login"],
+      },
+      {
+        title: "RANCID migration",
+        href: "/rancid",
+        icon: ArchiveRestore,
+        permission: "configs:read",
+        keywords: ["rancid", "cloginrc", "router.db", "compare", "migrate"],
       },
       {
         title: "Compliance",

@@ -77,7 +77,8 @@ def test_line_based_cli_and_inferred_fallback():
         _log("shashank", "end", 4),
     ]
     edits = attribution.expand(logs, junos=False)
-    assert [e.full for e in edits] == ["interface Gi0/1", "description uplink", "no shutdown"]
+    assert [e.full for e in edits if not e.config_mode] == ["interface Gi0/1", "description uplink", "no shutdown"]
+    assert [e.full for e in edits if e.config_mode] == ["configure terminal"]
     rows = diffsvc.side_by_side(old, new, None)
     attribution.attribute(rows, edits, junos=False)
     changed = [r for r in rows if r["type"] != "equal"]
@@ -134,3 +135,18 @@ def test_diff_endpoint_returns_authors(admin, db, tenant, fake_collector):  # no
     ).json()
     assert plain["authors"] == [] and not plain["attributed"]
     assert CONFIGS[2]  # fixture data in use
+
+
+def test_config_mode_only_accounting_infers_the_engineer():
+    """Junos without change-log accounting logs only configure/commit - the sole engineer is inferred."""
+    rows = diffsvc.side_by_side("set a 1\n", "set a 1\nset b 2\n", None)
+    logs = [
+        _log("alice", "configure private", 0),
+        _log("alice", 'commit comment "b"', 1),
+        _log("bob", "show route", 2, "s2"),  # not configuration
+    ]
+    edits = attribution.expand(logs, junos=True)
+    authors = attribution.attribute(rows, edits, junos=True)
+    by = next(r for r in rows if r.get("right") == "set b 2")["right_by"]
+    assert by["user"] == "alice" and by["confidence"] == "inferred" and by["command"].startswith("commit")
+    assert authors[0]["inferred"] == 1

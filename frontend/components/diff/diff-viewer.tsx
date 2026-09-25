@@ -37,6 +37,13 @@ function lineDelay(i: number): React.CSSProperties | undefined {
   return i < 40 ? { animationDelay: `${(i * 0.035).toFixed(3)}s` } : undefined;
 }
 
+const STRUCTURAL = new Set(["", "!", "#", "}", "exit", "end", "next"]);
+
+/** Separator / block-end lines nobody "types" - not counted as unattributed. */
+function isStructural(r: DiffRow): boolean {
+  return [r.left, r.right].every((t) => STRUCTURAL.has((t ?? "").trim()));
+}
+
 /** How rows are coloured by engineer; ``colors`` is empty when colouring is off. */
 interface Staff {
   colors: Map<string, string>;
@@ -305,7 +312,9 @@ export function DiffViewer({
   const unattributed = React.useMemo(
     () =>
       diff.side_by_side.reduce(
-        (n, r) => n + (r.type === "added" || r.type === "removed" || r.type === "modified" ? (r.right_by || r.left_by ? 0 : 1) : 0),
+        (n, r) =>
+          n +
+          ((r.type === "added" || r.type === "removed" || r.type === "modified") && !r.right_by && !r.left_by && !isStructural(r) ? 1 : 0),
         0,
       ),
     [diff.side_by_side],

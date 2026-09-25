@@ -2,10 +2,11 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { DatabaseBackup, GitCompare, Play, Trash2 } from "lucide-react";
+import { DatabaseBackup, GitCompare, Play, SlidersHorizontal, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { Chart, useChartTheme } from "@/components/charts/chart";
+import { BackupSettingsDialog } from "@/components/backups/backup-settings-dialog";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { ConfirmDialog, useConfirm } from "@/components/common/confirm-dialog";
 import { EmptyState } from "@/components/common/empty-state";
@@ -159,6 +160,7 @@ export default function BackupsPage() {
   const [author, setAuthor] = React.useState(filters.author);
   const debouncedAuthor = useDebounce(author, 400);
   const [runOpen, setRunOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const confirm = useConfirm<Backup>();
   const offset = Number(filters.offset) || 0;
 
@@ -224,13 +226,19 @@ export default function BackupsPage() {
         title="Backups"
         description="Every configuration collection across the fleet, stored in Git."
         actions={
-          can("configs:backup") ? (
-            <Button onClick={() => setRunOpen(true)}>
-              <DatabaseBackup /> Run backup
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+              <SlidersHorizontal /> Backup settings
             </Button>
-          ) : null
+            {can("configs:backup") ? (
+              <Button onClick={() => setRunOpen(true)}>
+                <DatabaseBackup /> Run backup
+              </Button>
+            ) : null}
+          </div>
         }
       />
+      <BackupSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <div className="mb-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <ChartCard title="Backup outcomes" description={`Last 30 days, matching the filters${statsNote}`}>
           <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.n} emptyTitle="No backups in 30 days" emptyIcon={DatabaseBackup} emptyArt="default" height={240}>

@@ -37,6 +37,14 @@ _NON_CONFIG = re.compile(
 )
 _JUNOS_VERBS = ("set", "delete", "deactivate", "activate", "replace", "insert", "annotate", "protect", "unprotect")
 MAX_COMMANDS = 5000
+STRUCTURAL = {"", "!", "#", "}", "exit", "end", "next"}
+
+
+# entering/leaving configuration mode or committing: evidence someone configured the device even
+# when the individual commands are not in the log (e.g. Junos without change-log accounting)
+CONFIG_MODE = re.compile(
+    r"^(configure|conf t|config(ure)? (terminal|private|exclusive)|commit|write( mem)?|copy run|rollback|load )", re.I
+)
 
 
 @dataclass
@@ -45,6 +53,7 @@ class Edit:
     at: datetime
     command: str  # as logged
     full: str  # normalised, with the Junos edit path applied
+    config_mode: bool = False  # only evidence of configuration activity, produces no line
 
 
 def norm(text: str) -> str:
@@ -77,6 +86,9 @@ def expand(rows: list[CommandLog], junos: bool) -> list[Edit]:
             continue
         seen.add(key)
         sess = (r.username, r.session_id or r.task_id or r.port or "")
+        if CONFIG_MODE.match(cmd):
+            out.append(Edit(r.username, r.timestamp, r.command, cmd, config_mode=True))
+            continue
         if junos:
             words = cmd.split(" ")
             verb = words[0].lower()
@@ -166,9 +178,9 @@ def _by(e: Edit, confidence: str) -> dict:
 
 def attribute(rows: list[dict], edits: list[Edit], junos: bool) -> list[dict]:
     """Annotate diff rows in place with ``right_by`` / ``left_by``; returns the per-engineer summary."""
-    latest_first = list(reversed(edits))
-    users = {e.username for e in edits}
-    sole = latest_first[0] if len(users) == 1 else None
+    config_users = {e.username for e in edits}
+    sole = next((e for e in reversed(edits)), None) if len(config_users) == 1 else None
+    latest_first = [e for e in reversed(edits) if not e.config_mode]
     counts: dict[str, dict] = {}
 
     def find_add(line: str) -> dict | None:
@@ -213,6 +225,8 @@ def attribute(rows: list[dict], edits: list[Edit], junos: bool) -> list[dict]:
         t = r.get("type")
         if t not in ("added", "removed", "modified"):
             continue
+        if all(norm(r.get(k) or "") in STRUCTURAL for k in ("left", "right")):
+            continue  # separators / block ends nobody "typed"
         right = find_add(r["right"]) if t in ("added", "modified") and r.get("right") is not None else None
         left = find_remove(r["left"]) if t in ("removed", "modified") and r.get("left") is not None else None
         if t == "modified" and left is None and right is not None and _same_leaf(r["left"], r["right"]):

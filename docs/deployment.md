@@ -336,6 +336,27 @@ language and cannot be driven by the agent. Migrate without touching devices or 
    and *Deploy*. Test logins and command authorization per vendor; roll back by stopping tac_plus-ng and
    starting the old daemon.
 
+### Migrating backups from RANCID
+
+**Configuration → RANCID migration**:
+
+1. Paste `~rancid/.cloginrc` (and `cat /var/lib/rancid/*/router.db`) → **Preview** → **Import**. Each
+   device gets the login clogin would use; the most common one becomes the default credential,
+   the others are assigned per device, and router.db fills in missing platforms. Devices RANCID
+   reaches with an SSH key are listed - add the key to a credential yourself.
+2. Run a backup, then on the RANCID host `tar czf rancid-configs.tgz -C /var/lib/rancid .` and
+   **Upload RANCID configs**. Each router shows *Identical* / *Differs* (with a side-by-side diff) /
+   *No NOM backup yet*. Retire RANCID once everything is identical or differs only by recent changes.
+
+Slow or session-limited platforms: **Backups → Backup settings** sets timeout, parallel sessions
+and collection commands per platform.
+
+**Who changed what**: config diffs colour every changed line by the engineer whose TACACS+
+accounting record produced it. For exact per-line attribution on Junos, send configuration
+changes to TACACS+ accounting (`set system accounting events [ login change-log interactive-commands ]`);
+IOS/EOS need `aaa accounting commands 15 ... start-stop group tacacs+`. With only
+configure/commit logged, lines are attributed as *inferred* when one engineer configured the device.
+
 ## 9. Integrations
 
 All integrations are per tenant: `POST /api/v1/integrations` (permission `integrations:write`),
