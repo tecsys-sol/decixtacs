@@ -7,8 +7,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
-from sqlalchemy import String, cast, select
+from pydantic import BaseModel, Field
+from sqlalchemy import String, cast, func, select
 
 from app.api.deps import Ctx, get_owned, require
 from app.api.v1.common import ORM, Page, paginate
@@ -26,6 +26,8 @@ from app.models import (
     DeviceGroup,
     DriftEvent,
     GoldenConfig,
+    Platform,
+    Tenant,
 )
 from app.services import attribution, audit
 from app.services import diff as diffsvc
@@ -34,6 +36,7 @@ from app.services.backup.engine import (
     default_credential,
     device_relpath,
     missing_for_backup,
+    platform_settings,
     run_backups,
     store_for,
 )
@@ -143,6 +146,101 @@ def trigger_backup(body: BackupRequest, ctx: Ctx = Depends(require("configs:back
     )
     ctx.db.commit()
     return {"backups": [BackupOut.model_validate(b) for b in backups]}
+
+
+# --- per-platform backup settings ---------------------------------------------------------
+
+
+class PlatformBackupSettings(BaseModel):
+    slug: str
+    name: str
+    default_commands: list[str]
+    commands: list[str] | None  # override, None = default
+    timeout: int | None  # seconds, None = 60
+    concurrency: int | None  # parallel sessions, None = NOM_BACKUP_CONCURRENCY
+    device_count: int
+
+
+class BackupSettingsOut(BaseModel):
+    default_timeout: int
+    max_concurrency: int
+    platforms: list[PlatformBackupSettings]
+
+
+class PlatformBackupSettingsIn(BaseModel):
+    timeout: int | None = Field(None, ge=5, le=900)
+    concurrency: int | None = Field(None, ge=1, le=500)
+    commands: list[str] | None = None
+
+
+def _backup_settings(ctx: Ctx) -> BackupSettingsOut:
+    from app.core.config import get_settings
+
+    tuned = platform_settings(ctx.db, ctx.tenant_id)
+    counts = dict(
+        ctx.db.execute(
+            select(Device.platform_id, func.count())
+            .where(Device.tenant_id == ctx.tenant_id, Device.platform_id.is_not(None))
+            .group_by(Device.platform_id)
+        ).all()
+    )
+    out = []
+    for p in ctx.db.scalars(select(Platform).order_by(Platform.name)):
+        t = tuned.get(p.slug) or {}
+        out.append(
+            PlatformBackupSettings(
+                slug=p.slug,
+                name=p.name,
+                default_commands=p.backup_commands or [],
+                commands=t.get("commands"),
+                timeout=t.get("timeout"),
+                concurrency=t.get("concurrency"),
+                device_count=counts.get(p.id, 0),
+            )
+        )
+    return BackupSettingsOut(default_timeout=60, max_concurrency=get_settings().backup_concurrency, platforms=out)
+
+
+@router.get("/backup-settings", response_model=BackupSettingsOut)
+def get_backup_settings(ctx: Ctx = Depends(require("configs:read"))):
+    return _backup_settings(ctx)
+
+
+@router.put("/backup-settings/{slug}", response_model=BackupSettingsOut)
+def put_backup_settings(slug: str, body: PlatformBackupSettingsIn, ctx: Ctx = Depends(require("configs:backup"))):
+    """Tune collection for one platform, e.g. a longer timeout for large MX configs or fewer
+    parallel sessions for devices with a low SSH session limit."""
+    from app.services.backup.engine import PLATFORM_SETTINGS_KEY
+
+    if ctx.db.scalar(select(Platform).where(Platform.slug == slug)) is None:
+        raise HTTPException(404, "platform not found")
+    tenant = ctx.db.get(Tenant, ctx.tenant_id)
+    settings = dict(tenant.settings or {})
+    tuned = dict(settings.get(PLATFORM_SETTINGS_KEY) or {})
+    before = tuned.get(slug)
+    commands = [c.strip() for c in body.commands or [] if c.strip()] or None
+    entry = {
+        k: v for k, v in {"timeout": body.timeout, "concurrency": body.concurrency, "commands": commands}.items() if v
+    }
+    if entry:
+        tuned[slug] = entry
+    else:
+        tuned.pop(slug, None)
+    settings[PLATFORM_SETTINGS_KEY] = tuned
+    tenant.settings = settings
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="config.backup_settings",
+        actor=ctx.user,
+        target_type="platform",
+        target_name=slug,
+        before=before,
+        after=entry or None,
+        source_ip=ctx.ip,
+    )
+    ctx.db.commit()
+    return _backup_settings(ctx)
 
 
 @router.get("/devices/{device_id}/config", response_class=PlainTextResponse)
@@ -295,7 +393,7 @@ def restore(device_id: uuid.UUID, body: RestoreIn, ctx: Ctx = Depends(require("c
     if not (d.platform and d.platform.supports_config_replace):
         raise HTTPException(422, "platform does not support atomic config replace")
     fallback = default_credential(ctx.db, ctx.tenant_id)
-    target = build_target(d, fallback)
+    target = build_target(d, fallback, platform_settings(ctx.db, ctx.tenant_id))
     if target is None:
         raise HTTPException(422, missing_for_backup(d, fallback) or "device cannot be collected")
     config = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), b.commit_sha)
@@ -457,7 +555,7 @@ def drift_check(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:backup
 
     d = _device(ctx, device_id, "configs:backup")
     fallback = default_credential(ctx.db, ctx.tenant_id)
-    target = build_target(d, fallback)
+    target = build_target(d, fallback, platform_settings(ctx.db, ctx.tenant_id))
     if target is None:
         raise HTTPException(422, missing_for_backup(d, fallback) or "device cannot be collected")
     res = engine.default_collect([target])[0]

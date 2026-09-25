@@ -256,3 +256,35 @@ def test_default_credential_used_for_devices_without_one(admin, fake_collector):
     assert admin.delete("/api/v1/credentials/default").status_code == 204
     actions = {a["action"] for a in admin.get("/api/v1/audit", params={"action": "credential.*"}).json()["items"]}
     assert {"credential.create", "credential.set_default", "credential.clear_default", "credential.delete"} <= actions
+
+
+def test_per_platform_backup_settings(admin, fake_collector, monkeypatch):
+    seen = []
+
+    def collect(targets, workers=50, timeout=60):
+        seen.append((sorted(t.hostname for t in targets), workers, timeout, [list(t.commands) for t in targets]))
+        return [CollectResult(t.device_id, True, config=CONFIGS[1], duration_ms=5) for t in targets]
+
+    monkeypatch.setattr(engine, "nornir_collect", collect)
+    _device(admin)
+    s = admin.get("/api/v1/backup-settings").json()
+    junos = next(p for p in s["platforms"] if p["slug"] == "junos")
+    assert junos["device_count"] == 1 and junos["timeout"] is None and junos["default_commands"]
+    r = admin.put(
+        "/api/v1/backup-settings/junos",
+        json={"timeout": 180, "concurrency": 4, "commands": ["show configuration | display set | no-more", " "]},
+    )
+    assert r.status_code == 200
+    junos = next(p for p in r.json()["platforms"] if p["slug"] == "junos")
+    assert (junos["timeout"], junos["concurrency"]) == (180, 4)
+    assert junos["commands"] == ["show configuration | display set | no-more"]
+    _backup(admin)
+    assert seen[-1][1:3] == (4, 180)
+    assert admin.put("/api/v1/backup-settings/junos", json={"timeout": 1}).status_code == 422
+    assert admin.put("/api/v1/backup-settings/nope", json={}).status_code == 404
+    # empty body resets to defaults
+    reset = admin.put("/api/v1/backup-settings/junos", json={}).json()
+    assert next(p for p in reset["platforms"] if p["slug"] == "junos")["timeout"] is None
+    _backup(admin)
+    assert seen[-1][2] == 60
+    assert admin.get("/api/v1/audit", params={"action": "config.backup_settings"}).json()["total"] == 2

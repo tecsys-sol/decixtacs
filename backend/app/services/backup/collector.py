@@ -112,6 +112,9 @@ class CollectTarget:
     ssh_key: str | None = None
     enable_secret: str | None = None
     extras: dict = field(default_factory=dict)
+    # per-platform tuning (tenant "Backup settings"): SSH/command timeout and parallel sessions
+    timeout: int = 60
+    workers: int | None = None
 
 
 @dataclass

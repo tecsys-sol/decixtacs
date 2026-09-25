@@ -63,11 +63,29 @@ API_COLLECTED = {"sfos"}
 
 
 def default_collect(targets: list[CollectTarget]) -> list[CollectResult]:
-    """Dispatch by platform: SFOS over its XML API, everything else through Nornir (SSH)."""
-    workers = get_settings().backup_concurrency
+    """Dispatch by platform: SFOS over its XML API, everything else through Nornir (SSH), one
+    Nornir run per (timeout, parallelism) so per-platform settings apply."""
+    limit = get_settings().backup_concurrency
     api = [t for t in targets if t.platform == "sfos"]
-    ssh = [t for t in targets if t.platform not in API_COLLECTED]
-    return (nornir_collect(ssh, workers) if ssh else []) + (sfos_collect(api, workers) if api else [])
+    groups: dict[tuple[int, int], list[CollectTarget]] = {}
+    for t in targets:
+        if t.platform not in API_COLLECTED:
+            groups.setdefault((t.timeout, min(t.workers or limit, limit)), []).append(t)
+    results: list[CollectResult] = []
+    for (timeout, workers), group in groups.items():
+        results += nornir_collect(group, workers, timeout)
+    if api:
+        results += sfos_collect(api, min(api[0].workers or limit, limit))
+    return results
+
+
+PLATFORM_SETTINGS_KEY = "backup_platforms"
+
+
+def platform_settings(db: Session, tenant_id: uuid.UUID) -> dict[str, dict]:
+    """``Tenant.settings["backup_platforms"]``: {platform slug: {timeout, concurrency, commands}}."""
+    tenant = db.get(Tenant, tenant_id)
+    return dict((tenant.settings or {}).get(PLATFORM_SETTINGS_KEY) or {}) if tenant else {}
 
 
 def device_relpath(device: Device) -> str:
@@ -96,10 +114,13 @@ def missing_for_backup(device: Device, default_cred: Credential | None = None) -
     return f"device has no {', no '.join(missing)}" if missing else None
 
 
-def build_target(device: Device, default_cred: Credential | None = None) -> CollectTarget | None:
+def build_target(
+    device: Device, default_cred: Credential | None = None, overrides: dict[str, dict] | None = None
+) -> CollectTarget | None:
     if missing_for_backup(device, default_cred):
         return None
     cred = device.credential or default_cred
+    tune = (overrides or {}).get(device.platform.slug) or {}
     return CollectTarget(
         device_id=str(device.id),
         hostname=device.hostname,
@@ -108,7 +129,7 @@ def build_target(device: Device, default_cred: Credential | None = None) -> Coll
         platform=device.platform.slug,
         scrapli_platform=device.platform.scrapli_platform,
         netmiko_device_type=device.platform.netmiko_device_type,
-        commands=device.platform.backup_commands or [],
+        commands=tune.get("commands") or device.platform.backup_commands or [],
         username=cred.username,
         password=decrypt_secret(cred.password_enc),
         ssh_key=decrypt_secret(cred.ssh_key_enc),
@@ -116,6 +137,8 @@ def build_target(device: Device, default_cred: Credential | None = None) -> Coll
         extras={
             k: v for k, v in (device.custom_fields or {}).items() if k in ("api_port", "verify_tls", "sfos_entities")
         },
+        timeout=int(tune.get("timeout") or 60),
+        workers=int(tune["concurrency"]) if tune.get("concurrency") else None,
     )
 
 
@@ -161,8 +184,9 @@ def run_backups(
     devices = {str(d.id): d for d in db.scalars(q)}
     targets, backups = [], []
     fallback = default_credential(db, tenant_id)
+    overrides = platform_settings(db, tenant_id)
     for d in devices.values():
-        t = build_target(d, fallback)
+        t = build_target(d, fallback, overrides)
         if t is None:
             backups.append(_record_failure(db, d, missing_for_backup(d, fallback) or "not collectable", trigger))
         else:
