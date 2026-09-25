@@ -27,7 +27,7 @@ from app.models import (
     DriftEvent,
     GoldenConfig,
 )
-from app.services import audit
+from app.services import attribution, audit
 from app.services import diff as diffsvc
 from app.services.backup.engine import (
     build_target,
@@ -169,6 +169,11 @@ class DiffOut(BaseModel):
     added: int
     removed: int
     risk: dict
+    # engineers whose logged (TACACS+ accounting) commands explain the changed lines
+    authors: list[dict] = []
+    # configuration commands logged on the device between the two revisions
+    commands: list[dict] = []
+    attributed: bool = False
 
 
 @router.get("/devices/{device_id}/diff", response_model=DiffOut)
@@ -178,9 +183,13 @@ def device_diff(
     new: str = "HEAD",
     context: int = 3,
     include_inline: bool = False,
+    attribute: bool = True,
     ctx: Ctx = Depends(require("configs:read")),
 ):
-    """Diff two Git revisions (commit sha, ``HEAD~1`` ...) of a device configuration."""
+    """Diff two Git revisions (commit sha, ``HEAD~1`` ...) of a device configuration.
+
+    With ``attribute`` (and ``accounting:read``), changed rows carry ``right_by``/``left_by``: the
+    engineer and logged command that produced the line."""
     d = _device(ctx, device_id)
     store = store_for(ctx.db, ctx.tenant_id)
     path = device_relpath(d)
@@ -190,15 +199,32 @@ def device_diff(
     uni = diffsvc.unified(a, b, f"{d.hostname}@{old[:10]}", f"{d.hostname}@{new[:10]}", context)
     st = diffsvc.stats(a, b)
     r = analyse_diff(uni)
+    rows = diffsvc.side_by_side(a, b, context)
+    authors: list[dict] = []
+    commands: list[dict] = []
+    can_attribute = attribute and ctx.principal.can_on_device("accounting:read", d)
+    if can_attribute:
+        ca, cb = store.commit_info(old), store.commit_info(new)
+        if ca and cb:
+            since, until = sorted((ca.timestamp, cb.timestamp))
+            junos = bool(d.platform and d.platform.slug == "junos") or any(
+                ln.startswith("set ") for ln in b.splitlines()[:50]
+            )
+            edits = attribution.expand(attribution.load_commands(ctx.db, d, since, until), junos)
+            authors = attribution.attribute(rows, edits, junos)
+            commands = attribution.commands_summary(edits)
     return DiffOut(
         old_rev=old,
         new_rev=new,
         unified=uni,
-        side_by_side=diffsvc.side_by_side(a, b, context),
+        side_by_side=rows,
         inline=diffsvc.inline(a, b) if include_inline else None,
         added=st.added,
         removed=st.removed,
         risk={"score": r.score, "level": r.level, "findings": r.findings, "summary": r.summary},
+        authors=authors,
+        commands=commands,
+        attributed=can_attribute,
     )
 
 

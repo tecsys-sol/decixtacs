@@ -318,6 +318,26 @@ export interface DiffRow {
   right?: string | null;
   /** only on skip rows */
   count?: number;
+  /** engineer whose logged command produced the new line / removed the old line */
+  right_by?: Attribution | null;
+  left_by?: Attribution | null;
+}
+
+export interface Attribution {
+  user: string;
+  at: string;
+  command: string;
+  /** exact: a logged command produces this line; inferred: the only engineer configuring in the window */
+  confidence: "exact" | "inferred";
+}
+
+export interface DiffAuthor {
+  username: string;
+  added: number;
+  removed: number;
+  inferred: number;
+  first_at: string;
+  last_at: string;
 }
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -338,6 +358,9 @@ export interface DiffOut {
   added: number;
   removed: number;
   risk: RiskReport;
+  authors?: DiffAuthor[];
+  commands?: { user: string; at: string; command: string }[];
+  attributed?: boolean;
 }
 
 export interface RestoreOut {

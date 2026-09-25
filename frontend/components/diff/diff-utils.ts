@@ -1,4 +1,4 @@
-import type { DiffRow } from "@/lib/types";
+import type { Attribution, DiffRow } from "@/lib/types";
 
 export type InlineRowType = "equal" | "added" | "removed" | "modified-old" | "modified-new" | "skip";
 
@@ -8,6 +8,7 @@ export interface InlineRow {
   newNo: number | null;
   text: string;
   count?: number;
+  by?: Attribution | null;
 }
 
 /** Flatten side-by-side rows into a single-column (inline) diff. Modified rows become an old/new pair. */
@@ -19,14 +20,14 @@ export function toInlineRows(rows: DiffRow[]): InlineRow[] {
         out.push({ type: "equal", oldNo: r.left_no ?? null, newNo: r.right_no ?? null, text: r.right ?? r.left ?? "" });
         break;
       case "removed":
-        out.push({ type: "removed", oldNo: r.left_no ?? null, newNo: null, text: r.left ?? "" });
+        out.push({ type: "removed", oldNo: r.left_no ?? null, newNo: null, text: r.left ?? "", by: r.left_by });
         break;
       case "added":
-        out.push({ type: "added", oldNo: null, newNo: r.right_no ?? null, text: r.right ?? "" });
+        out.push({ type: "added", oldNo: null, newNo: r.right_no ?? null, text: r.right ?? "", by: r.right_by });
         break;
       case "modified":
-        out.push({ type: "modified-old", oldNo: r.left_no ?? null, newNo: null, text: r.left ?? "" });
-        out.push({ type: "modified-new", oldNo: null, newNo: r.right_no ?? null, text: r.right ?? "" });
+        out.push({ type: "modified-old", oldNo: r.left_no ?? null, newNo: null, text: r.left ?? "", by: r.left_by });
+        out.push({ type: "modified-new", oldNo: null, newNo: r.right_no ?? null, text: r.right ?? "", by: r.right_by });
         break;
       case "skip":
         out.push({ type: "skip", oldNo: null, newNo: null, text: "", count: r.count ?? 0 });
@@ -60,4 +61,18 @@ export function classifyUnifiedLine(line: string): UnifiedLineType {
   if (line.startsWith("+")) return "added";
   if (line.startsWith("-")) return "removed";
   return "context";
+}
+
+/** Distinct colours for engineers - deliberately not green/red so they never read as added/removed. */
+export const STAFF_COLORS = ["#7c3aed", "#0284c7", "#d97706", "#db2777", "#0d9488", "#4f46e5", "#c2410c", "#65a30d"];
+
+export function staffColorMap(usernames: string[]): Map<string, string> {
+  const m = new Map<string, string>();
+  usernames.forEach((u, i) => m.set(u, STAFF_COLORS[i % STAFF_COLORS.length]));
+  return m;
+}
+
+export function initials(name: string): string {
+  const parts = name.split(/[\s._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase() || "?";
 }

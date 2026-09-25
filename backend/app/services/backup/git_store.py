@@ -123,6 +123,13 @@ class GitConfigStore:
         except (StopIteration, ValueError):
             return None
 
+    def commit_info(self, rev: str) -> CommitInfo | None:
+        try:
+            c = self.repo.commit(rev)
+        except (KeyError, ValueError, BadName):
+            return None
+        return CommitInfo(c.hexsha, c.author.name or "", c.author.email or "", c.authored_datetime, c.message)
+
     def history(self, relpath: str, max_count: int = 100) -> list[CommitInfo]:
         out = []
         for c in self.repo.iter_commits(paths=relpath, max_count=max_count):

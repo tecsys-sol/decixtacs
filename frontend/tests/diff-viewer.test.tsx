@@ -112,3 +112,46 @@ describe("<DiffViewer />", () => {
     expect(screen.queryByTestId("risk-panel")).not.toBeInTheDocument();
   });
 });
+
+describe("engineer attribution", () => {
+  const at = "2026-09-20T10:00:00Z";
+  const attributed: DiffOut = {
+    ...diff,
+    attributed: true,
+    side_by_side: diff.side_by_side.map((r) =>
+      r.type === "modified"
+        ? { ...r, right_by: { user: "priya", at, command: "set protocols bgp group IX neighbor 192.0.2.1 peer-as 64501", confidence: "exact" }, left_by: { user: "priya", at, command: "x", confidence: "exact" } }
+        : r.type === "added"
+          ? { ...r, right_by: { user: "arjun", at, command: "set system ntp server 192.0.2.123", confidence: "inferred" } }
+          : r,
+    ),
+    authors: [
+      { username: "priya", added: 1, removed: 1, inferred: 0, first_at: at, last_at: at },
+      { username: "arjun", added: 1, removed: 0, inferred: 1, first_at: at, last_at: at },
+    ],
+    commands: [{ user: "priya", at, command: "set protocols bgp group IX neighbor 192.0.2.1 peer-as 64501" }],
+  };
+
+  it("shows who changed each line and a legend with per-engineer counts", () => {
+    render(<DiffViewer diff={attributed} mode="split" showRisk={false} />);
+    const legend = screen.getByTestId("diff-authors");
+    expect(within(legend).getByRole("button", { name: /priya/ })).toBeInTheDocument();
+    expect(within(legend).getByText("unattributed 1")).toBeInTheDocument();
+    const chips = screen.getAllByTestId("diff-author-chip");
+    expect(chips.map((c) => c.textContent)).toEqual(["PR", "AR"]);
+    expect(chips[1]).toHaveAttribute("aria-label", "Changed by arjun (inferred)");
+    expect(screen.getByTestId("diff-commands")).toHaveTextContent("peer-as 64501");
+  });
+
+  it("can be switched off", () => {
+    render(<DiffViewer diff={attributed} mode="inline" showRisk={false} />);
+    expect(screen.getAllByTestId("diff-author-chip")).toHaveLength(3);
+    fireEvent.click(screen.getByLabelText("Colour by engineer"));
+    expect(screen.queryAllByTestId("diff-author-chip")).toHaveLength(0);
+  });
+
+  it("has no legend without attribution", () => {
+    render(<DiffViewer diff={diff} mode="split" showRisk={false} />);
+    expect(screen.queryByTestId("diff-authors")).toBeNull();
+  });
+});
