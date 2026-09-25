@@ -297,25 +297,38 @@ def sync(db: Session, integration: Integration, client: NetBoxClient | None = No
     for otype, path in MIRRORED.items():
         if otype not in opts.get("mirror", list(MIRRORED)):
             continue
-        n = 0
-        for nb in client.paginate(path, filters.get(otype)):
-            eid = str(nb["id"])
-            row = db.scalar(
+        existing_rows = {
+            row.external_id: row
+            for row in db.scalars(
                 select(ExternalObject).where(
                     ExternalObject.tenant_id == tenant_id,
                     ExternalObject.source == "netbox",
                     ExternalObject.object_type == otype,
-                    ExternalObject.external_id == eid,
                 )
             )
+        }
+        seen_ids: set[str] = set()
+        now = utcnow()
+        for nb in client.paginate(path, filters.get(otype)):
+            eid = str(nb["id"])
+            row = existing_rows.get(eid)
             if row is None:
                 row = ExternalObject(tenant_id=tenant_id, source="netbox", object_type=otype, external_id=eid)
                 db.add(row)
+                existing_rows[eid] = row
             row.display = str(nb.get("display") or nb.get("name") or nb.get("prefix") or nb.get("address") or eid)[:255]
             row.data = nb
-            row.synced_at = utcnow()
-            n += 1
-        stats[otype] = n
+            row.synced_at = now
+            seen_ids.add(eid)
+        removed = 0
+        for eid, row in existing_rows.items():
+            if eid not in seen_ids:  # deleted in NetBox (or no longer matching the filter)
+                db.delete(row)
+                removed += 1
+        stats[otype] = len(seen_ids)
+        if removed:
+            stats[f"{otype}_removed"] = removed
+        db.flush()
 
     # --- push back ---------------------------------------------------------
     if opts.get("push_back"):

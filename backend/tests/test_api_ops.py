@@ -72,14 +72,54 @@ def test_netbox_sync(admin):
             ]
         )
     )
-    respx.get(f"{NB}/api/ipam/vlans/").mock(return_value=_nb_page([{"id": 446, "display": "IX-LAN (446)", "vid": 446}]))
-    for path in ("prefixes", "ip-addresses", "vrfs", "asns"):
-        respx.get(f"{NB}/api/ipam/{path}/").mock(return_value=_nb_page([]))
+    vlans = respx.get(f"{NB}/api/ipam/vlans/").mock(
+        return_value=_nb_page(
+            [
+                {"id": 446, "display": "IX-LAN (446)", "vid": 446, "name": "IX-LAN", "site": {"name": "Bangalore"}},
+                {"id": 447, "display": "OLD (447)", "vid": 447, "name": "OLD"},
+            ]
+        )
+    )
+    respx.get(f"{NB}/api/ipam/prefixes/").mock(
+        return_value=_nb_page(
+            [
+                {
+                    "id": 1,
+                    "prefix": "185.1.0.0/24",
+                    "status": {"value": "active"},
+                    "vlan": {"id": 446, "vid": 446, "name": "IX-LAN"},
+                    "scope_type": "dcim.site",
+                    "scope": {"id": 1, "name": "Bangalore"},
+                    "vrf": None,
+                    "url": f"{NB}/api/ipam/prefixes/1/",
+                },
+                {"id": 2, "prefix": "2001:7f8:1::/64", "status": {"value": "active"}, "vlan": {"id": 446, "vid": 446}},
+                {"id": 3, "prefix": "10.0.0.0/24", "status": {"value": "reserved"}, "vrf": {"name": "MGMT"}},
+            ]
+        )
+    )
+    respx.get(f"{NB}/api/ipam/ip-addresses/").mock(
+        return_value=_nb_page(
+            [
+                {
+                    "id": 7,
+                    "address": "10.0.0.1/32",
+                    "status": {"value": "active"},
+                    "vrf": {"name": "MGMT"},
+                    "dns_name": "mx204-blr.mgmt",
+                    "assigned_object": {"name": "fxp0", "device": {"name": "mx204-blr"}},
+                },
+                {"id": 8, "address": "185.1.0.10/24", "status": {"value": "active"}},
+            ]
+        )
+    )
+    respx.get(f"{NB}/api/ipam/vrfs/").mock(return_value=_nb_page([{"id": 1, "name": "MGMT", "rd": "65000:1"}]))
+    respx.get(f"{NB}/api/ipam/asns/").mock(return_value=_nb_page([]))
     respx.get(f"{NB}/api/tenancy/contacts/").mock(return_value=_nb_page([]))
 
     i = admin.post("/api/v1/integrations", json={"kind": "netbox", "name": "nb", "base_url": NB, "token": "t0k"}).json()
     stats = admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False}).json()
-    assert stats["devices"] == 3 and stats["links"] == 1 and stats["vlan"] == 1 and stats["racks"] == 2
+    assert stats["devices"] == 3 and stats["links"] == 1 and stats["vlan"] == 2 and stats["racks"] == 2
     assert stats["devices_without_ip"] == 1 and stats["devices_without_ip_examples"] == ["no-ip-device"]
     devs = {d["hostname"]: d for d in admin.get("/api/v1/devices").json()["items"]}
     assert devs["mx204-blr"]["platform"]["slug"] == "junos" and devs["eos-sw1"]["platform"]["slug"] == "eos"
@@ -88,8 +128,27 @@ def test_netbox_sync(admin):
     topo = admin.get("/api/v1/topology").json()
     assert len(topo["nodes"]) == 3 and topo["edges"][0]["label"] == "et-0/0/0 - Ethernet1"
     assert admin.get("/api/v1/external-objects", params={"object_type": "vlan"}).json()[0]["display"] == "IX-LAN (446)"
-    # idempotent
-    admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False})
+    # IPAM views
+    summ = admin.get("/api/v1/ipam/summary").json()
+    assert summ["counts"] == {"prefixes": 3, "vlans": 2, "ip-addresses": 2, "vrfs": 1}
+    assert summ["prefix_status"] == {"active": 2, "reserved": 1} and summ["prefix_family"] == {"IPv4": 2, "IPv6": 1}
+    pfx = admin.get("/api/v1/ipam/prefixes").json()
+    assert [p["prefix"] for p in pfx["items"]] == ["185.1.0.0/24", "2001:7f8:1::/64", "10.0.0.0/24"]
+    assert pfx["items"][0]["site"] == "Bangalore" and pfx["items"][0]["url"] == f"{NB}/ipam/prefixes/1/"
+    assert admin.get("/api/v1/ipam/prefixes", params={"vrf": "MGMT"}).json()["total"] == 1
+    assert admin.get("/api/v1/ipam/prefixes", params={"family": 6}).json()["total"] == 1
+    v = admin.get("/api/v1/ipam/vlans", params={"q": "ix-lan"}).json()["items"]
+    assert v[0]["prefixes"] == ["185.1.0.0/24", "2001:7f8:1::/64"]
+    ips = admin.get("/api/v1/ipam/ip-addresses", params={"device": "mx204-blr"}).json()["items"]
+    assert ips[0]["interface"] == "fxp0" and ips[0]["device_id"] == devs["mx204-blr"]["id"]
+    assert admin.get("/api/v1/ipam/ip-addresses", params={"within": "185.1.0.0/24"}).json()["total"] == 1
+    assert admin.get("/api/v1/ipam/vrfs").json()["items"][0]["prefixes"] == 1
+    assert admin.get("/api/v1/ipam/nope").status_code == 404
+    assert admin.get("/api/v1/ipam/prefixes", params={"within": "x"}).status_code == 422
+    # idempotent; objects deleted in NetBox disappear
+    vlans.mock(return_value=_nb_page([{"id": 446, "display": "IX-LAN (446)", "vid": 446, "name": "IX-LAN"}]))
+    again = admin.post(f"/api/v1/integrations/{i['id']}/sync", params={"run_async": False}).json()
+    assert again["vlan"] == 1 and again["vlan_removed"] == 1
     assert admin.get("/api/v1/devices").json()["total"] == 3
     # auth header sent
     assert respx.calls[0].request.headers["Authorization"] == "Token t0k"

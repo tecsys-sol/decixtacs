@@ -148,4 +148,6 @@ def test_deploy_all_and_agent_status(admin, client):
     )
     servers = {s["name"]: s for s in admin.get("/api/v1/tacacs/servers").json()}
     assert servers["netservices-1"]["running_sha256"] == servers["netservices-1"]["config_sha256"]
-    assert servers["netservices-2"]["agent_status"] == "error" and servers["netservices-2"]["agent_message"] == "-P failed"
+    assert (
+        servers["netservices-2"]["agent_status"] == "error" and servers["netservices-2"]["agent_message"] == "-P failed"
+    )
