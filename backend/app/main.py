@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
-from app.api.v1 import activity, auth, configs, inventory, ops, tacacs, users
+from app.api.v1 import activity, auth, configs, inventory, ops, rancid, tacacs, users
 from app.core.config import get_settings
 from app.core.ratelimit import RateLimiter, RateLimitMiddleware
 from app.core.redis import redis_client
@@ -74,7 +74,16 @@ def create_app() -> FastAPI:
         log.exception("unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse({"detail": "internal server error"}, status_code=500)
 
-    for r in (auth.router, users.router, inventory.router, tacacs.router, configs.router, activity.router, ops.router):
+    for r in (
+        auth.router,
+        users.router,
+        inventory.router,
+        tacacs.router,
+        configs.router,
+        activity.router,
+        ops.router,
+        rancid.router,
+    ):
         app.include_router(r, prefix=s.api_prefix)
 
     @app.get("/metrics", include_in_schema=False)

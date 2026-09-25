@@ -145,3 +145,4 @@ class RancidConfig(UUIDPk, TenantScoped, Base):
     device_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="SET NULL"), index=True)
     content: Mapped[str] = mapped_column(Text)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    device = relationship("Device")

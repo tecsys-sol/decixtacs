@@ -571,7 +571,9 @@ def deploy_all(ctx: Ctx = Depends(require("tacacs:deploy"))):
             out.skipped.append(s.name)
             continue
         rev, created, warnings = _deploy(ctx, s)
-        out.deployed.append(DeployAllItem(server_id=s.id, name=s.name, version=rev.version, sha256=rev.sha256, created=created))
+        out.deployed.append(
+            DeployAllItem(server_id=s.id, name=s.name, version=rev.version, sha256=rev.sha256, created=created)
+        )
         out.warnings.extend(w for w in warnings if w not in out.warnings)
     ctx.db.commit()
     return out
