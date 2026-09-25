@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     backup_repo_root: str = "/var/lib/nom/configs"
     backup_sanitize_secrets: bool = True
     backup_concurrency: int = 50
+    # NetBox devicetype-library (CC0) for the DCIM port view; empty URLs = bundled models only
+    devicetype_library_url: str = "https://raw.githubusercontent.com/netbox-community/devicetype-library/master"
+    devicetype_index_url: str = (
+        "https://api.github.com/repos/netbox-community/devicetype-library/git/trees/master?recursive=1"
+    )
+    devicetype_cache_dir: str = ""  # default: <backup_repo_root>/../devicetypes
     # Sophos SFOS XML API collector (platform slug "sfos")
     sfos_api_port: int = 4444
     sfos_verify_tls: bool = True

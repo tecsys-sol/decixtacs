@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
-from app.api.v1 import activity, auth, configs, inventory, ipam, ops, rancid, tacacs, users
+from app.api.v1 import activity, auth, configs, dcim, inventory, ipam, ops, rancid, tacacs, users
 from app.core.config import get_settings
 from app.core.ratelimit import RateLimiter, RateLimitMiddleware
 from app.core.redis import redis_client
@@ -84,6 +84,7 @@ def create_app() -> FastAPI:
         ops.router,
         rancid.router,
         ipam.router,
+        dcim.router,
     ):
         app.include_router(r, prefix=s.api_prefix)
 
