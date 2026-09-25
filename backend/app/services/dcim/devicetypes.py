@@ -141,6 +141,9 @@ def _pick(model: str, candidates: dict[str, str]) -> str | None:
     n = norm(model)
     if not n:
         return None
+    for long, short in (("fortigate", "fg"), ("fortiswitch", "fs")):  # library uses the short SKUs
+        if n.startswith(long) and n.replace(long, short, 1) in candidates:
+            return candidates[n.replace(long, short, 1)]
     if n in candidates:
         return candidates[n]
     starts = sorted((k for k in candidates if k.startswith(n)), key=len)

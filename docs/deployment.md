@@ -357,6 +357,20 @@ changes to TACACS+ accounting (`set system accounting events [ login change-log 
 IOS/EOS need `aaa accounting commands 15 ... start-stop group tacacs+`. With only
 configure/commit logged, lines are attributed as *inferred* when one engineer configured the device.
 
+### Ports & connections (DCIM view)
+
+Each device's **Ports & connections** tab draws its front panel from the NetBox community
+[devicetype-library](https://github.com/netbox-community/devicetype-library) (CC0) and fills every
+port from the latest backed-up config: description, admin state, LAG, VLANs, addresses, IGP/MPLS.
+Neighbours come from NetBox cables, the other end of point-to-point subnets, BGP neighbours on the
+port (with IXP member names) and devices/ASNs named in descriptions.
+
+* The model comes from NetBox (device type), else RANCID's header, else **Set model** on the tab.
+* ~50 common models are bundled; others (and front-panel photos) are fetched from GitHub once and
+  cached under `<NOM data>/devicetypes`. Needs outbound HTTPS to `api.github.com` and
+  `raw.githubusercontent.com`; set `NOM_DEVICETYPE_INDEX_URL=` and `NOM_DEVICETYPE_LIBRARY_URL=`
+  (empty) to stay offline with the bundled models.
+
 ## 9. Integrations
 
 All integrations are per tenant: `POST /api/v1/integrations` (permission `integrations:write`),

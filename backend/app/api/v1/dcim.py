@@ -67,9 +67,12 @@ def form_factor(ptype: str | None, name: str) -> str:
 
 def speed_label(ptype: str | None, name: str) -> str | None:
     t = (ptype or "").lower()
-    m = re.match(r"^(\d+(?:\.\d+)?)(g|m)base", t)
+    m = re.match(r"^(\d+(?:\.\d+)?)(g?)base", t)
     if m:
-        return f"{m.group(1)}{m.group(2).upper()}".replace("1000M", "1G")
+        n = float(m.group(1))
+        if m.group(2):
+            return f"{m.group(1)}G"
+        return f"{int(n // 1000)}G" if n >= 1000 else f"{int(n)}M"
     n = name.lower()
     for prefix, lbl in (("et-", "100G"), ("xe-", "10G"), ("ge-", "1G"), ("mge-", "10G"), ("hundredgig", "100G")):
         if n.startswith(prefix):

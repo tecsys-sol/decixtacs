@@ -10146,6 +10146,259 @@
           }
         }
       }
+    },
+    "/api/v1/devices/{device_id}/ports": {
+      "get": {
+        "tags": [
+          "dcim"
+        ],
+        "summary": "Device Ports",
+        "operationId": "device_ports_api_v1_devices__device_id__ports_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{device_id}/front-image": {
+      "get": {
+        "tags": [
+          "dcim"
+        ],
+        "summary": "Device Front Image",
+        "description": "Front-panel photo from the devicetype-library (proxied and cached so browsers need no internet).",
+        "operationId": "device_front_image_api_v1_devices__device_id__front_image_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{device_id}/device-type": {
+      "put": {
+        "tags": [
+          "dcim"
+        ],
+        "summary": "Set Device Type",
+        "description": "Pin the device-type model for the port view (when NetBox has none or a different name).",
+        "operationId": "set_device_type_api_v1_devices__device_id__device_type_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTypeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "dcim"
+        ],
+        "summary": "Clear Device Type",
+        "operationId": "clear_device_type_api_v1_devices__device_id__device_type_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12468,6 +12721,30 @@
         },
         "type": "object",
         "title": "DevicePatch"
+      },
+      "DeviceTypeIn": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vendor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "title": "DeviceTypeIn"
       },
       "DiffOut": {
         "properties": {

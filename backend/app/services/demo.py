@@ -41,6 +41,7 @@ from app.models import (
     Credential,
     Device,
     DeviceGroup,
+    DeviceModel,
     DriftEvent,
     ExternalObject,
     GoldenConfig,
@@ -105,6 +106,23 @@ DEVICES = [
     ("7280r3-sin1-peer1", "sin1", "eos", "switch", "DCS-7280CR3-32P4", "4.31.2F", "Peering switches"),
     ("asr1001x-sin1-ce", "sin1", "ios", "ce", "ASR1001-X", "17.9.4a", "Customer edge"),
 ]
+
+# Point-to-point core / CE links (a, a_if, b, b_if); addresses are /31s from 10.200.0.0/24.
+LINKS = [
+    ("mx204-fra1-core", "et-0/0/0", "mx10003-fra1-edge", "et-0/0/0"),
+    ("mx204-fra1-core", "et-0/0/1", "mx204-ams1-core", "et-0/0/0"),
+    ("mx204-ams1-core", "et-0/0/1", "mx204-blr1-core", "et-0/0/0"),
+    ("mx204-blr1-core", "et-0/0/1", "mx10003-fra1-edge", "et-0/0/1"),
+    ("mx204-ams1-core", "xe-0/1/6", "asr1001x-ams1-ce", "TenGigabitEthernet0/1/0"),
+    ("mx204-blr1-core", "xe-0/1/6", "isr4451-blr1-ce", "GigabitEthernet0/0/0"),
+    ("mx10003-fra1-edge", "xe-1/0/6", "asr1001x-sin1-ce", "TenGigabitEthernet0/1/0"),
+]
+# Router IX LAG (ae0) -> peering switch Port-Channel1
+IX_UPLINKS = {
+    "mx204-fra1-core": "7280r3-fra1-peer1",
+    "mx10003-fra1-edge": "7280r3-fra1-peer2",
+    "mx204-ams1-core": "7050x3-ams1-peer1",
+}
 UNREACHABLE = "asr1001x-sin1-ce"
 PEERS = [
     (13335, "Cloudflare", "AS-CLOUDFLARE"),
@@ -140,6 +158,10 @@ class DevState:
     neighbors: list[tuple[str, int, str]] = field(default_factory=list)
     policies: list[str] = field(default_factory=list)
     customers: int = 1
+    mgmt_ip: str = ""
+    # (local interface, address/prefix, description) of point-to-point links
+    p2p: list[tuple[str, str, str]] = field(default_factory=list)
+    ix_uplink: str | None = None  # peering switch behind ae0 (routers) / router behind Port-Channel1 (switches)
 
     def render(self) -> str:
         return {"junos": self._junos, "fortios": self._fortios}.get(self.platform, self._ios_like)()
@@ -165,11 +187,36 @@ class DevState:
             out.append("set interfaces lo0 unit 0 family inet filter input PROTECT-RE")
             out.append("set firewall family inet filter PROTECT-RE term ssh from source-prefix-list MGMT")
             out.append("set firewall family inet filter PROTECT-RE term ssh then accept")
+        if self.mgmt_ip:
+            out.append(f"set interfaces fxp0 unit 0 family inet address {self.mgmt_ip}/24")
+        for ifn, addr, desc in self.p2p:
+            out.append(f'set interfaces {ifn} description "{desc}"')
+            out.append(f"set interfaces {ifn} mtu 9192")
+            out.append(f"set interfaces {ifn} unit 0 family inet address {addr}")
+            out.append(f"set interfaces {ifn} unit 0 family iso")
+            if ifn.startswith("et-"):
+                out.append(f"set protocols isis interface {ifn}.0 point-to-point")
+        cust = "xe-1/0" if self.hostname.startswith("mx10003") else "xe-0/1"
         for k in range(self.customers):
-            out.append(f'set interfaces xe-0/1/{k} description "CUST-{1000 + self.idx * 10 + k} 10G transit"')
-        for v in self.vlans:
+            cid, asn = 1000 + self.idx * 10 + k, 64500 + self.idx * 10 + k
+            out.append(f'set interfaces {cust}/{k} description "CUST-{cid} AS{asn} 10G transit"')
+        if self.vlans:
+            members = ["et-0/0/2", "et-0/0/3"]
+            for m in members:
+                to = f" to {self.ix_uplink}" if self.ix_uplink else ""
+                out.append(f'set interfaces {m} description "IX LAG ae0{to}"')
+                out.append(f"set interfaces {m} gigether-options 802.3ad ae0")
+            out.append('set interfaces ae0 description "IX peering LAN"')
+            out.append("set interfaces ae0 flexible-vlan-tagging")
+            out.append("set interfaces ae0 aggregated-ether-options lacp active")
+        for n, v in enumerate(self.vlans):
             out.append(f'set interfaces ae0 unit {v} description "IX VLAN {v}"')
             out.append(f"set interfaces ae0 unit {v} vlan-id {v}")
+            if n == 0:
+                out.append(f"set interfaces ae0 unit {v} family inet address 185.1.{self.idx}.1/24")
+        if self.platform == "junos" and self.hostname.startswith("mx204"):
+            out.append('set interfaces xe-0/1/7 description "spare - faulty optic, RMA 44121"')
+            out.append("set interfaces xe-0/1/7 disable")
         out.append("set protocols bgp group IX type external")
         for ip, asn, desc in self.neighbors:
             out.append(f'set protocols bgp group IX neighbor {ip} description "{desc}"')
@@ -194,8 +241,45 @@ class DevState:
         for v in self.vlans:
             out += [f"vlan {v}", f"   name IX-VLAN-{v}", "!"]
         out += ["interface Loopback0", f"   ip address 10.254.{self.idx}.1/32", "!"]
+        eos = self.platform == "eos"
+        for ifn, addr, desc in self.p2p:
+            ip, plen = addr.split("/")
+            mask = "255.255.255.254" if plen == "31" else "255.255.255.252"
+            out += [f"interface {ifn}", f"   description {desc}", "   mtu 9100"]
+            out += [
+                f"   ip address {addr}" if eos else f"   ip address {ip} {mask}",
+                "   ip ospf network point-to-point",
+                "!",
+            ]
+        if eos and self.ix_uplink:
+            for m in ("Ethernet31/1", "Ethernet32/1") if "7280" in self.hostname else ("Ethernet49/1", "Ethernet50/1"):
+                out += [
+                    f"interface {m}",
+                    f"   description to {self.ix_uplink} ae0",
+                    "   channel-group 1 mode active",
+                    "!",
+                ]
+            out += ["interface Port-Channel1", f"   description uplink {self.ix_uplink}", "   switchport mode trunk"]
+            out += [f"   switchport trunk allowed vlan {','.join(str(v) for v in self.vlans) or '1'}", "!"]
         for k in range(self.customers):
-            out += [f"interface Ethernet{k + 1}", f"   description CUST-{1000 + self.idx * 10 + k}", "!"]
+            name = (
+                (f"Ethernet{k + 1}/1" if "7280" in self.hostname else f"Ethernet{k + 1}")
+                if eos
+                else f"GigabitEthernet0/0/{k + 1}"
+            )
+            asn = 64500 + self.idx * 10 + k
+            out += [f"interface {name}", f"   description CUST-{1000 + self.idx * 10 + k} AS{asn}"]
+            if eos and self.vlans:
+                out += ["   switchport mode access", f"   switchport access vlan {self.vlans[0]}"]
+            out.append("!")
+        if self.mgmt_ip:
+            mg = "Management1" if eos else "GigabitEthernet0"
+            out += [
+                f"interface {mg}",
+                "   description oob management",
+                f"   ip address {self.mgmt_ip}/24" if eos else f"   ip address {self.mgmt_ip} 255.255.255.0",
+                "!",
+            ]
         if self.neighbors:
             out.append("router bgp 65000")
             for ip, asn, desc in self.neighbors:
@@ -505,6 +589,26 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
         db.add(d)
         devices[host] = d
         states[host] = _initial_state(rng, i, host, plat)
+    db.flush()
+    # hardware models (NetBox would provide these) and the physical topology
+    models: dict[tuple, DeviceModel] = {}
+    for host, _site, _plat, _role, model, _osv, _g in DEVICES:
+        d = devices[host]
+        if d.vendor_id:
+            key = (d.vendor_id, model)
+            if key not in models:
+                models[key] = db.scalar(
+                    select(DeviceModel).where(DeviceModel.vendor_id == d.vendor_id, DeviceModel.name == model)
+                ) or DeviceModel(vendor_id=d.vendor_id, name=model)
+                db.add(models[key])
+            d.model = models[key]
+        states[host].mgmt_ip = d.management_ip
+    for n, (a, a_if, b, b_if) in enumerate(LINKS):
+        states[a].p2p.append((a_if, f"10.200.0.{2 * n}/31", f"core: to {b} {b_if}"))
+        states[b].p2p.append((b_if, f"10.200.0.{2 * n + 1}/31", f"core: to {a} {a_if}"))
+    for router, switch in IX_UPLINKS.items():
+        states[router].ix_uplink = switch
+        states[switch].ix_uplink = router
     db.flush()
 
     # --- TACACS+ --------------------------------------------------------------------------

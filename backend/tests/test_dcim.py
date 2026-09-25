@@ -86,6 +86,7 @@ def test_library_fuzzy_match_and_bundle(monkeypatch, tmp_path):
     assert devicetypes._pick("QFX5120-48Y", cands) == "QFX5120-48Y-AFI"
     assert devicetypes._pick("mx204", cands) == "MX204"
     assert devicetypes._pick("7280CR3-32P4", {"dcs7280cr332p4f": "A"}) == "A"
+    assert devicetypes._pick("FortiGate-600F", {"fg600f": "F"}) == "F"
     monkeypatch.setattr(devicetypes.get_settings(), "devicetype_index_url", "")
     monkeypatch.setattr(devicetypes.get_settings(), "devicetype_library_url", "")
     monkeypatch.setattr(devicetypes.get_settings(), "devicetype_cache_dir", str(tmp_path))

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import {
+  Cable,
   ClipboardCheck,
   DatabaseBackup,
   FileText,
@@ -26,6 +27,7 @@ import { ConfigTab } from "@/components/devices/config-tab";
 import { DeviceFormDialog } from "@/components/devices/device-form-dialog";
 import { DiffTab } from "@/components/devices/diff-tab";
 import { HistoryTab } from "@/components/devices/history-tab";
+import { PortsTab } from "@/components/devices/ports-tab";
 import { OverviewTab } from "@/components/devices/overview-tab";
 import { RestoreTab } from "@/components/devices/restore-tab";
 import { DeviceChassis } from "@/components/illustrations";
@@ -63,7 +65,7 @@ function ReachabilityPill({ value }: { value: string }) {
   );
 }
 
-const TABS = ["overview", "config", "history", "diff", "compliance", "commands", "restore"] as const;
+const TABS = ["overview", "ports", "config", "history", "diff", "compliance", "commands", "restore"] as const;
 
 export default function DeviceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -176,6 +178,7 @@ export default function DeviceDetailPage() {
       <Tabs value={tab} onValueChange={(v) => setState({ tab: v })}>
         <TabsList>
           <TabsTrigger value="overview"><LayoutGrid /> Overview</TabsTrigger>
+          <TabsTrigger value="ports"><Cable /> Ports &amp; connections</TabsTrigger>
           <TabsTrigger value="config"><FileText /> Configuration</TabsTrigger>
           <TabsTrigger value="history"><History /> Commits</TabsTrigger>
           <TabsTrigger value="diff"><GitCompare /> History &amp; diff</TabsTrigger>
@@ -185,6 +188,9 @@ export default function DeviceDetailPage() {
         </TabsList>
         <TabsContent value="overview">
           <OverviewTab device={d} />
+        </TabsContent>
+        <TabsContent value="ports">
+          <PortsTab device={d} />
         </TabsContent>
         <TabsContent value="config">
           <ConfigTab device={d} rev={state.rev} onRevChange={(rev) => setState({ rev })} />
