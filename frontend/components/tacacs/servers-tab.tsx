@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, Plus, Rocket, Server, Trash2 } from "lucide-react";
+import { History, Plus, Rocket, Send, Server, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { ConfirmDialog, useConfirm } from "@/components/common/confirm-dialog";
@@ -30,7 +30,7 @@ import { toast } from "@/hooks/use-toast";
 import { useNow } from "@/hooks/use-now";
 import { useLastDefined, useOnOpen } from "@/hooks/use-reset";
 import { api, errorMessage } from "@/lib/api";
-import type { Revision, TacacsServer, TacacsServerCreated, TacacsServerIn } from "@/lib/types";
+import type { DeployAllResult, Revision, TacacsServer, TacacsServerCreated, TacacsServerIn } from "@/lib/types";
 import { formatDateTime, parseDate, shortSha } from "@/lib/utils";
 
 const HEARTBEAT_STALE_MS = 5 * 60_000;
@@ -45,6 +45,45 @@ function HeartbeatBadge({ at }: { at: string | null }) {
       <RelativeTime value={at} />
     </Badge>
   );
+}
+
+type SyncState = "in-sync" | "pending" | "error" | "not-deployed" | "no-agent";
+
+/** Where a server stands after a deploy: the agent reports the sha256 of the config tac_plus-ng runs. */
+export function syncState(s: TacacsServer): SyncState {
+  if (!s.config_sha256) return "not-deployed";
+  if (s.agent_status === "error") return "error";
+  if (!s.last_heartbeat_at || !s.running_sha256) return "no-agent";
+  return s.running_sha256 === s.config_sha256 ? "in-sync" : "pending";
+}
+
+function SyncBadge({ s }: { s: TacacsServer }) {
+  const st = syncState(s);
+  if (st === "in-sync")
+    return (
+      <Badge variant="success" dot title={`Running v${s.config_version}`}>
+        In sync
+      </Badge>
+    );
+  if (st === "pending")
+    return (
+      <Badge variant="info" dot title={`Agent runs ${shortSha(s.running_sha256, 10)}; waiting for it to apply ${shortSha(s.config_sha256, 10)}`}>
+        Applying…
+      </Badge>
+    );
+  if (st === "error")
+    return (
+      <Badge variant="danger" dot title={s.agent_message ?? "The agent could not apply the configuration"}>
+        Apply failed
+      </Badge>
+    );
+  if (st === "no-agent")
+    return (
+      <Badge variant="warning" dot title="No heartbeat with a running configuration yet - is the agent installed?">
+        No agent report
+      </Badge>
+    );
+  return <Badge variant="muted">Not deployed</Badge>;
 }
 
 function CreateServerDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (s: TacacsServerCreated) => void }) {
@@ -142,7 +181,12 @@ function RevisionsDialog({ server: current, onClose }: { server: TacacsServer | 
 export function ServersTab() {
   const { can } = useAuth();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["tacacs", "servers"], queryFn: () => api.get<TacacsServer[]>("/tacacs/servers"), refetchInterval: 60_000 });
+  const q = useQuery({
+    queryKey: ["tacacs", "servers"],
+    queryFn: () => api.get<TacacsServer[]>("/tacacs/servers"),
+    // poll faster while an agent is still applying a deploy
+    refetchInterval: (query) => ((query.state.data ?? []).some((s) => s.enabled && syncState(s) === "pending") ? 10_000 : 60_000),
+  });
   const [createOpen, setCreateOpen] = React.useState(false);
   const [token, setToken] = React.useState<string | null>(null);
   const [revisionsFor, setRevisionsFor] = React.useState<TacacsServer | null>(null);
@@ -154,6 +198,26 @@ export function ServersTab() {
     onSuccess: (r, s) => {
       toast.success(`Deployed v${r.version} to ${s.name}`, "The agent picks up the new configuration on its next poll.");
       confirmDeploy.close();
+      void qc.invalidateQueries({ queryKey: ["tacacs"] });
+    },
+    onError: (e) => toast.error("Deploy failed", errorMessage(e)),
+  });
+  const [confirmAll, setConfirmAll] = React.useState(false);
+  const deployAll = useMutation({
+    mutationFn: () => api.post<DeployAllResult>("/tacacs/servers/deploy-all"),
+    onSuccess: (r) => {
+      const created = r.deployed.filter((d) => d.created);
+      toast.success(
+        created.length ? `Deployed to ${created.length} server${created.length === 1 ? "" : "s"}` : "All servers already have the current configuration",
+        [
+          created.map((d) => `${d.name} v${d.version}`).join(", "),
+          r.skipped.length ? `Skipped (disabled): ${r.skipped.join(", ")}` : "",
+          "Each agent applies it on its next poll - watch the Status column.",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      setConfirmAll(false);
       void qc.invalidateQueries({ queryKey: ["tacacs"] });
     },
     onError: (e) => toast.error("Deploy failed", errorMessage(e)),
@@ -175,11 +239,18 @@ export function ServersTab() {
           <CardTitle>TACACS+ servers</CardTitle>
           <CardDescription>tac_plus-ng instances managed by this tenant</CardDescription>
         </div>
-        {can("tacacs:write") ? (
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus /> Add server
-          </Button>
-        ) : null}
+        <div className="flex gap-2">
+          {can("tacacs:deploy") && list.some((s) => s.enabled) ? (
+            <Button size="sm" variant="outline" onClick={() => setConfirmAll(true)}>
+              <Send /> Deploy to all servers
+            </Button>
+          ) : null}
+          {can("tacacs:write") ? (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus /> Add server
+            </Button>
+          ) : null}
+        </div>
       </CardHeader>
       <Table>
         <TableHeader>
@@ -188,13 +259,14 @@ export function ServersTab() {
             <TableHead>Address</TableHead>
             <TableHead>Config</TableHead>
             <TableHead>Last deployed</TableHead>
+            <TableHead>Status</TableHead>
             <TableHead>Agent heartbeat</TableHead>
             <TableHead>Flags</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
-          <TableState cols={7} isLoading={q.isLoading} error={q.error} onRetry={() => void q.refetch()} isEmpty={list.length === 0} empty={<EmptyState icon={Server} title="No TACACS+ servers" description="Add a server and install the agent with the token shown once." />} />
+          <TableState cols={8} isLoading={q.isLoading} error={q.error} onRetry={() => void q.refetch()} isEmpty={list.length === 0} empty={<EmptyState icon={Server} title="No TACACS+ servers" description="Add a server and install the agent with the token shown once." />} />
           {list.map((s) => (
             <TableRow key={s.id}>
               <TableCell className="font-medium">{s.name}</TableCell>
@@ -211,6 +283,9 @@ export function ServersTab() {
               </TableCell>
               <TableCell className="text-xs">
                 <RelativeTime value={s.last_deployed_at} />
+              </TableCell>
+              <TableCell>
+                <SyncBadge s={s} />
               </TableCell>
               <TableCell>
                 <HeartbeatBadge at={s.last_heartbeat_at} />
@@ -258,6 +333,15 @@ export function ServersTab() {
         confirmLabel="Deploy"
         loading={deploy.isPending}
         onConfirm={() => confirmDeploy.target && deploy.mutate(confirmDeploy.target)}
+      />
+      <ConfirmDialog
+        open={confirmAll}
+        onOpenChange={setConfirmAll}
+        title="Deploy to all enabled servers?"
+        description={`Publishes the current policies, NAS devices and users to ${list.filter((s) => s.enabled).map((s) => s.name).join(", ")}. Servers that already run it are left unchanged. Review the Config preview tab first.`}
+        confirmLabel="Deploy to all"
+        loading={deployAll.isPending}
+        onConfirm={() => deployAll.mutate()}
       />
       <ConfirmDialog
         open={confirmDelete.open}

@@ -26,6 +26,10 @@ class TacacsServer(UUIDPk, Timestamps, TenantScoped, Base):
     config_sha256: Mapped[str | None] = mapped_column(String(64))
     last_deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # reported by the agent on every heartbeat: what tac_plus-ng runs and whether the last apply worked
+    running_sha256: Mapped[str | None] = mapped_column(String(64))
+    agent_status: Mapped[str | None] = mapped_column(String(16))  # ok|error
+    agent_message: Mapped[str | None] = mapped_column(Text)
     agent_token_hash: Mapped[str | None] = mapped_column(String(64))
 
 

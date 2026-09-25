@@ -444,6 +444,16 @@ export interface TacacsServer extends Required<TacacsServerIn> {
   config_sha256: string | null;
   last_deployed_at: string | null;
   last_heartbeat_at: string | null;
+  /** sha256 of the file tac_plus-ng runs, reported by the agent */
+  running_sha256?: string | null;
+  agent_status?: string | null;
+  agent_message?: string | null;
+}
+
+export interface DeployAllResult {
+  deployed: { server_id: string; name: string; version: number; sha256: string; created: boolean }[];
+  skipped: string[];
+  warnings: string[];
 }
 
 export interface TacacsServerCreated extends TacacsServer {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, JSONType, TenantScoped, Timestamps, UUIDPk, utcnow
@@ -133,3 +133,15 @@ class ConfigRestore(UUIDPk, Timestamps, TenantScoped, Base):
     device_diff: Mapped[str | None] = mapped_column(Text)
     output: Mapped[str | None] = mapped_column(Text)
     pre_restore_backup_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+
+
+class RancidConfig(UUIDPk, TenantScoped, Base):
+    """Last configuration RANCID stored for a router, imported to compare with NOM's own backup."""
+
+    __tablename__ = "rancid_configs"
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
+    name: Mapped[str] = mapped_column(String(255))  # the router.db / configs/ file name
+    rancid_group: Mapped[str | None] = mapped_column(String(128))
+    device_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="SET NULL"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

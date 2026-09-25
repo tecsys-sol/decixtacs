@@ -18,6 +18,7 @@ from app.models.configs import (
     DeviceComplianceScore,
     DriftEvent,
     GoldenConfig,
+    RancidConfig,
 )
 from app.models.identity import (
     ApiToken,

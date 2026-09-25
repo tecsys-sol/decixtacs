@@ -72,6 +72,9 @@ class ServerOut(ServerIn, ORM):
     config_sha256: str | None
     last_deployed_at: datetime | None
     last_heartbeat_at: datetime | None
+    running_sha256: str | None = None
+    agent_status: str | None = None
+    agent_message: str | None = None
 
 
 class ServerCreated(ServerOut):
@@ -500,11 +503,8 @@ def render_preview(server_id: uuid.UUID | None = None, ctx: Ctx = Depends(requir
     return RenderOut(sha256=r.sha256, warnings=r.warnings, content=redact_keys(r.content))
 
 
-@router.post("/servers/{server_id}/deploy", response_model=RevisionOut)
-def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
-    """Publish a new config revision. The agent on the TACACS host pulls it, validates with
-    ``tac_plus-ng -P`` and reloads; it reports back via heartbeat."""
-    s = get_owned(ctx, TacacsServer, server_id, "server")
+def _deploy(ctx: Ctx, s: TacacsServer) -> tuple[TacacsConfigRevision, bool, list[str]]:
+    """Publish a revision for one server; returns (revision, created, warnings). No-op when unchanged."""
     r = render_for_tenant(ctx.db, ctx.tenant_id, s)
     if r.sha256 == s.config_sha256:
         rev = ctx.db.scalar(
@@ -514,7 +514,7 @@ def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
             .limit(1)
         )
         if rev:
-            return rev
+            return rev, False, r.warnings
     s.config_version += 1
     s.config_sha256 = r.sha256
     s.last_deployed_at = utcnow()
@@ -531,8 +531,50 @@ def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
     _audit(
         ctx, "tacacs.deploy", s, s.name, after={"version": s.config_version, "sha256": r.sha256, "warnings": r.warnings}
     )
+    return rev, True, r.warnings
+
+
+@router.post("/servers/{server_id}/deploy", response_model=RevisionOut)
+def deploy(server_id: uuid.UUID, ctx: Ctx = Depends(require("tacacs:deploy"))):
+    """Publish a new config revision. The agent on the TACACS host pulls it, validates with
+    ``tac_plus-ng -P`` and reloads; it reports back via heartbeat."""
+    s = get_owned(ctx, TacacsServer, server_id, "server")
+    rev, _, _ = _deploy(ctx, s)
     ctx.db.commit()
     return rev
+
+
+class DeployAllItem(BaseModel):
+    server_id: uuid.UUID
+    name: str
+    version: int
+    sha256: str
+    created: bool  # False: the server already had this configuration
+
+
+class DeployAllOut(BaseModel):
+    deployed: list[DeployAllItem]
+    skipped: list[str]  # disabled servers
+    warnings: list[str]
+
+
+@router.post("/servers/deploy-all", response_model=DeployAllOut)
+def deploy_all(ctx: Ctx = Depends(require("tacacs:deploy"))):
+    """Publish the current configuration to every enabled server in one step. Each agent pulls,
+    validates and reloads independently; progress shows in ``GET /tacacs/servers``
+    (``running_sha256`` == ``config_sha256`` once applied)."""
+    out = DeployAllOut(deployed=[], skipped=[], warnings=[])
+    for s in ctx.db.scalars(
+        select(TacacsServer).where(TacacsServer.tenant_id == ctx.tenant_id).order_by(TacacsServer.name)
+    ):
+        if not s.enabled:
+            out.skipped.append(s.name)
+            continue
+        rev, created, warnings = _deploy(ctx, s)
+        out.deployed.append(DeployAllItem(server_id=s.id, name=s.name, version=rev.version, sha256=rev.sha256, created=created))
+        out.warnings.extend(w for w in warnings if w not in out.warnings)
+    ctx.db.commit()
+    return out
 
 
 @router.get("/servers/{server_id}/revisions", response_model=list[RevisionOut])
@@ -594,6 +636,9 @@ class HeartbeatIn(BaseModel):
 def agent_heartbeat(body: HeartbeatIn, authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     s = _agent_server(db, authorization)
     s.last_heartbeat_at = utcnow()
+    s.running_sha256 = body.running_sha256
+    s.agent_status = (body.status or "")[:16]
+    s.agent_message = body.message
     if body.status != "ok":
         from app.services.alerting import emit_event
 

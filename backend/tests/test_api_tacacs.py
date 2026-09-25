@@ -125,3 +125,27 @@ def as_agent(client, token):
     c = TestClient(app)
     c.headers["Authorization"] = f"Bearer {token}"
     return c
+
+
+def test_deploy_all_and_agent_status(admin, client):
+    a = admin.post("/api/v1/tacacs/servers", json={"name": "netservices-1", "address": "172.31.29.99"}).json()
+    b = admin.post("/api/v1/tacacs/servers", json={"name": "netservices-2", "address": "172.31.1.21"}).json()
+    admin.post("/api/v1/tacacs/servers", json={"name": "lab", "address": "10.9.9.9", "enabled": False})
+    admin.post("/api/v1/tacacs/devices", json={"name": "fw1", "address": "10.9.9.1", "vendor": "fortinet"})
+    out = admin.post("/api/v1/tacacs/servers/deploy-all").json()
+    assert [d["name"] for d in out["deployed"]] == ["netservices-1", "netservices-2"]
+    assert all(d["created"] and d["version"] == 1 for d in out["deployed"]) and out["skipped"] == ["lab"]
+    # unchanged -> nothing new is published
+    again = admin.post("/api/v1/tacacs/servers/deploy-all").json()
+    assert not any(d["created"] for d in again["deployed"])
+
+    sha = out["deployed"][0]["sha256"]
+    agent = as_agent(client, a["agent_token"])
+    assert agent.post("/api/v1/tacacs/agent/heartbeat", json={"running_sha256": sha, "status": "ok"}).status_code == 204
+    agent_b = as_agent(client, b["agent_token"])
+    agent_b.post(
+        "/api/v1/tacacs/agent/heartbeat", json={"running_sha256": "0" * 64, "status": "error", "message": "-P failed"}
+    )
+    servers = {s["name"]: s for s in admin.get("/api/v1/tacacs/servers").json()}
+    assert servers["netservices-1"]["running_sha256"] == servers["netservices-1"]["config_sha256"]
+    assert servers["netservices-2"]["agent_status"] == "error" and servers["netservices-2"]["agent_message"] == "-P failed"
