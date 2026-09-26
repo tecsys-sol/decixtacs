@@ -288,3 +288,33 @@ def test_per_platform_backup_settings(admin, fake_collector, monkeypatch):
     _backup(admin)
     assert seen[-1][2] == 60
     assert admin.get("/api/v1/audit", params={"action": "config.backup_settings"}).json()["total"] == 2
+
+
+def test_first_backup_is_not_a_change(admin, db, tenant, fake_collector):
+    from datetime import UTC, datetime
+
+    from app.models import CommandLog
+
+    dev = _device(admin)
+    # someone ran a command recently - the first backup must not be credited to them
+    db.add(
+        CommandLog(
+            tenant_id=tenant.id,
+            username="manoj",
+            device_address="10.0.0.1",
+            command="set system ntp x",
+            timestamp=datetime.now(UTC),
+        )
+    )
+    db.commit()
+    first = _backup(admin, reason="manual (UI)")[0]
+    assert first["reason"] == "Initial backup (manual (UI))" and first["author"] == "admin"
+    summary = admin.get("/api/v1/dashboard").json()
+    assert summary["recent_changes"] == []  # the initial import is not a config change
+    # the only version can be shown against an empty config
+    d = admin.get(f"/api/v1/devices/{dev['id']}/diff", params={"old": "empty", "new": first["commit_sha"]}).json()
+    assert d["added"] == len(CONFIGS[1].splitlines()) and d["removed"] == 0 and not d["attributed"]
+    fake_collector["version"] = 2
+    second = _backup(admin)[0]
+    changes = admin.get("/api/v1/dashboard").json()["recent_changes"]
+    assert [c["id"] for c in changes] == [second["id"]]

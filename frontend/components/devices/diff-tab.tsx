@@ -84,10 +84,9 @@ function CommitList({
             <li key={c.sha}>
               <button
                 type="button"
-                disabled={!parent}
                 onClick={() => onSelect(c, parent)}
                 aria-pressed={on}
-                title={parent ? `Compare with ${shortSha(parent.sha)}` : "Oldest revision - nothing to compare with"}
+                title={parent ? `Compare with ${shortSha(parent.sha)}` : "First stored version - shown in full"}
                 className={cn(
                   "flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default",
                   on ? "border-[var(--ill-soft)] bg-[var(--ill-softer)]" : "border-border/70 bg-card hover:bg-row-hover",
@@ -117,6 +116,9 @@ function CommitList({
     </section>
   );
 }
+
+/** Base revision meaning "nothing": the first stored version is diffed against an empty config. */
+const EMPTY = "empty";
 
 export function DiffTab({
   device,
@@ -149,7 +151,8 @@ export function DiffTab({
   const effectiveOld = React.useMemo(() => {
     if (oldRev) return oldRev;
     const idx = commits.findIndex((c) => c.sha === effectiveNew || c.sha.startsWith(effectiveNew));
-    return idx >= 0 ? (commits[idx + 1]?.sha ?? "") : (commits[1]?.sha ?? "");
+    // the first stored version has no parent: compare it with an empty config
+    return idx >= 0 ? (commits[idx + 1]?.sha ?? EMPTY) : (commits[1]?.sha ?? EMPTY);
   }, [oldRev, commits, effectiveNew]);
 
   const diff = useQuery({
@@ -204,7 +207,10 @@ export function DiffTab({
     [risk, level, theme],
   );
 
-  const options = commits.map((c) => ({ value: c.sha, label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}` }));
+  const options = [
+    ...commits.map((c) => ({ value: c.sha, label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}` })),
+    { value: EMPTY, label: "(empty - before the first backup)" },
+  ];
   // keep a revision passed via URL selectable even if it is outside the loaded history window
   for (const rev of [effectiveOld, effectiveNew]) {
     if (rev && !options.some((o) => o.value === rev)) options.push({ value: rev, label: rev });
@@ -212,10 +218,10 @@ export function DiffTab({
 
   if (history.isLoading) return <Skeleton className="h-[60vh]" />;
   if (history.error) return <ErrorState error={history.error} onRetry={() => void history.refetch()} />;
-  if (commits.length < 2 && !oldRev) {
+  if (commits.length === 0 && !oldRev) {
     return (
       <section className="rounded-xl border bg-card">
-        <EmptyState icon={GitCompare} title="Nothing to compare yet" description="At least two stored revisions are needed for a diff. Run a backup after the next change." />
+        <EmptyState icon={GitCompare} title="No configuration stored yet" description="Run a backup to store the first version of this device's configuration." />
       </section>
     );
   }
@@ -261,6 +267,12 @@ export function DiffTab({
             </Button>
             <SimpleSelect aria-label="New revision" value={effectiveNew} onValueChange={(v) => onChange(effectiveOld, v)} options={options} className="w-full sm:w-72" />
           </div>
+          {effectiveOld === EMPTY ? (
+            <p className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[13px] text-ink-3" data-testid="first-version-note">
+              This is the first stored version of the configuration, shown in full against an empty config.
+              {commits.length < 2 ? " Changes appear here as a diff once the configuration changes and the next backup stores a new version." : ""}
+            </p>
+          ) : null}
           {diff.isLoading ? (
             <Skeleton className="h-[60vh]" />
           ) : diff.error ? (

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy.orm import aliased
 
 from app.api.deps import Ctx, get_owned, require
 from app.api.v1.common import ORM, Page, paginate
@@ -528,10 +529,21 @@ def dashboard(ctx: Ctx = Depends(require("devices:read"))):
         )
         or 0
     )
+    # A device's first backup records the whole config as "added" - it is not a change.
+    earlier = aliased(ConfigBackup)
+    first_backup = (
+        select(earlier.id)
+        .where(
+            earlier.device_id == ConfigBackup.device_id,
+            earlier.changed,
+            earlier.collected_at < ConfigBackup.collected_at,
+        )
+        .exists()
+    )
     changes = db.execute(
         select(ConfigBackup, Device.hostname)
         .join(Device, Device.id == ConfigBackup.device_id)
-        .where(ConfigBackup.tenant_id == t, ConfigBackup.changed)
+        .where(ConfigBackup.tenant_id == t, ConfigBackup.changed, first_backup)
         .order_by(ConfigBackup.collected_at.desc())
         .limit(10)
     ).all()

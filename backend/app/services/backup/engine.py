@@ -276,15 +276,21 @@ def process_result(
         .order_by(ConfigBackup.collected_at.desc())
         .limit(1)
     )
-    since = (last_change - timedelta(seconds=1)) if last_change else utcnow() - timedelta(days=1)
-    author, commit_comment = correlate_author(db, device, since)
     cr = db.get(ChangeRequest, change_request_id) if change_request_id else None
-    why = (
-        reason
-        or (f"CHG-{cr.number}: {cr.title}" if cr else None)
-        or commit_comment
-        or ("Configuration change detected" if previous else "Initial backup")
-    )
+    if previous:
+        since = (last_change - timedelta(seconds=1)) if last_change else utcnow() - timedelta(days=1)
+        author, commit_comment = correlate_author(db, device, since)
+        why = (
+            reason
+            or (f"CHG-{cr.number}: {cr.title}" if cr else None)
+            or commit_comment
+            or "Configuration change detected"
+        )
+    else:
+        # First backup: the whole config is new to us, nobody changed anything - do not credit
+        # whoever last typed a command on the device.
+        author = None
+        why = f"Initial backup ({reason})" if reason and not reason.lower().startswith("initial") else "Initial backup"
     author_name = author or requested_by or "networkops-backup"
 
     sha = store.write(

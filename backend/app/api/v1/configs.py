@@ -258,6 +258,9 @@ def device_history(device_id: uuid.UUID, limit: int = Query(100, le=1000), ctx: 
     return [c.__dict__ for c in store_for(ctx.db, ctx.tenant_id).history(device_relpath(d), limit)]
 
 
+EMPTY_REV = "empty"
+
+
 class DiffOut(BaseModel):
     old_rev: str
     new_rev: str
@@ -291,7 +294,9 @@ def device_diff(
     d = _device(ctx, device_id)
     store = store_for(ctx.db, ctx.tenant_id)
     path = device_relpath(d)
-    a, b = store.read(path, old), store.read(path, new)
+    # old="empty": compare with nothing, e.g. to show a device's first (only) stored version
+    a = "" if old == EMPTY_REV else store.read(path, old)
+    b = store.read(path, new)
     if a is None or b is None:
         raise HTTPException(404, "revision not found")
     uni = diffsvc.unified(a, b, f"{d.hostname}@{old[:10]}", f"{d.hostname}@{new[:10]}", context)
@@ -300,7 +305,8 @@ def device_diff(
     rows = diffsvc.side_by_side(a, b, context)
     authors: list[dict] = []
     commands: list[dict] = []
-    can_attribute = attribute and ctx.principal.can_on_device("accounting:read", d)
+    # no attribution for a first version: nobody "typed" the whole existing config
+    can_attribute = attribute and old != EMPTY_REV and ctx.principal.can_on_device("accounting:read", d)
     if can_attribute:
         ca, cb = store.commit_info(old), store.commit_info(new)
         if ca and cb:
