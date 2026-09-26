@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import ipaddress
 import re
-import threading
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import Ctx, require
@@ -28,17 +27,13 @@ from app.api.v1.configs import _device
 from app.models import Device, IxpMember, Link, RancidConfig, Tenant
 from app.services import audit
 from app.services.backup.engine import device_relpath, store_for
-from app.services.dcim import devicetypes, ports
+from app.services.dcim import devicetypes, ports, topology
 from app.services.intel.parser import parse as parse_intel
 
 router = APIRouter(tags=["dcim"])
 
 OVERRIDES_KEY = "device_types"
 MAX_BGP_PER_PORT = 200
-
-_addr_cache: dict[uuid.UUID, tuple[str, list[tuple[Any, str]]]] = {}
-_addr_lock = threading.Lock()
-
 
 # --- helpers ----------------------------------------------------------------------------------
 
@@ -117,41 +112,18 @@ def _device_type(ctx: Ctx, d: Device) -> tuple[devicetypes.DeviceType | None, di
     return dt, {"model": model, "vendor": vendor_slug, "model_source": source}
 
 
-def _latest_commits(ctx: Ctx) -> dict[uuid.UUID, str]:
-    rows = ctx.db.execute(
-        text(
-            "SELECT DISTINCT ON (device_id) device_id, commit_sha FROM config_backups "
-            "WHERE tenant_id = :t AND commit_sha IS NOT NULL ORDER BY device_id, collected_at DESC"
-        ),
-        {"t": ctx.tenant_id},
-    ).all()
-    return {r[0]: r[1] for r in rows}
-
-
 def _addresses_by_device(ctx: Ctx, devices: dict[uuid.UUID, Device]) -> dict[uuid.UUID, list[tuple[Any, str]]]:
-    """device -> [(ip_interface, interface name)] from each device's latest config (cached per commit)."""
-    store = store_for(ctx.db, ctx.tenant_id)
+    """device -> [(ip_interface, interface name)] from each device's latest config."""
     out = {}
-    for did, sha in _latest_commits(ctx).items():
-        dev = devices.get(did)
-        if dev is None:
-            continue
-        with _addr_lock:
-            hit = _addr_cache.get(did)
-        if hit and hit[0] == sha:
-            out[did] = hit[1]
-            continue
-        content = store.read(device_relpath(dev), sha) or ""
+    for did, ifs in topology.parsed_interfaces(ctx.db, ctx.tenant_id, devices).items():
         addrs = []
-        for i in ports.parse(content, dev.platform.slug if dev.platform else None).values():
+        for i in ifs.values():
             for u in i.units.values():
                 for a in u.addresses:
                     try:
                         addrs.append((ipaddress.ip_interface(a), i.name if u.name == "0" else f"{i.name}.{u.name}"))
                     except ValueError:
                         continue
-        with _addr_lock:
-            _addr_cache[did] = (sha, addrs)
         out[did] = addrs
     return out
 

@@ -737,20 +737,99 @@ def delete_device_group(group_id: uuid.UUID, ctx: Ctx = Depends(require("devices
 
 
 @router.get("/topology")
-def topology(site_id: uuid.UUID | None = None, ctx: Ctx = Depends(require("devices:read"))):
-    """Graph for the network map: sites as clusters, devices as nodes, links as edges."""
-    stmt = visible_devices_filter(ctx, _device_query(ctx))
+def topology(
+    site_id: uuid.UUID | None = None,
+    sources: str = "cable,subnet,description",
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """Graph for the network map: sites as clusters, devices as nodes, links as edges.
+
+    Links combine NetBox cables with links discovered in the backed-up configurations
+    (point-to-point subnets, interface descriptions naming another device; LAGs as one link).
+    With ``site_id`` the graph holds that site's devices plus their direct neighbours elsewhere
+    (``external: true``) so links leaving the site stay visible."""
+    from app.services.dcim.topology import discover_links
+
+    wanted = {x.strip() for x in sources.split(",") if x.strip()}
+    visible = {d.id: d for d in ctx.db.scalars(visible_devices_filter(ctx, _device_query(ctx)))}
+    edges: list[dict] = []
+    seen: set[tuple] = set()
+
+    def add(a, a_if, b, b_if, speed, status, source, detail=None, members=1):
+        if a not in visible or b not in visible or a == b:
+            return
+        key = (frozenset((a, b)), frozenset(x for x in (a_if, b_if) if x))
+        if key in seen:
+            return
+        seen.add(key)
+        edges.append(
+            {
+                "id": f"{source}:{a}:{a_if}:{b}:{b_if}",
+                "source": str(a),
+                "target": str(b),
+                "a_interface": a_if,
+                "b_interface": b_if,
+                "label": " - ".join(x for x in (a_if, b_if) if x) or source,
+                "speed_mbps": speed,
+                "status": status,
+                "kind": source,
+                "detail": detail,
+                "members": members,
+            }
+        )
+
+    if "cable" in wanted:
+        for link in ctx.db.scalars(select(Link).where(Link.tenant_id == ctx.tenant_id)):
+            add(
+                link.a_device_id,
+                link.a_interface,
+                link.b_device_id,
+                link.b_interface,
+                link.speed_mbps,
+                link.status,
+                "cable",
+            )
+    if wanted & {"subnet", "description"}:
+        for lk in discover_links(ctx.db, ctx.tenant_id, visible):
+            if lk.source in wanted:
+                add(
+                    lk.a.device_id,
+                    lk.a.interface,
+                    lk.b.device_id,
+                    lk.b.interface,
+                    lk.speed,
+                    "up" if lk.up else "down",
+                    lk.source,
+                    lk.detail,
+                    max(lk.a.members, lk.b.members),
+                )
+
+    devices = list(visible.values())
+    external: set[uuid.UUID] = set()
     if site_id:
-        stmt = stmt.where(Device.site_id == site_id)
-    devices = list(ctx.db.scalars(stmt))
-    ids = {d.id for d in devices}
-    links = ctx.db.scalars(
-        select(Link).where(Link.tenant_id == ctx.tenant_id, Link.a_device_id.in_(ids), Link.b_device_id.in_(ids))
-    )
+        inside = {d.id for d in devices if d.site_id == site_id}
+        keep = []
+        for e in edges:
+            a, b = uuid.UUID(e["source"]), uuid.UUID(e["target"])
+            if a in inside or b in inside:
+                keep.append(e)
+                external |= {x for x in (a, b) if x not in inside}
+        edges = keep
+        devices = [d for d in devices if d.id in inside or d.id in external]
     sites = {d.site.id: d.site for d in devices if d.site}
+    per_site: dict = {}
+    for d in devices:
+        per_site[d.site_id] = per_site.get(d.site_id, 0) + 1
     return {
         "sites": [
-            {"id": str(s.id), "name": s.name, "kind": s.kind, "lat": s.latitude, "lon": s.longitude}
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "kind": s.kind,
+                "lat": s.latitude,
+                "lon": s.longitude,
+                "device_count": per_site.get(s.id, 0),
+            }
             for s in sites.values()
         ],
         "nodes": [
@@ -762,18 +841,9 @@ def topology(site_id: uuid.UUID | None = None, ctx: Ctx = Depends(require("devic
                 "platform": d.platform.slug if d.platform else None,
                 "status": d.reachability,
                 "backup": d.last_backup_status,
+                "external": d.id in external,
             }
             for d in devices
         ],
-        "edges": [
-            {
-                "id": str(link.id),
-                "source": str(link.a_device_id),
-                "target": str(link.b_device_id),
-                "label": f"{link.a_interface} - {link.b_interface}",
-                "speed_mbps": link.speed_mbps,
-                "status": link.status,
-            }
-            for link in links
-        ],
+        "edges": edges,
     }

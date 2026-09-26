@@ -154,3 +154,60 @@ def test_device_ports_endpoint(admin, db, tenant, monkeypatch, offline_library):
 
     assert admin.delete(f"/api/v1/devices/{ids['mx204-a']}/device-type").status_code == 204
     assert admin.get(f"/api/v1/devices/{ids['mx204-a']}/front-image").status_code == 404
+
+
+def test_topology_from_configs(admin, monkeypatch, offline_library):
+    third = """set system host-name sw-c
+set interfaces xe-0/0/0 description "uplink to mx204-a"
+set interfaces xe-0/0/0 gigether-options 802.3ad ae1
+set interfaces xe-0/0/1 description "uplink to mx204-a"
+set interfaces xe-0/0/1 gigether-options 802.3ad ae1
+set interfaces xe-0/0/5 disable
+set interfaces xe-0/0/5 description "to mx204-b spare"
+"""
+    configs = {"mx204-a": MX_A, "mx204-b": MX_B, "sw-c": third}
+
+    def collect(targets, workers=50, timeout=60):
+        return [CollectResult(t.device_id, True, config=configs[t.hostname], duration_ms=1) for t in targets]
+
+    monkeypatch.setattr(engine, "nornir_collect", collect)
+    plat = {p["slug"]: p["id"] for p in admin.get("/api/v1/platforms").json()}
+    admin.post("/api/v1/credentials", json={"name": "c", "username": "u", "password": "p", "make_default": True})
+    sites = [admin.post("/api/v1/sites", json={"name": n, "slug": n.lower()}).json()["id"] for n in ("FRA", "AMS")]
+    ids = {}
+    for h, ip, site in (("mx204-a", "10.0.0.1", 0), ("mx204-b", "10.0.0.2", 1), ("sw-c", "10.0.0.3", 0)):
+        ids[h] = admin.post(
+            "/api/v1/devices",
+            json={"hostname": h, "management_ip": ip, "platform_id": plat["junos"], "site_id": sites[site]},
+        ).json()["id"]
+    admin.post("/api/v1/backups/run", json={"run_async": False})
+
+    t = admin.get("/api/v1/topology").json()
+    by = {frozenset((e["source"], e["target"])): e for e in t["edges"]}
+    core = by[frozenset((ids["mx204-a"], ids["mx204-b"]))]
+    assert core["kind"] == "subnet" and core["detail"] == "10.1.1.0/31" and core["speed_mbps"] == 100_000
+    assert core["label"] == "et-0/0/0 - et-0/0/0" and core["status"] == "up"
+    lag = by[frozenset((ids["sw-c"], ids["mx204-a"]))]
+    assert lag["kind"] == "description" and lag["members"] == 2 and lag["speed_mbps"] == 20_000
+    assert "ae1" in lag["label"]
+    spare = by[frozenset((ids["sw-c"], ids["mx204-b"]))]
+    assert spare["status"] == "down"  # the port naming mx204-b is disabled
+    assert {s["name"]: s["device_count"] for s in t["sites"]} == {"FRA": 2, "AMS": 1}
+
+    only_subnets = admin.get("/api/v1/topology", params={"sources": "subnet"}).json()
+    assert [e["kind"] for e in only_subnets["edges"]] == ["subnet"]
+
+    # per site: AMS holds mx204-b plus its neighbours elsewhere, flagged external
+    ams = admin.get("/api/v1/topology", params={"site_id": sites[1]}).json()
+    nodes = {n["label"]: n for n in ams["nodes"]}
+    assert not nodes["mx204-b"]["external"] and nodes["mx204-a"]["external"] and nodes["sw-c"]["external"]
+    assert len(ams["edges"]) == 2
+
+
+def test_profile_update(admin):
+    me = admin.get("/api/v1/auth/me").json()
+    r = admin.patch("/api/v1/auth/me", json={"full_name": "  Shashank K  ", "email": "noc@example.net"})
+    assert r.status_code == 200 and r.json()["full_name"] == "Shashank K" and r.json()["email"] == "noc@example.net"
+    assert admin.patch("/api/v1/auth/me", json={"email": "nope"}).status_code == 422
+    assert admin.get("/api/v1/audit", params={"action": "user.profile_update"}).json()["total"] == 1
+    assert me["username"] == admin.get("/api/v1/auth/me").json()["username"]

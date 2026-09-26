@@ -108,6 +108,45 @@ def me(ctx: Ctx = Depends(get_ctx)):
     return MeOut(**fields, permissions=sorted(ctx.principal.permissions), groups=[g.name for g in u.groups])
 
 
+class ProfileIn(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+
+
+@router.patch("/me", response_model=MeOut)
+def update_me(body: ProfileIn, ctx: Ctx = Depends(get_ctx)):
+    """Change your own display name / email (directory users: until the next sync overwrites it)."""
+    u = ctx.user
+    data = body.model_dump(exclude_unset=True)
+    before = {k: getattr(u, k) for k in data}
+    if "full_name" in data:
+        name = (data["full_name"] or "").strip()
+        if len(name) > 255:
+            raise HTTPException(422, "name is too long")
+        u.full_name = name or None
+    if "email" in data:
+        email = (data["email"] or "").strip()
+        if email and ("@" not in email or len(email) > 255):
+            raise HTTPException(422, "invalid email address")
+        u.email = email or None
+    after = {k: getattr(u, k) for k in data}
+    if after != before:
+        audit.record(
+            ctx.db,
+            tenant_id=ctx.tenant_id,
+            action="user.profile_update",
+            actor=u,
+            target_type="user",
+            target_id=u.id,
+            target_name=u.username,
+            before=before,
+            after=after,
+            source_ip=ctx.ip,
+        )
+    ctx.db.commit()
+    return me(ctx)
+
+
 class PasswordChangeIn(BaseModel):
     current_password: str
     new_password: str

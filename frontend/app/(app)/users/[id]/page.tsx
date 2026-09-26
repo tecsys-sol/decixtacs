@@ -47,6 +47,7 @@ export default function UserDetailPage() {
     onSuccess: (u) => {
       qc.setQueryData(["users", "detail", id], u);
       void qc.invalidateQueries({ queryKey: ["users"] });
+      if (u.id === me?.id) void qc.invalidateQueries({ queryKey: ["auth", "me"] });
     },
     onError: (e) => toast.error("Update failed", errorMessage(e)),
   });

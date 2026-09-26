@@ -887,9 +887,31 @@ export function funnelOption(items: PieItem[], theme: ThemeArg, format: ValueFor
 
 export interface GraphInput {
   sites: { id: string; name: string }[];
-  nodes: { id: string; label: string; site_id: string | null; role: string | null; platform: string | null; status: string; backup: string | null }[];
-  edges: { id: string; source: string; target: string; label: string; speed_mbps: number | null; status: string }[];
+  nodes: { id: string; label: string; site_id: string | null; role: string | null; platform: string | null; status: string; backup: string | null; external?: boolean }[];
+  edges: {
+    id: string;
+    source: string;
+    target: string;
+    label: string;
+    speed_mbps: number | null;
+    status: string;
+    kind?: string;
+    detail?: string | null;
+    members?: number;
+  }[];
 }
+
+/** Line width grows with capacity (log scale): 1G thin, 10G, 100G, bundles of 100G thick. */
+export function linkWidth(mbps: number | null | undefined): number {
+  if (!mbps) return 1.6;
+  return Math.min(6, 1.2 + Math.log10(Math.max(mbps, 1000) / 1000) * 1.4);
+}
+
+export const LINK_KIND_LABEL: Record<string, string> = {
+  cable: "NetBox cable",
+  subnet: "point-to-point subnet (config)",
+  description: "named in interface descriptions (config)",
+};
 
 export type GraphLayout = "clustered" | "force";
 
@@ -982,6 +1004,11 @@ export function clusteredLayout(input: GraphInput, iterations = 220): Map<string
   return new Map(input.nodes.map((node, i) => [node.id, [Math.round(pos[i][0]), Math.round(pos[i][1])] as [number, number]]));
 }
 
+/** Escape text placed in HTML tooltips (interface descriptions and names come from device configs). */
+export function esc(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
+}
+
 function speedLabel(mbps: number | null): string {
   if (!mbps) return "";
   return mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`;
@@ -1008,6 +1035,7 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
   }
   const clustered = layout === "clustered";
   const positions = clustered ? clusteredLayout(input) : null;
+  const external = new Set(input.nodes.filter((n) => n.external).map((n) => n.id));
   const showLabels = input.nodes.length <= 60;
 
   const nodes = input.nodes.map((n) => {
@@ -1027,8 +1055,9 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
         borderWidth: 3,
         shadowBlur: n.status === "down" ? 10 : 0,
         shadowColor: n.status === "down" ? alpha(th.status.danger, 0.5) : "transparent",
+        opacity: n.external ? 0.5 : 1,
       },
-      label: { show: showLabels },
+      label: { show: showLabels, opacity: n.external ? 0.7 : 1 },
       // carried through to tooltips / click handlers
       deviceId: n.id,
       status: n.status,
@@ -1048,11 +1077,15 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
       linkLabel: e.label,
       speed: speedLabel(e.speed_mbps),
       status: e.status,
+      kind: e.kind ? (LINK_KIND_LABEL[e.kind] ?? e.kind) : "",
+      detail: e.detail ?? "",
+      members: e.members ?? 1,
       lineStyle: {
         color: e.status === "up" ? t.link : th.status.danger,
-        width: e.speed_mbps && e.speed_mbps >= 100_000 ? 3 : 2,
-        type: e.status === "up" ? ("solid" as const) : ("dashed" as const),
+        width: linkWidth(e.speed_mbps),
+        type: e.status !== "up" || e.kind === "description" ? ("dashed" as const) : ("solid" as const),
         curveness: 0.08,
+        opacity: external.has(e.source) || external.has(e.target) ? 0.55 : 0.9,
       },
     }));
 
@@ -1062,11 +1095,12 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
       const p = raw as { dataType: string; data: Record<string, unknown> };
       if (p.dataType === "edge") {
         const d = p.data;
-        return `<b>${String(d.linkLabel || "Link")}</b><br/><span style="color:${t.label}">Status</span> ${String(d.status)}${d.speed ? ` · ${String(d.speed)}` : ""}`;
+        const bundle = Number(d.members) > 1 ? ` (${String(d.members)} members)` : "";
+        return `<b>${esc(String(d.linkLabel || "Link"))}</b><br/><span style="color:${t.label}">Status</span> ${String(d.status)}${d.speed ? ` · ${String(d.speed)}${bundle}` : ""}${d.kind ? `<br/><span style="color:${t.label}">From</span> ${esc(String(d.kind))}` : ""}${d.detail ? `<br/><span style="color:${t.label}">Subnet</span> ${esc(String(d.detail))}` : ""}`;
       }
       const d = p.data;
       const meta = [d.role, d.platform].filter(Boolean).join(" · ");
-      return `<b>${String(d.name)}</b><br/><span style="color:${t.label}">${String(d.site)}</span>${meta ? `<br/>${String(meta)}` : ""}<br/>Status: <b>${String(d.status)}</b>${d.backup ? `<br/>Last backup: ${String(d.backup)}` : ""}`;
+      return `<b>${esc(String(d.name))}</b><br/><span style="color:${t.label}">${esc(String(d.site))}</span>${meta ? `<br/>${String(meta)}` : ""}<br/>Status: <b>${String(d.status)}</b>${d.backup ? `<br/>Last backup: ${String(d.backup)}` : ""}`;
     },
   };
 
@@ -1143,4 +1177,187 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
     });
   }
   return option;
+}
+
+
+// --- per-location overview -------------------------------------------------------------------
+
+export interface SiteSummary {
+  id: string;
+  name: string;
+  devices: number;
+  down: number;
+  internal: number; // links inside the site
+  lat: number | null;
+  lon: number | null;
+}
+
+export interface SiteLink {
+  a: string;
+  b: string;
+  count: number;
+  capacity: number; // Mbps, links without a known speed count as 0
+  down: number;
+  inferred: number; // only named in descriptions
+  labels: string[];
+}
+
+const NO_SITE = "__none__";
+
+/** Fold a device graph into sites and the link bundles between them. */
+export function aggregateSites(input: Omit<GraphInput, "sites"> & { sites: { id: string; name: string; lat?: number | null; lon?: number | null }[] }): { sites: SiteSummary[]; links: SiteLink[] } {
+  const siteOf = new Map(input.nodes.map((n) => [n.id, n.site_id ?? NO_SITE]));
+  const byId = new Map<string, SiteSummary>();
+  const meta = new Map(input.sites.map((s) => [s.id, s]));
+  const nodeName = new Map(input.nodes.map((n) => [n.id, n.label]));
+  for (const n of input.nodes) {
+    const id = n.site_id ?? NO_SITE;
+    const m = meta.get(id);
+    const cur = byId.get(id) ?? { id, name: m?.name ?? "No site", devices: 0, down: 0, internal: 0, lat: m?.lat ?? null, lon: m?.lon ?? null };
+    cur.devices += 1;
+    if (n.status === "down") cur.down += 1;
+    byId.set(id, cur);
+  }
+  const links = new Map<string, SiteLink>();
+  for (const e of input.edges) {
+    const a = siteOf.get(e.source);
+    const b = siteOf.get(e.target);
+    if (!a || !b) continue;
+    if (a === b) {
+      byId.get(a)!.internal += 1;
+      continue;
+    }
+    const [x, y] = a < b ? [a, b] : [b, a];
+    const key = `${x}|${y}`;
+    const l = links.get(key) ?? { a: x, b: y, count: 0, capacity: 0, down: 0, inferred: 0, labels: [] };
+    l.count += 1;
+    l.capacity += e.speed_mbps ?? 0;
+    if (e.status !== "up") l.down += 1;
+    if (e.kind === "description") l.inferred += 1;
+    if (l.labels.length < 8) l.labels.push(`${nodeName.get(e.source)} ${e.label ? `(${e.label})` : ""} ↔ ${nodeName.get(e.target)}`);
+    links.set(key, l);
+  }
+  return { sites: [...byId.values()].sort((p, q) => p.name.localeCompare(q.name)), links: [...links.values()] };
+}
+
+function capacityLabel(mbps: number): string {
+  if (!mbps) return "";
+  return mbps >= 1_000_000 ? `${+(mbps / 1_000_000).toFixed(1)}T` : mbps >= 1000 ? `${+(mbps / 1000).toFixed(1)}G` : `${mbps}M`;
+}
+
+/** Sites as bubbles (sized by device count, placed by coordinates when every site has them). */
+export function siteGraphOption(data: { sites: SiteSummary[]; links: SiteLink[] }, theme: ThemeArg): EChartsOption {
+  const th = resolveTheme(theme);
+  const t = th.tokens;
+  const colors = th.categorical;
+  const geo = data.sites.length > 1 && data.sites.every((s) => s.lat != null && s.lon != null);
+  const pos = new Map<string, [number, number]>();
+  if (geo) {
+    const lons = data.sites.map((s) => s.lon!);
+    const lats = data.sites.map((s) => s.lat!);
+    const [x0, x1, y0, y1] = [Math.min(...lons), Math.max(...lons), Math.min(...lats), Math.max(...lats)];
+    const span = Math.max(x1 - x0, y1 - y0, 1e-6);
+    data.sites.forEach((s) => pos.set(s.id, [100 + ((s.lon! - x0) / span) * 800, 100 + ((y1 - s.lat!) / span) * 800]));
+  } else {
+    data.sites.forEach((s, i) => {
+      const a = (i / Math.max(data.sites.length, 1)) * Math.PI * 2 - Math.PI / 2;
+      const r = data.sites.length > 1 ? 330 : 0;
+      pos.set(s.id, [500 + r * Math.cos(a), 500 + r * Math.sin(a)]);
+    });
+  }
+  const maxDev = Math.max(1, ...data.sites.map((s) => s.devices));
+  const size = (s: SiteSummary) => 34 + Math.sqrt(s.devices / maxDev) * 46;
+  // Nearby sites (Amsterdam / Frankfurt) would overlap: push bubbles apart, keeping the geography.
+  for (let it = 0; it < 80; it++) {
+    let moved = false;
+    for (let i = 0; i < data.sites.length; i++) {
+      for (let j = i + 1; j < data.sites.length; j++) {
+        const a = pos.get(data.sites[i].id)!;
+        const b = pos.get(data.sites[j].id)!;
+        const need = (size(data.sites[i]) + size(data.sites[j])) * 1.1 + 90;
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        const d = Math.hypot(dx, dy);
+        if (d >= need) continue;
+        if (d < 1e-3) [dx, dy] = [1, 0.3];
+        const push = (need - d) / 2 / (Math.hypot(dx, dy) || 1);
+        a[0] -= dx * push;
+        a[1] -= dy * push;
+        b[0] += dx * push;
+        b[1] += dy * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  const xs = [...pos.values()].map((p) => p[0]);
+  const ys = [...pos.values()].map((p) => p[1]);
+  const pad = 90;
+  const bounds = { xmin: Math.min(0, ...xs) - pad, xmax: Math.max(1000, ...xs) + pad, ymin: Math.min(0, ...ys) - pad, ymax: Math.max(1000, ...ys) + pad };
+  return {
+    tooltip: {
+      ...tooltipBase(th),
+      formatter: (raw: unknown) => {
+        const p = raw as { dataType: string; data: Record<string, unknown> };
+        const d = p.data;
+        if (p.dataType === "edge") {
+          const l = d.link as SiteLink;
+          return `<b>${l.count} link${l.count === 1 ? "" : "s"}</b>${l.capacity ? ` · ${capacityLabel(l.capacity)}` : ""}${l.down ? ` · <span style="color:${th.status.danger}">${l.down} down</span>` : ""}${l.inferred ? `<br/><span style="color:${t.label}">${l.inferred} from descriptions only</span>` : ""}<br/>${l.labels.map((x) => esc(x)).join("<br/>")}`;
+        }
+        const s = d.site as SiteSummary;
+        return `<b>${esc(s.name)}</b><br/>${s.devices} device${s.devices === 1 ? "" : "s"} · ${s.internal} link${s.internal === 1 ? "" : "s"} inside${s.down ? `<br/><span style="color:${th.status.danger}">${s.down} down</span>` : ""}<br/><span style="color:${t.label}">Click to open the site</span>`;
+      },
+    },
+    xAxis: { show: false, min: bounds.xmin, max: bounds.xmax, type: "value" },
+    yAxis: { show: false, min: bounds.ymin, max: bounds.ymax, type: "value", inverse: true },
+    grid: { left: 40, right: 40, top: 40, bottom: 40 },
+    series: [
+      {
+        type: "graph",
+        layout: "none",
+        coordinateSystem: "cartesian2d",
+        data: data.sites.map((s, i) => {
+          const [x, y] = pos.get(s.id)!;
+          const c = i < colors.length ? colors[i] : t.label;
+          return {
+            id: s.id,
+            name: s.name,
+            value: [x, y],
+            symbolSize: size(s),
+            site: s,
+            siteId: s.id,
+            itemStyle: {
+              color: alpha(c, 0.16),
+              borderColor: s.down ? th.status.danger : c,
+              borderWidth: 3,
+            },
+            label: {
+              show: true,
+              formatter: `{n|${s.name}}\n{c|${s.devices} device${s.devices === 1 ? "" : "s"}}`,
+              rich: {
+                n: { fontWeight: 700, fontSize: 13, color: t.ink, fontFamily: th.fonts.display },
+                c: { fontSize: 11, color: t.label, fontFamily: th.fonts.body, padding: [2, 0, 0, 0] },
+              },
+            },
+          };
+        }),
+        links: data.links.map((l, i) => ({
+          source: l.a,
+          target: l.b,
+          link: l,
+          label: { show: true, formatter: `${l.count} link${l.count === 1 ? "" : "s"}${l.capacity ? ` · ${capacityLabel(l.capacity)}` : ""}`, fontSize: 11, color: t.ink2, fontFamily: th.fonts.mono, backgroundColor: alpha(t.surface, 0.85), padding: [2, 4], borderRadius: 3 },
+          lineStyle: {
+            color: l.down ? th.status.danger : t.link,
+            width: Math.min(10, 1.5 + l.count * 0.8 + linkWidth(l.capacity / Math.max(l.count, 1)) - 1.2),
+            type: l.inferred === l.count ? ("dashed" as const) : ("solid" as const),
+            curveness: 0.1 + (i % 3) * 0.08,
+            opacity: 0.9,
+          },
+        })),
+        emphasis: { focus: "adjacency", lineStyle: { width: 8 } },
+        label: { position: "bottom", distance: 6 },
+        edgeSymbol: ["none", "none"],
+      },
+    ],
+  } as EChartsOption;
 }

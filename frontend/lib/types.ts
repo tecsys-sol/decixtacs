@@ -254,6 +254,7 @@ export interface Topology {
     kind: string;
     lat: number | null;
     lon: number | null;
+    device_count?: number;
   }[];
   nodes: {
     id: string;
@@ -263,6 +264,8 @@ export interface Topology {
     platform: string | null;
     status: string;
     backup: string | null;
+    /** neighbour at another site, shown when the map is filtered to one site */
+    external?: boolean;
   }[];
   edges: {
     id: string;
@@ -271,6 +274,12 @@ export interface Topology {
     label: string;
     speed_mbps: number | null;
     status: string;
+    /** cable (NetBox) | subnet (shared point-to-point subnet) | description (named in interface descriptions) */
+    kind?: "cable" | "subnet" | "description";
+    a_interface?: string | null;
+    b_interface?: string | null;
+    detail?: string | null;
+    members?: number;
   }[];
 }
 
