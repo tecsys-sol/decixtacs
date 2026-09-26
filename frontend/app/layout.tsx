@@ -17,9 +17,8 @@ const plexMono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], var
 const FONT_VARIABLES = [sora, manrope, jetbrains, fraunces, plexSans, plexMono].map((f) => f.variable).join(" ");
 
 export const metadata: Metadata = {
-  title: { default: "NetworkOps Manager", template: "%s · NetworkOps Manager" },
+  title: { default: "DE-CIX NetworkOps Manager", template: "%s · DE-CIX NetworkOps" },
   description: "Network access and configuration management for ISPs and IXPs",
-  icons: { icon: "/favicon.svg" },
 };
 
 export const viewport: Viewport = {

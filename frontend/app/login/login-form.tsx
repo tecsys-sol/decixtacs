@@ -5,7 +5,7 @@ import { ArrowLeft, KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import * as React from "react";
 
 import { Field } from "@/components/common/field";
-import { Logo } from "@/components/layout/logo";
+import { BrandLogo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError, errorMessage } from "@/lib/api";
@@ -78,7 +78,13 @@ export function LoginForm() {
 
   return (
     <div className="rise relative w-full max-w-sm">
-      <Logo className="mb-8" subtitle="Network access & configuration" />
+      <div className="mb-8 flex items-center gap-4">
+        <BrandLogo height={64} />
+        <div className="leading-tight">
+          <p className="font-display text-lg font-bold">NetworkOps Manager</p>
+          <p className="text-xs text-muted-foreground">Network access &amp; configuration</p>
+        </div>
+      </div>
       <h1 className="font-display text-2xl font-bold tracking-[-0.02em]">{mfa ? "Two-factor authentication" : "Sign in"}</h1>
       <p className="mb-6 mt-1 text-sm text-ink-3">
         {mfa ? "Enter the 6-digit code from your authenticator app." : "Network access & configuration management"}

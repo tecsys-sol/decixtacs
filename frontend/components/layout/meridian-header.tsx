@@ -88,7 +88,7 @@ export function MeridianHeader({
           <Menu />
         </Button>
         <Link href="/dashboard" aria-label="NetworkOps Manager home" className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <Logo subtitle="Manager" className="[&_.truncate]:hidden sm:[&_.truncate]:block xl:[&_.truncate]:hidden 2xl:[&_.truncate]:block" />
+          <Logo className="[&_.truncate]:hidden sm:[&_.truncate]:block xl:[&_.truncate]:hidden 2xl:[&_.truncate]:block" />
         </Link>
         <nav aria-label="Main" className="hidden min-w-0 items-center gap-1 xl:flex">
           {groups.map((g) => (
