@@ -9,6 +9,7 @@ import { useOnChange } from "@/hooks/use-reset";
 import { useGlobalShortcuts } from "@/hooks/use-shortcuts";
 import { TimeRangeProvider } from "@/hooks/use-time-range";
 
+import { AppFooter } from "./app-footer";
 import { CommandPalette } from "./command-palette";
 import { Logo } from "./logo";
 import { MeridianHeader } from "./meridian-header";
@@ -79,6 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <MeridianHeader onOpenSearch={openSearch} onOpenNav={() => setMobileOpen(true)} onShowShortcuts={openHelp} />
           {drawer}
           <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-10 pt-6 sm:px-8 sm:pt-[30px] xl:px-11">{children}</main>
+          <AppFooter className="xl:px-11" />
           {overlays}
         </div>
       </TimeRangeProvider>
@@ -93,6 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar onOpenSearch={openSearch} onOpenNav={() => setMobileOpen(true)} onShowShortcuts={openHelp} />
           <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-8 pt-6 sm:px-8 sm:pt-[26px]">{children}</main>
+          <AppFooter />
         </div>
         {overlays}
       </div>
