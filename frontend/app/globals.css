@@ -91,10 +91,10 @@
     --ill-wave: #dcd8fb;
     --ill-wave-2: #efedfd;
     --ill-leaf: #b9b2f5;
-    /* typography: next/font variables are declared on <html> by app/layout.tsx */
-    --font-display: var(--font-sora), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-    --font-body: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-    --font-code: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* typography: self-hosted @fontsource families imported in app/layout.tsx */
+    --font-display: "Sora Variable", "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
+    --font-body: "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
+    --font-code: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
     --heading-weight: 700;
     /* radii */
     --radius-sm: 7px;
@@ -254,9 +254,9 @@
     --ill-leaf: #8cbcb0;
     --shadow-brand: 0 6px 16px rgba(11, 95, 89, 0.22);
     --shadow-pop: 0 10px 30px rgba(31, 27, 22, 0.1);
-    --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
-    --font-body: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
-    --font-code: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    --font-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
+    --font-body: "IBM Plex Sans Variable", ui-sans-serif, system-ui, sans-serif;
+    --font-code: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --heading-weight: 600;
     --radius: 14px;
     --radius-sm: 8px;

@@ -77,16 +77,16 @@ export interface ChartTheme {
   fonts: ChartFonts;
 }
 
-/** next/font registers the real family names; canvas fonts cannot use CSS variables. */
+/** @fontsource family names; canvas fonts cannot use CSS variables. */
 const AURORA_FONTS: ChartFonts = {
-  body: "Manrope, 'Manrope Fallback', system-ui, sans-serif",
-  display: "Sora, 'Sora Fallback', Manrope, sans-serif",
-  mono: "'JetBrains Mono', 'JetBrains Mono Fallback', ui-monospace, monospace",
+  body: "'Manrope Variable', system-ui, sans-serif",
+  display: "'Sora Variable', 'Manrope Variable', sans-serif",
+  mono: "'JetBrains Mono Variable', ui-monospace, monospace",
 };
 const MERIDIAN_FONTS: ChartFonts = {
-  body: "'IBM Plex Sans', 'IBM Plex Sans Fallback', system-ui, sans-serif",
-  display: "Fraunces, 'Fraunces Fallback', Georgia, serif",
-  mono: "'IBM Plex Mono', 'IBM Plex Mono Fallback', ui-monospace, monospace",
+  body: "'IBM Plex Sans Variable', system-ui, sans-serif",
+  display: "'Fraunces Variable', Georgia, serif",
+  mono: "'IBM Plex Mono', ui-monospace, monospace",
 };
 
 const tooltipShadow = (shadow: string, radius: number) => `box-shadow:${shadow};border-radius:${radius}px;`;

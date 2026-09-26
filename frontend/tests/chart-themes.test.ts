@@ -60,8 +60,8 @@ describe("chart design themes", () => {
     expect((m.tooltip as AnyRec).backgroundColor).toBe("#fffdf8");
     expect((m.tooltip as AnyRec).borderColor).toBe("#e6dfd0");
     expect(String((m.tooltip as AnyRec).extraCssText)).toContain("border-radius:12px");
-    expect(((m.textStyle as AnyRec).fontFamily as string).startsWith("'IBM Plex Sans'")).toBe(true);
-    expect(((a.textStyle as AnyRec).fontFamily as string).startsWith("Manrope")).toBe(true);
+    expect(((m.textStyle as AnyRec).fontFamily as string).startsWith("'IBM Plex Sans Variable'")).toBe(true);
+    expect(((a.textStyle as AnyRec).fontFamily as string).startsWith("'Manrope Variable'")).toBe(true);
     expect((series(m)[0].data as AnyRec[]).map((d) => (d.itemStyle as AnyRec).color)).toEqual(["#009683", "#e0673a"]);
     const label = series(m)[0].label as AnyRec;
     expect(label.fontFamily).toBe(meridian.fonts.display);
