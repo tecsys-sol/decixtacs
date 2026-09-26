@@ -13,8 +13,8 @@ import type { CommandLog, Device, Page } from "@/lib/types";
 export function CommandsTab({ device }: { device: Device }) {
   const [offset, setOffset] = React.useState(0);
   const q = useQuery({
-    queryKey: ["accounting", "device", device.hostname, offset],
-    queryFn: () => api.get<Page<CommandLog>>("/accounting/commands", { device: device.hostname, limit: PAGE_SIZE, offset }),
+    queryKey: ["accounting", "device", device.id, offset],
+    queryFn: () => api.get<Page<CommandLog>>("/accounting/commands", { device_id: device.id, limit: PAGE_SIZE, offset }),
     placeholderData: (p) => p,
   });
   return (

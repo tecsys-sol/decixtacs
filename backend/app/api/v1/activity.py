@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
@@ -61,6 +61,7 @@ class CommandOut(ORM):
 def search_commands(
     user: str | None = None,
     device: str | None = Query(None, description="hostname or management address"),
+    device_id: uuid.UUID | None = Query(None, description="inventory device (matches its id, address and name)"),
     command: str | None = Query(None, description="substring; prefix with ~ for a regex (PostgreSQL)"),
     result: str | None = None,
     start: datetime | None = None,
@@ -74,6 +75,15 @@ def search_commands(
         stmt = stmt.where(CommandLog.username == user)
     if device:
         stmt = stmt.where(or_(CommandLog.device_name == device, CommandLog.device_address == device))
+    if device_id:
+        dev = get_owned(ctx, Device, device_id, "device")
+        stmt = stmt.where(
+            or_(
+                CommandLog.device_id == dev.id,
+                CommandLog.device_address == dev.management_ip,
+                CommandLog.device_name == dev.hostname,
+            )
+        )
     if command:
         stmt = stmt.where(
             CommandLog.command.regexp_match(command[1:])
@@ -292,6 +302,128 @@ class AuditOut(ORM):
     before: dict | None
     after: dict | None
     outcome: str
+
+
+# --- user sessions (reconstructed from TACACS+ accounting) ---------------------------------------
+
+
+def _summary(sessions, auths) -> dict:
+    return {
+        "sessions": len(sessions),
+        "users": len({s.username for s in sessions}),
+        "commands": sum(s.commands for s in sessions),
+        "config_sessions": sum(1 for s in sessions if s.config_commands),
+        "denied": sum(s.denied for s in sessions),
+        "logins": sum(1 for a in auths if a.result == "pass"),
+        "failed_logins": sum(1 for a in auths if a.result == "fail"),
+    }
+
+
+@router.get("/user-sessions")
+def user_sessions(
+    device_id: uuid.UUID | None = None,
+    user: str | None = None,
+    days: int = Query(7, ge=1, le=90),
+    config_only: bool = False,
+    limit: int = Query(50, le=500),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("accounting:read")),
+):
+    """Who logged in where and what they typed: sessions rebuilt from accounting + login events."""
+    from app.services.sessions import reconstruct
+
+    device = get_owned(ctx, Device, device_id, "device") if device_id else None
+    since = datetime.now(UTC) - timedelta(days=days)
+    sessions, auths = reconstruct(ctx.db, ctx.tenant_id, since=since, device=device, user=user or None)
+    summary = _summary(sessions, auths)
+    if config_only:
+        sessions = [s for s in sessions if s.config_commands]
+    return {
+        "items": [s.to_dict() for s in sessions[offset : offset + limit]],
+        "total": len(sessions),
+        "limit": limit,
+        "offset": offset,
+        "summary": summary,
+    }
+
+
+@router.get("/devices/{device_id}/activity")
+def device_activity(
+    device_id: uuid.UUID, days: int = Query(30, ge=1, le=365), ctx: Ctx = Depends(require("configs:read"))
+):
+    """Change-history dashboard of one device: changes, backup runs, sessions and logins."""
+    from app.api.v1.configs import _device
+    from app.services.sessions import reconstruct
+
+    d = _device(ctx, device_id)
+    since = datetime.now(UTC) - timedelta(days=days)
+    backups = list(
+        ctx.db.scalars(
+            select(ConfigBackup)
+            .where(ConfigBackup.device_id == d.id, ConfigBackup.collected_at >= since)
+            .order_by(ConfigBackup.collected_at.desc())
+        )
+    )
+    first_change = ctx.db.scalar(
+        select(func.min(ConfigBackup.collected_at)).where(ConfigBackup.device_id == d.id, ConfigBackup.changed)
+    )
+    changes = [b for b in backups if b.changed and b.collected_at != first_change]
+    change_ids = {b.id for b in changes}
+    per_day: dict[str, dict] = {}
+
+    def day(ts) -> dict:
+        k = ts.date().isoformat()
+        return per_day.setdefault(k, {"day": k, "changes": 0, "sessions": 0, "commands": 0, "backups": 0, "failed": 0})
+
+    for b in backups:
+        e = day(b.collected_at)
+        e["backups"] += 1
+        e["failed"] += b.status == "failed"
+        e["changes"] += b.id in change_ids
+    out = {
+        "device": {"id": str(d.id), "hostname": d.hostname},
+        "days": days,
+        "summary": {
+            "changes": len(changes),
+            "lines_added": sum(b.lines_added for b in changes),
+            "lines_removed": sum(b.lines_removed for b in changes),
+            "backups": len(backups),
+            "failed_backups": sum(1 for b in backups if b.status == "failed"),
+            "authors": len({b.author for b in changes if b.author}),
+        },
+        "changes": [
+            {
+                "id": str(b.id),
+                "at": b.collected_at,
+                "commit": b.commit_sha,
+                "author": b.author,
+                "reason": b.reason,
+                "added": b.lines_added,
+                "removed": b.lines_removed,
+                "risk": b.risk_score,
+                "trigger": b.trigger,
+                "change_request_id": str(b.change_request_id) if b.change_request_id else None,
+            }
+            for b in changes[:200]
+        ],
+        "accounting": ctx.principal.can_on_device("accounting:read", d),
+        "sessions": [],
+        "logins": [],
+    }
+    if out["accounting"]:
+        sessions, auths = reconstruct(ctx.db, ctx.tenant_id, since=since, device=d)
+        for s in sessions:
+            e = day(s.start)
+            e["sessions"] += 1
+            e["commands"] += s.commands
+        out["summary"].update(_summary(sessions, auths))
+        out["sessions"] = [s.to_dict() for s in sessions[:200]]
+        out["logins"] = [
+            {"at": a.timestamp, "user": a.username, "source": a.source_address, "result": a.result, "detail": a.detail}
+            for a in sorted(auths, key=lambda a: a.timestamp, reverse=True)[:300]
+        ]
+    out["per_day"] = sorted(per_day.values(), key=lambda e: e["day"])
+    return out
 
 
 @router.get("/audit", response_model=Page[AuditOut])

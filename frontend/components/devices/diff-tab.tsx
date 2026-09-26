@@ -55,11 +55,13 @@ const DOT_LABEL: Record<DotKind, string> = {
 function CommitList({
   commits,
   backups,
+  runs,
   selected,
   onSelect,
 }: {
   commits: CommitInfo[];
   backups: Map<string, Backup>;
+  runs: Map<string, { count: number; last: string }>;
   selected: string;
   onSelect: (c: CommitInfo, parent: CommitInfo | undefined) => void;
 }) {
@@ -106,7 +108,14 @@ function CommitList({
                     {" · "}
                     <RelativeTime value={c.timestamp} />
                   </span>
-                  <span className="font-mono text-[11.5px] text-muted-foreground">{shortSha(c.sha, 7)}</span>
+                  <span className="font-mono text-[11.5px] text-muted-foreground">
+                    {shortSha(c.sha, 7)}
+                    {(runs.get(c.sha)?.count ?? 0) > 1 ? (
+                      <span className="ml-1.5 font-sans">
+                        · confirmed by {runs.get(c.sha)!.count} backups, last <RelativeTime value={runs.get(c.sha)!.last} />
+                      </span>
+                    ) : null}
+                  </span>
                 </span>
               </button>
             </li>
@@ -142,6 +151,18 @@ export function DiffTab({
       if (!b.commit_sha) continue;
       const cur = m.get(b.commit_sha);
       if (!cur || (b.changed && !cur.changed)) m.set(b.commit_sha, b);
+    }
+    return m;
+  }, [backups.data]);
+  // every backup run (also the unchanged scheduled ones) counted against the version it confirmed
+  const runs = React.useMemo(() => {
+    const m = new Map<string, { count: number; last: string }>();
+    for (const b of backups.data?.items ?? []) {
+      if (!b.commit_sha || b.status === "failed") continue;
+      const cur = m.get(b.commit_sha) ?? { count: 0, last: b.collected_at };
+      cur.count += 1;
+      if (b.collected_at > cur.last) cur.last = b.collected_at;
+      m.set(b.commit_sha, cur);
     }
     return m;
   }, [backups.data]);
@@ -258,7 +279,7 @@ export function DiffTab({
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <CommitList commits={commits} backups={bySha} selected={effectiveNew} onSelect={(c, parent) => onChange(parent?.sha ?? "", c.sha)} />
+        <CommitList commits={commits} backups={bySha} runs={runs} selected={effectiveNew} onSelect={(c, parent) => onChange(parent?.sha ?? "", c.sha)} />
         <div className="rise flex min-w-0 flex-col gap-3" style={{ animationDelay: ".3s" }}>
           <div className="flex flex-wrap items-center gap-2">
             <SimpleSelect aria-label="Old revision" value={effectiveOld} onValueChange={(v) => onChange(v, effectiveNew)} options={options} className="w-full sm:w-72" />
@@ -286,6 +307,77 @@ export function DiffTab({
           ) : null}
         </div>
       </div>
+      <BackupRuns items={backups.data?.items ?? []} onSelect={(sha) => onChange("", sha)} />
     </div>
+  );
+}
+
+/** Every backup run of the device - also unchanged scheduled ones - and the version it stored or confirmed. */
+function BackupRuns({ items, onSelect }: { items: Backup[]; onSelect: (sha: string) => void }) {
+  const [all, setAll] = React.useState(false);
+  const rows = all ? items : items.slice(0, 25);
+  if (!items.length) return null;
+  return (
+    <section className="rise overflow-hidden rounded-xl border bg-card" style={{ animationDelay: ".34s" }} data-testid="backup-runs">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <div>
+          <h2 className="font-display text-[15px] font-semibold">Backup runs</h2>
+          <p className="text-xs text-ink-3">
+            Every collection, newest first. <b>Unchanged</b> runs found the same configuration and confirm the version shown; only <b>changed</b> runs create a new
+            version above.
+          </p>
+        </div>
+        <span className="text-xs text-ink-3">
+          {items.length} run{items.length === 1 ? "" : "s"} · {items.filter((b) => b.changed).length} changed · {items.filter((b) => b.status === "failed").length} failed
+        </span>
+      </div>
+      <div className="max-h-[420px] overflow-y-auto scrollbar-thin">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-card text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-2 font-medium">When</th>
+              <th className="px-2 py-2 font-medium">Result</th>
+              <th className="px-2 py-2 font-medium">Version</th>
+              <th className="px-2 py-2 font-medium">Trigger</th>
+              <th className="px-2 py-2 font-medium">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b) => (
+              <tr key={b.id} className="border-t border-border/60">
+                <td className="whitespace-nowrap px-4 py-1.5 text-xs">{formatDateTime(b.collected_at)}</td>
+                <td className="px-2 py-1.5">
+                  {b.status === "failed" ? (
+                    <span className="rounded bg-danger-soft px-1.5 py-0.5 text-[11px] font-semibold text-danger">failed</span>
+                  ) : b.changed ? (
+                    <span className="rounded bg-accent px-1.5 py-0.5 text-[11px] font-semibold text-accent-foreground">changed</span>
+                  ) : (
+                    <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-semibold text-ink-3">unchanged</span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5">
+                  {b.commit_sha ? (
+                    <button type="button" className="font-mono text-xs text-primary hover:underline" onClick={() => onSelect(b.commit_sha!)}>
+                      {shortSha(b.commit_sha, 8)}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-xs">{humanize(b.trigger)}</td>
+                <td className="max-w-[420px] truncate px-2 py-1.5 text-xs text-ink-3" title={b.error ?? b.reason ?? undefined}>
+                  {b.status === "failed" ? b.error : b.changed ? `${b.reason ?? ""} · +${b.lines_added} −${b.lines_removed}${b.author ? ` · ${b.author}` : ""}` : "configuration identical to the version"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {items.length > 25 ? (
+        <button type="button" className="w-full border-t py-2 text-xs font-semibold text-primary hover:bg-row-hover" onClick={() => setAll((v) => !v)}>
+          {all ? "Show fewer" : `Show all ${items.length} runs`}
+        </button>
+      ) : null}
+    </section>
   );
 }

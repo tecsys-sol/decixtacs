@@ -32,8 +32,23 @@ export function RestoreTab({ device }: { device: Device }) {
 
   const backups = useQuery({
     queryKey: ["backups", "device", device.id, "restorable"],
-    queryFn: () => api.get<Page<Backup>>("/backups", { device_id: device.id, limit: 100 }),
-    select: (p) => p.items.filter((b) => b.commit_sha && b.status !== "failed"),
+    queryFn: () => api.get<Page<Backup>>("/backups", { device_id: device.id, limit: 500 }),
+    // one entry per stored version: the backup that stored it, plus how often later runs confirmed it
+    select: (p) => {
+      const byCommit = new Map<string, { b: Backup; runs: number; last: string }>();
+      for (const b of p.items) {
+        if (!b.commit_sha || b.status === "failed") continue;
+        const cur = byCommit.get(b.commit_sha);
+        if (!cur) byCommit.set(b.commit_sha, { b, runs: 1, last: b.collected_at });
+        else {
+          cur.runs += 1;
+          if (b.collected_at > cur.last) cur.last = b.collected_at;
+          // represent the version by the backup that stored it (else the earliest run)
+          if ((b.changed && !cur.b.changed) || (b.changed === cur.b.changed && b.collected_at < cur.b.collected_at)) cur.b = b;
+        }
+      }
+      return [...byCommit.values()].sort((x, y) => (x.b.collected_at < y.b.collected_at ? 1 : -1));
+    },
   });
   const changes = useQuery({
     queryKey: ["changes", "approved"],
@@ -70,7 +85,7 @@ export function RestoreTab({ device }: { device: Device }) {
     onError: (e) => toast.error("Restore request failed", errorMessage(e)),
   });
 
-  const selected = backups.data?.find((b) => b.id === backupId);
+  const selected = backups.data?.find((v) => v.b.id === backupId)?.b;
 
   if (!can("configs:restore")) {
     return <EmptyState icon={History} title="Restore not permitted" description="The configs:restore permission is required." />;
@@ -97,9 +112,9 @@ export function RestoreTab({ device }: { device: Device }) {
                 onValueChange={setBackupId}
                 placeholder={backups.data?.length ? "Choose a backup" : "No restorable backups"}
                 disabled={!backups.data?.length}
-                options={(backups.data ?? []).map((b) => ({
+                options={(backups.data ?? []).map(({ b, runs, last }, i) => ({
                   value: b.id,
-                  label: `${shortSha(b.commit_sha)} · ${formatDateTime(b.collected_at)}${b.reason ? ` · ${b.reason}` : ""}`,
+                  label: `${shortSha(b.commit_sha)} · ${i === 0 ? "current · " : ""}stored ${formatDateTime(b.collected_at)}${b.reason ? ` · ${b.reason}` : ""}${runs > 1 ? ` · confirmed by ${runs} backups, last ${formatDateTime(last)}` : ""}`,
                 }))}
               />
             </Field>

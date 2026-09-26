@@ -2,26 +2,30 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { PlayCircle, SquareTerminal } from "lucide-react";
+import { PlayCircle, Settings2, ShieldAlert, SquareTerminal, TerminalSquare, Users } from "lucide-react";
 
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
+import { KpiTile } from "@/components/common/kpi-tile";
 import { PageHeader } from "@/components/common/page-header";
 import { Pagination } from "@/components/common/pagination";
 import { TableState } from "@/components/common/table-skeleton";
 import { TextFilter } from "@/components/common/text-filter";
+import { SessionsTable, type SessionSummary, type UserSession } from "@/components/sessions/user-sessions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SimpleSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeviceNames } from "@/hooks/use-lookups";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { Page, Recording } from "@/lib/types";
-import { formatBytes, formatDateTime, formatDuration } from "@/lib/utils";
+import { formatBytes, formatDateTime, formatDuration, formatNumber } from "@/lib/utils";
 
-export default function SessionsPage() {
+function RecordingsTab() {
   const devices = useDeviceNames();
   const [f, setF] = useUrlState({ user: "", device_id: "", command: "", offset: "0" });
   const offset = Number(f.offset) || 0;
@@ -34,7 +38,10 @@ export default function SessionsPage() {
 
   return (
     <>
-      <PageHeader title="Session recordings" description="Terminal sessions captured by the SSH bastion, with command index and replay." />
+      <p className="mb-3 text-sm text-muted-foreground">
+        Full terminal recordings (with replay) need the SSH recording bastion in front of the devices; they are uploaded here after each session. The User sessions tab
+        works without it, from TACACS+ accounting.
+      </p>
       <Card>
         <FilterBar>
           <TextFilter value={f.user} onCommit={(v) => setF({ user: v, offset: "0" })} placeholder="User (exact)" className="w-44" aria-label="User" />
@@ -101,6 +108,90 @@ export default function SessionsPage() {
         </Table>
         {q.data ? <Pagination total={q.data.total} limit={PAGE_SIZE} offset={offset} onChange={(o) => setF({ offset: String(o) })} /> : null}
       </Card>
+    </>
+  );
+}
+
+const DAYS = [
+  { value: "1", label: "24 hours" },
+  { value: "7", label: "7 days" },
+  { value: "30", label: "30 days" },
+  { value: "90", label: "90 days" },
+];
+
+function UserSessionsTab() {
+  const devices = useDeviceNames();
+  const [f, setF] = useUrlState({ user: "", device_id: "", days: "7", config: "", offset: "0" });
+  const offset = Number(f.offset) || 0;
+  const q = useQuery({
+    queryKey: ["user-sessions", f],
+    queryFn: () =>
+      api.get<Page<UserSession> & { summary: SessionSummary }>("/user-sessions", {
+        user: f.user || undefined,
+        device_id: f.device_id || undefined,
+        days: f.days,
+        config_only: f.config === "1" || undefined,
+        limit: PAGE_SIZE,
+        offset,
+      }),
+    placeholderData: (p) => p,
+  });
+  const s = q.data?.summary;
+  return (
+    <div className="grid gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <KpiTile label="Sessions" value={formatNumber(s?.sessions ?? 0)} icon={SquareTerminal} loading={q.isLoading} />
+        <KpiTile label="Engineers" value={formatNumber(s?.users ?? 0)} icon={Users} loading={q.isLoading} delay={1} />
+        <KpiTile label="Commands" value={formatNumber(s?.commands ?? 0)} icon={TerminalSquare} loading={q.isLoading} delay={2} sub={s?.denied ? `${s.denied} denied` : undefined} tone={s?.denied ? "warning" : "default"} />
+        <KpiTile label="Sessions that configured" value={formatNumber(s?.config_sessions ?? 0)} icon={Settings2} loading={q.isLoading} delay={3} />
+        <KpiTile label="Failed logins" value={formatNumber(s?.failed_logins ?? 0)} icon={ShieldAlert} loading={q.isLoading} delay={4} tone={s?.failed_logins ? "danger" : "default"} sub={`${formatNumber(s?.logins ?? 0)} successful`} />
+      </div>
+      <Card>
+        <FilterBar>
+          <TextFilter value={f.user} onCommit={(v) => setF({ user: v, offset: "0" })} placeholder="User (exact)" className="w-44" aria-label="User" />
+          <SimpleSelect
+            aria-label="Device"
+            value={f.device_id}
+            onValueChange={(v) => setF({ device_id: v, offset: "0" })}
+            allowEmpty
+            emptyLabel="All devices"
+            className="w-56"
+            options={(devices.data ?? []).map((d) => ({ value: d.id, label: d.hostname }))}
+          />
+          <SimpleSelect aria-label="Period" value={f.days} onValueChange={(v) => setF({ days: v, offset: "0" })} className="w-36" options={DAYS} />
+          <Checkbox label="Only sessions that changed configuration" checked={f.config === "1"} onCheckedChange={(c) => setF({ config: c ? "1" : "", offset: "0" })} />
+        </FilterBar>
+        <SessionsTable items={q.data?.items ?? []} isLoading={q.isLoading} error={q.error} onRetry={() => void q.refetch()} />
+        {q.data ? <Pagination total={q.data.total} limit={PAGE_SIZE} offset={offset} onChange={(o) => setF({ offset: String(o) })} /> : null}
+      </Card>
+    </div>
+  );
+}
+
+export default function SessionsPage() {
+  const [f, setF] = useUrlState({ tab: "user" });
+  return (
+    <>
+      <PageHeader
+        title="Sessions"
+        description="Who logged in to which device, from where, what they typed and which configuration change it produced - from TACACS+ login and command accounting."
+      />
+      <Tabs value={f.tab} onValueChange={(v) => setF({ tab: v })}>
+        <TabsList>
+          <TabsTrigger value="user">
+            <Users /> User sessions
+          </TabsTrigger>
+          <TabsTrigger value="recordings">
+            <PlayCircle /> Recordings
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="user">
+          <UserSessionsTab />
+        </TabsContent>
+        <TabsContent value="recordings">
+          <RecordingsTab />
+        </TabsContent>
+      </Tabs>
     </>
   );
 }
