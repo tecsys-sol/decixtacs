@@ -173,41 +173,45 @@ _LEAF = re.compile(r"^(.*?);\s*(##.*)?$")
 def junos_to_set(text: str) -> list[str]:
     """Convert a hierarchical Junos configuration (what RANCID stores) to ``display set`` lines."""
     out: list[str] = []
-    path: list[tuple[str, bool]] = []  # (statement, inactive)
+    bases = [""]  # the enclosing statements joined, one entry per open block
     for raw in text.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("/*") or line.startswith("*"):
+        if not line or line.startswith(("#", "/*", "*")):
             continue
-        line = re.sub(r"\s*/\*.*?\*/\s*", " ", line).strip()
+        if "/*" in line:
+            line = re.sub(r"\s*/\*.*?\*/\s*", " ", line).strip()
         inactive = False
-        for prefix in ("inactive: ", "protect: "):
-            if line.startswith(prefix):
-                inactive = inactive or prefix == "inactive: "
-                line = line[len(prefix) :]
+        if line[0] in "ip":
+            for prefix in ("inactive: ", "protect: "):
+                if line.startswith(prefix):
+                    inactive = inactive or prefix == "inactive: "
+                    line = line[len(prefix) :]
         if line == "}":
-            if path:
-                path.pop()
+            if len(bases) > 1:
+                bases.pop()
             continue
-        m = _BLOCK_OPEN.match(line)
-        if m:
-            path.append((m.group(1), inactive))
-            continue
+        if line.endswith("{"):
+            m = _BLOCK_OPEN.match(line)
+            if m:
+                bases.append(f"{bases[-1]} {m.group(1)}" if len(bases) > 1 else m.group(1))
+                continue
         m = _LEAF.match(line)
         if not m:
             continue
         stmt = m.group(1)
-        base = " ".join(p for p, _ in path)
-        bm = re.match(r"^(.*?)\s*\[\s*(.*?)\s*\]$", stmt)
+        base = bases[-1]
+        bm = re.match(r"^(.*?)\s*\[\s*(.*?)\s*\]$", stmt) if stmt.endswith("]") else None
         values = [f"{bm.group(1)} {v}" for v in shlex.split(bm.group(2), posix=False)] if bm else [stmt]
         for v in values:
             full = f"{base} {v}".strip()
             out.append(f"set {full}")
             if inactive:
                 out.append(f"deactivate {full}")
-        # deactivate lines for inactive parents are emitted once per block
+    if "inactive: " not in text:
+        return out
     # parent blocks marked inactive
     deact: list[str] = []
-    path = []
+    path: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
         if line == "}":

@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from git import Actor, Repo
-from git.exc import BadName
+from git.exc import BadName, GitCommandError
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -132,6 +132,10 @@ class GitConfigStore:
 
     def history(self, relpath: str, max_count: int = 100) -> list[CommitInfo]:
         out = []
-        for c in self.repo.iter_commits(paths=relpath, max_count=max_count):
+        try:
+            commits = list(self.repo.iter_commits(paths=relpath, max_count=max_count))
+        except (ValueError, GitCommandError):  # no commit yet in this repository
+            return []
+        for c in commits:
             out.append(CommitInfo(c.hexsha, c.author.name or "", c.author.email or "", c.authored_datetime, c.message))
         return out

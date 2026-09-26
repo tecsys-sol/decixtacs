@@ -8,6 +8,7 @@ in the newer text). ``revisions()`` rebuilds every trunk revision, oldest first.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -107,6 +108,13 @@ def _apply(newer: list[str], script: str) -> list[str]:
 
 def revisions(data: str | bytes) -> list[Revision]:
     """All trunk revisions of an RCS file, oldest first."""
+    out = list(iter_revisions(data))
+    out.reverse()
+    return out
+
+
+def iter_revisions(data: str | bytes) -> Iterator[Revision]:
+    """Trunk revisions newest first, rebuilt one at a time (only the current text is held)."""
     if isinstance(data, bytes):
         data = data.decode("utf-8", errors="replace")
     toks = list(_tokens(data))
@@ -177,7 +185,6 @@ def revisions(data: str | bytes) -> list[Revision]:
         i += 1
 
     # walk the trunk from head backwards
-    out: list[Revision] = []
     rev: str | None = head
     lines: list[str] | None = None
     seen = set()
@@ -186,7 +193,6 @@ def revisions(data: str | bytes) -> list[Revision]:
         log, text = texts.get(rev, ("", ""))
         lines = text.splitlines(keepends=True) if lines is None else _apply(lines, text)
         info = meta[rev]
-        out.append(Revision(rev, info["date"], info["author"], info["state"], log.strip(), "".join(lines)))
+        yield Revision(rev, info["date"], info["author"], info["state"], log.strip(), "".join(lines))
+        texts.pop(rev, None)
         rev = info["next"]
-    out.reverse()
-    return out

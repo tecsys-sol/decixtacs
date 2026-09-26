@@ -105,3 +105,52 @@ def test_import_rejects_archives_without_rcs_files(admin):
         t.addfile(info, io.BytesIO(b"abc"))
     r = admin.post("/api/v1/rancid/history", files={"file": ("x.tgz", buf.getvalue(), "application/gzip")})
     assert r.status_code == 422 and ",v" in r.json()["detail"]
+
+
+def test_junos_block_cache_matches_full_conversion():
+    from app.services import rancid_history as rh
+
+    cache = rh.JunosCache()
+    for r in rcs.iter_revisions((CVS / "ixp/configs/mx204-blr,v").read_bytes()):
+        assert rh.to_nom_format(r.text, "junos", True, cache) == rh.to_nom_format(r.text, "junos", True)
+
+
+def test_stalled_import_is_reported_and_can_be_retried(admin, fake_collector):  # noqa: F811
+    from datetime import timedelta
+
+    from app.db.session import SessionLocal
+    from app.models import Device
+    from app.services import rancid_history as rh
+
+    dev = _device(admin)
+    old = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+    with SessionLocal() as db:
+        tenant_id = db.get(Device, uuid.UUID(dev["id"])).tenant_id
+        rh.set_status(db, tenant_id, status="running", requested_at=old, started_at=old, updated_at=old)
+        db.commit()
+    st = admin.get("/api/v1/rancid/history").json()
+    assert st["status"] == "stalled" and "memory" in st["error"]
+    r = admin.post(
+        "/api/v1/rancid/history?run_async=false", files={"file": ("x.tgz", _cvs_archive(), "application/gzip")}
+    )
+    assert r.status_code == 202 and r.json()["status"] == "done" and r.json()["progress"] is None
+
+    now = datetime.now(UTC).isoformat()
+    with SessionLocal() as db:
+        rh.set_status(db, tenant_id, status="running", updated_at=now)
+        db.commit()
+    assert admin.get("/api/v1/rancid/history").json()["status"] == "running"
+    busy = admin.post("/api/v1/rancid/history", files={"file": ("x.tgz", _cvs_archive(), "application/gzip")})
+    assert busy.status_code == 409
+
+
+def test_history_of_a_device_without_nom_backups(admin):
+    dev = _device(admin)  # never backed up by NOM: its Git repository has no commit yet
+    r = admin.post(
+        "/api/v1/rancid/history?run_async=false", files={"file": ("x.tgz", _cvs_archive(), "application/gzip")}
+    )
+    assert r.json()["status"] == "done"
+    hist = admin.get(f"/api/v1/devices/{dev['id']}/history").json()
+    assert [h["source"] for h in hist] == ["rancid"] * 3
+    cfg = admin.get(f"/api/v1/devices/{dev['id']}/config").text  # HEAD falls back to RANCID's newest
+    assert "noc@de-cix" in cfg

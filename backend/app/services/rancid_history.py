@@ -15,10 +15,13 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
+import time
 import uuid
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -56,11 +59,51 @@ def history_store(db: Session, tenant_id: uuid.UUID) -> GitConfigStore | None:
     return store
 
 
-def to_nom_format(text: str, platform: str | None, sanitize: bool) -> str:
+def _junos_blocks(body: str) -> list[str]:
+    """Split a hierarchical Junos config into its top-level statements (``system { ... }``, ...)."""
+    blocks: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    for raw in body.splitlines():
+        cur.append(raw)
+        line = raw.strip()
+        if line == "}":
+            depth = max(0, depth - 1)
+        elif line.endswith("{") and not line.startswith(("#", "/*")):
+            depth += 1
+        if depth == 0 and line:
+            blocks.append("\n".join(cur))
+            cur = []
+    if cur:
+        blocks.append("\n".join(cur))
+    return blocks
+
+
+class JunosCache:
+    """Top-level blocks converted to set lines, kept for the next revision: consecutive RANCID
+    revisions differ in a few lines, so most blocks are converted once per router."""
+
+    def __init__(self) -> None:
+        self.prev: dict[str, list[str]] = {}
+
+    def convert(self, body: str) -> list[str]:
+        cur: dict[str, list[str]] = {}
+        out: list[str] = []
+        for block in _junos_blocks(body):
+            lines = cur.get(block) or self.prev.get(block)
+            if lines is None:
+                lines = rs.junos_to_set(block)
+            cur[block] = lines
+            out += lines
+        self.prev = cur
+        return out
+
+
+def to_nom_format(text: str, platform: str | None, sanitize: bool, cache: JunosCache | None = None) -> str:
     lines = text.replace("\r\n", "\n").split("\n")
     if platform == "junos" and not any(ln.startswith("set ") for ln in lines[:300]):
         body = "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
-        content = "\n".join(rs.junos_to_set(body)) + "\n"
+        content = "\n".join(cache.convert(body) if cache else rs.junos_to_set(body)) + "\n"
     else:
         # RANCID prepends inventory / version details as comment lines ("!Chassis type: ...")
         content = "\n".join(ln for ln in lines if not _INFO_LINE.match(ln)) + "\n"
@@ -130,84 +173,137 @@ def _data(payload: bytes) -> bytes:
     return b"data %d\n" % len(payload) + payload + b"\n"
 
 
-def import_history(db: Session, tenant_id: uuid.UUID, archive: bytes) -> ImportStats:
+Progress = Callable[[dict], None]
+
+
+def import_history(db: Session, tenant_id: uuid.UUID, archive: bytes, progress: Progress | None = None) -> ImportStats:
+    """Stream every revision into ``git fast-import``: blobs first, router by router (only one
+    revision's text in memory at a time), then the commits in date order referencing them."""
     tenant = db.get(Tenant, tenant_id)
     assert tenant is not None
+    slug = tenant.slug
     files = read_rcs_archive(archive)
+    del archive
     stats = ImportStats(routers=len(files))
-    devices = list(
-        db.scalars(
-            select(Device)
-            .where(Device.tenant_id == tenant_id)
-            .options(selectinload(Device.platform), selectinload(Device.site))
-        )
-    )
     by_key: dict[str, Device] = {}
-    for d in devices:
+    for d in db.scalars(
+        select(Device)
+        .where(Device.tenant_id == tenant_id)
+        .options(selectinload(Device.platform), selectinload(Device.site))
+    ):
         for k in (d.hostname.lower(), rs.short(d.hostname), (d.management_ip or "").lower()):
             if k:
                 by_key.setdefault(k, d)
-    sanitize = sanitize_for(db, tenant_id)
-
-    entries: list[tuple[datetime, str, str, str, str, str]] = []  # date, path, content, author, log, rev
-    for name, (_group, raw) in files.items():
+    # resolve everything needed from the ORM up front: progress commits expire loaded objects
+    targets: list[tuple[str, bytes, str, str | None]] = []  # name, ,v data, repo path, platform
+    for name, (_group, raw) in sorted(files.items()):
         d = by_key.get(name.lower()) or by_key.get(rs.short(name))
         if d is None:
             stats.unmatched.append(name)
-            continue
-        try:
-            revs = rcs.revisions(raw)
-        except rcs.RcsError as e:
-            stats.errors.append(f"{name}: {e}")
-            continue
-        stats.matched += 1
-        plat = d.platform.slug if d.platform else None
-        path = device_relpath(d)
-        for r in revs:
-            if r.state == "dead" or not r.text.strip():
-                continue
-            entries.append((r.date, path, to_nom_format(r.text, plat, sanitize), r.author or "rancid", r.log, r.rev))
-    stats.revisions = len(entries)
-    entries.sort(key=lambda e: e[0])
+        else:
+            targets.append((name, raw, device_relpath(d), d.platform.slug if d.platform else None))
+    files.clear()
+    sanitize = sanitize_for(db, tenant_id)
 
     root = Path(get_settings().backup_repo_root)
-    target = root / repo_name(tenant.slug)
-    tmp = root / f".{repo_name(tenant.slug)}.import"
+    target = root / repo_name(slug)
+    tmp = root / f".{repo_name(slug)}.import"
     shutil.rmtree(tmp, ignore_errors=True)
     GitConfigStore(str(root), tmp.name)  # init an empty repository
-    stream = io.BytesIO()
-    last_content: dict[str, str] = {}
-    for date, path, content, author, log, rev in entries:
-        if last_content.get(path) == content:
-            continue  # RANCID committed whitespace/comment-only changes we normalise away
-        last_content[path] = content
-        ts = int(date.timestamp())
-        msg = f"{Path(path).stem}: {log or 'RANCID update'}\n\nSource: RANCID CVS revision {rev}\n".encode()
-        who = re.sub(r"[<>\n]", "", author) or "rancid"
-        stream.write(b"commit refs/heads/main\n")
-        stream.write(f"author {who} <{who}@rancid> {ts} +0000\n".encode())
-        stream.write(f"committer RANCID import <rancid-import@networkops.local> {ts} +0000\n".encode())
-        stream.write(_data(msg))
-        stream.write(f"M 100644 inline {path}\n".encode())
-        stream.write(_data(content.encode()))
-        stats.commits += 1
-        stats.first = stats.first or date
-        stats.last = date
-    if stats.commits:
-        proc = subprocess.run(  # noqa: S603 - fixed argv, stream built above
-            [shutil.which("git") or "git", "fast-import", "--quiet", "--force"],
+    with tempfile.TemporaryFile() as errors:
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv
+            [shutil.which("git") or "git", "fast-import", "--quiet", "--force", "--done"],
             cwd=tmp,
-            input=stream.getvalue(),
-            capture_output=True,
-            timeout=1800,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=errors,
         )
-        if proc.returncode != 0:
+        assert proc.stdin is not None
+        out = proc.stdin
+        # date, path, blob mark, author, log, rcs revision
+        commits: list[tuple[datetime, str, int, str, str, str]] = []
+        mark = 0
+        try:
+            for i, (name, raw, path, plat) in enumerate(targets):
+                if progress:
+                    progress(
+                        {
+                            "phase": "revisions",
+                            "router": name,
+                            "done": i,
+                            "total": len(targets),
+                            "revisions": stats.revisions,
+                        }
+                    )
+                cache = JunosCache() if plat == "junos" else None
+                pending: tuple[str, rcs.Revision] | None = None  # newest kept content, oldest revision with it
+                try:
+                    for r in rcs.iter_revisions(raw):  # newest first
+                        if r.state == "dead" or not r.text.strip():
+                            continue
+                        stats.revisions += 1
+                        content = to_nom_format(r.text, plat, sanitize, cache)
+                        if pending is not None and pending[0] == content:
+                            # RANCID committed a change NOM's format normalises away (comment
+                            # header, volatile line): the config dates from the older revision
+                            pending = (content, r)
+                            continue
+                        if pending is not None:
+                            mark += 1
+                            out.write(b"blob\nmark :%d\n" % mark + _data(pending[0].encode()))
+                            commits.append(_meta(pending[1], path, mark))
+                        pending = (content, r)
+                except rcs.RcsError as e:
+                    stats.errors.append(f"{name}: {e}")
+                    continue
+                if pending is not None:
+                    mark += 1
+                    out.write(b"blob\nmark :%d\n" % mark + _data(pending[0].encode()))
+                    commits.append(_meta(pending[1], path, mark))
+                stats.matched += 1
+            if progress:
+                progress(
+                    {"phase": "commits", "done": len(targets), "total": len(targets), "revisions": stats.revisions}
+                )
+            commits.sort(key=lambda c: (c[0], c[1]))
+            for date, path, blob, author, log, rev in commits:
+                ts = int(date.timestamp())
+                msg = f"{Path(path).stem}: {log or 'RANCID update'}\n\nSource: RANCID CVS revision {rev}\n"
+                who = re.sub(r"[<>\n]", "", author) or "rancid"
+                out.write(
+                    b"commit refs/heads/main\n"
+                    + f"author {who} <{who}@rancid> {ts} +0000\n".encode()
+                    + f"committer RANCID import <rancid-import@networkops.local> {ts} +0000\n".encode()
+                    + _data(msg.encode())
+                    + f"M 100644 :{blob} {path}\n\n".encode()
+                )
+                stats.commits += 1
+                stats.first = stats.first or date
+                stats.last = date
+            out.write(b"done\n")
+            out.close()
+            code = proc.wait(timeout=1800)
+        except BrokenPipeError:
+            proc.wait(timeout=60)
+            errors.seek(0)
             shutil.rmtree(tmp, ignore_errors=True)
-            raise RuntimeError(f"git fast-import failed: {proc.stderr.decode(errors='replace')[:500]}")
-    # swap in atomically-ish: the previous import is replaced as a whole
+            raise RuntimeError(f"git fast-import stopped: {errors.read().decode(errors='replace')[:500]}") from None
+        except BaseException:
+            proc.kill()
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        if code != 0:
+            errors.seek(0)
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise RuntimeError(f"git fast-import failed: {errors.read().decode(errors='replace')[:500]}")
+    # swap in as a whole: the previous import is replaced
     shutil.rmtree(target, ignore_errors=True)
     tmp.rename(target)
     return stats
+
+
+def _meta(r: rcs.Revision, path: str, mark: int) -> tuple[datetime, str, int, str, str, str]:
+    return (r.date, path, mark, r.author or "rancid", r.log, r.rev)
 
 
 def device_changes(store: GitConfigStore, path: str, since: datetime, limit: int = 2000) -> list[dict]:
@@ -256,19 +352,56 @@ def set_status(db: Session, tenant_id: uuid.UUID, **values) -> dict:
     return status
 
 
+STALLED_AFTER = timedelta(minutes=10)  # no progress heartbeat for this long: the worker is gone
+
+
+def is_active(status: dict | None, now: datetime) -> bool:
+    """Queued or running, and still reporting progress."""
+    if not status or status.get("status") not in ("queued", "running"):
+        return False
+    beat = status.get("updated_at") or status.get("started_at") or status.get("requested_at")
+    try:
+        last = datetime.fromisoformat(beat) if beat else None
+    except ValueError:
+        last = None
+    limit = STALLED_AFTER if status.get("status") == "running" else timedelta(hours=1)
+    return last is not None and now - last < limit
+
+
 def run_import(db: Session, tenant_id: uuid.UUID) -> dict:
     """Import the uploaded archive, recording progress in ``Tenant.settings["rancid_history"]``."""
     from app.db.base import utcnow
 
     path = upload_path(tenant_id)
-    set_status(db, tenant_id, status="running", started_at=utcnow().isoformat(), error=None)
+    now = utcnow().isoformat()
+    set_status(db, tenant_id, status="running", started_at=now, updated_at=now, error=None, progress=None)
     db.commit()
+    last = [time.monotonic()]
+
+    def progress(p: dict) -> None:
+        if time.monotonic() - last[0] < 5 and p.get("phase") == "revisions":
+            return
+        last[0] = time.monotonic()
+        set_status(db, tenant_id, progress=p, updated_at=utcnow().isoformat())
+        db.commit()
+
     try:
-        stats = import_history(db, tenant_id, path.read_bytes())
+        stats = import_history(db, tenant_id, path.read_bytes(), progress)
     except Exception as e:  # noqa: BLE001 - reported to the user, not re-raised into Celery retries
-        status = set_status(db, tenant_id, status="failed", finished_at=utcnow().isoformat(), error=str(e)[:500])
+        db.rollback()
+        status = set_status(
+            db, tenant_id, status="failed", finished_at=utcnow().isoformat(), updated_at=None, error=str(e)[:500]
+        )
     else:
-        status = set_status(db, tenant_id, status="done", finished_at=utcnow().isoformat(), stats=stats.to_dict())
+        status = set_status(
+            db,
+            tenant_id,
+            status="done",
+            finished_at=utcnow().isoformat(),
+            updated_at=None,
+            progress=None,
+            stats=stats.to_dict(),
+        )
     path.unlink(missing_ok=True)
     db.commit()
     return status

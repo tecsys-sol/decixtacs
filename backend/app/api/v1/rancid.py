@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -400,21 +400,34 @@ def clear_configs(ctx: Ctx = Depends(require("configs:backup"))):
 
 
 class HistoryStatus(BaseModel):
-    status: str  # none|queued|running|done|failed
+    status: str  # none|queued|running|done|failed|stalled
     filename: str | None = None
     size_bytes: int | None = None
     requested_by: str | None = None
     requested_at: str | None = None
     started_at: str | None = None
+    updated_at: str | None = None  # progress heartbeat while running
     finished_at: str | None = None
     error: str | None = None
+    progress: dict | None = None  # {phase, router, done, total, revisions}
     stats: dict | None = None
 
 
 def _history_status(ctx: Ctx) -> HistoryStatus:
     tenant = ctx.db.get(Tenant, ctx.tenant_id)
     st = (tenant.settings or {}).get(rhist.HISTORY_KEY) if tenant else None
-    return HistoryStatus(**st) if st else HistoryStatus(status="none")
+    if not st:
+        return HistoryStatus(status="none")
+    out = HistoryStatus(**{k: v for k, v in st.items() if k in HistoryStatus.model_fields})
+    if out.status in ("queued", "running") and not rhist.is_active(st, utcnow()):
+        # the worker stopped reporting (restarted, killed for memory, ...): let the user retry
+        out.status = "stalled"
+        out.error = out.error or (
+            "the import stopped reporting progress - the worker was probably restarted or ran out of memory"
+            if st.get("status") == "running"
+            else "no worker picked up the import - check that the worker container is running"
+        )
+    return out
 
 
 @router.get("/history", response_model=HistoryStatus)
@@ -431,11 +444,7 @@ async def upload_history(
     """Upload RANCID's CVS repository (``tar czf rancid-cvs.tgz -C /var/lib/rancid/CVS .``) and
     rebuild every revision into device history. Runs in the background; poll ``GET /rancid/history``.
     A new upload replaces the previous import."""
-    current = _history_status(ctx)
-    if (
-        current.status in ("queued", "running")
-        and (current.requested_at or "") > (utcnow() - timedelta(hours=2)).isoformat()
-    ):
+    if _history_status(ctx).status in ("queued", "running"):
         raise HTTPException(409, "an import is already running")
     data = await file.read(MAX_ARCHIVE + 1)
     if len(data) > MAX_ARCHIVE:
@@ -458,7 +467,9 @@ async def upload_history(
         requested_by=ctx.user.username,
         requested_at=utcnow().isoformat(),
         started_at=None,
+        updated_at=None,
         finished_at=None,
+        progress=None,
         error=None,
         stats=None,
     )

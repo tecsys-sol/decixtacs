@@ -478,14 +478,16 @@ function CompareStep() {
 }
 
 interface HistoryStatus {
-  status: "none" | "queued" | "running" | "done" | "failed";
+  status: "none" | "queued" | "running" | "done" | "failed" | "stalled";
   filename: string | null;
   size_bytes: number | null;
   requested_by: string | null;
   requested_at: string | null;
   started_at: string | null;
+  updated_at: string | null;
   finished_at: string | null;
   error: string | null;
+  progress: { phase: "revisions" | "commits"; router?: string; done: number; total: number; revisions: number } | null;
   stats: {
     routers: number;
     matched: number;
@@ -516,7 +518,7 @@ function HistoryStep() {
   React.useEffect(() => {
     if (prev.current && ["queued", "running"].includes(prev.current) && st && !busy) {
       if (st.status === "done") toast.success("RANCID history imported", `${formatNumber(st.stats?.commits ?? 0)} revisions added to device history.`);
-      else if (st.status === "failed") toast.error("RANCID history import failed", st.error ?? undefined);
+      else if (st.status === "failed" || st.status === "stalled") toast.error("RANCID history import failed", st.error ?? undefined);
       void qc.invalidateQueries({ queryKey: ["device"] });
     }
     prev.current = st?.status;
@@ -556,7 +558,7 @@ function HistoryStep() {
         </div>
         {can("configs:backup") ? (
           <div className="flex gap-2">
-            {st?.status === "done" || st?.status === "failed" ? (
+            {st?.status === "done" || st?.status === "failed" || st?.status === "stalled" ? (
               <Button variant="ghost" size="sm" onClick={() => setConfirmClear(true)}>
                 <Trash2 /> Remove
               </Button>
@@ -582,13 +584,34 @@ function HistoryStep() {
         {status.isLoading ? <Skeleton className="h-20" /> : null}
         {busy ? (
           <div className="flex items-center gap-2 rounded-md border bg-accent/30 px-4 py-3 text-sm" role="status">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {st?.status === "queued" ? "Waiting for a worker…" : "Rebuilding revisions and writing history…"} {st?.filename ? <span className="text-muted-foreground">({st.filename})</span> : null}
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <div className="grid min-w-0 flex-1 gap-1.5">
+              <span>
+                {st?.status === "queued"
+                  ? "Waiting for a worker…"
+                  : st?.progress?.phase === "commits"
+                    ? `Writing ${formatNumber(st.progress.revisions)} revisions to history…`
+                    : st?.progress
+                      ? `Rebuilding revisions: router ${formatNumber(st.progress.done + 1)} of ${formatNumber(st.progress.total)}${st.progress.router ? ` (${st.progress.router})` : ""} · ${formatNumber(st.progress.revisions)} revisions so far`
+                      : "Reading the archive…"}{" "}
+                {st?.filename ? <span className="text-muted-foreground">({st.filename})</span> : null}
+              </span>
+              {st?.progress?.total ? (
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.round((Math.min(st.progress.done, st.progress.total) / st.progress.total) * 100)}%` }} />
+                </div>
+              ) : null}
+              {st?.started_at ? (
+                <span className="text-xs text-muted-foreground">
+                  Started <RelativeTime value={st.started_at} />
+                </span>
+              ) : null}
+            </div>
           </div>
         ) : null}
-        {st?.status === "failed" ? (
+        {st?.status === "failed" || st?.status === "stalled" ? (
           <div className="rounded-md border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
-            <AlertTriangle className="mr-1 inline h-4 w-4" /> Import failed: {st.error}
+            <AlertTriangle className="mr-1 inline h-4 w-4" /> {st.status === "stalled" ? "Import stalled" : "Import failed"}: {st.error} - upload the archive again to retry.
           </div>
         ) : null}
         {st?.status === "done" && s ? (

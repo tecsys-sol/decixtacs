@@ -13699,6 +13699,17 @@
             ],
             "title": "Started At"
           },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -13720,6 +13731,18 @@
               }
             ],
             "title": "Error"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
           },
           "stats": {
             "anyOf": [

@@ -149,7 +149,8 @@ def run_integration_sync(db, integration: Integration) -> dict:
         raise
 
 
-@celery_app.task(name="app.workers.tasks.import_rancid_history")
+# years of RANCID history can take a while; the global 1 h limit would kill it mid-import
+@celery_app.task(name="app.workers.tasks.import_rancid_history", soft_time_limit=4 * 3600, time_limit=4 * 3600 + 300)
 def import_rancid_history(tenant_id: str) -> dict:
     from app.services.rancid_history import run_import
 
