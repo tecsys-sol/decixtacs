@@ -354,8 +354,10 @@ language and cannot be driven by the agent. Migrate without touching devices or 
    writes it, with its original date, author and log message, to a separate Git repository
    (`$NOM_BACKUP_REPO_ROOT/<tenant>-rancid`). History & diff and the Change history tab then list those
    revisions (marked *RANCID*) before NOM's own backups, and can diff across the boundary. Re-uploading
-   replaces the import; **Remove** deletes it. The upload goes through nginx: keep
-   `client_max_body_size` above the archive size (the API accepts up to 200 MB).
+   replaces the import; **Remove** deletes it. The upload goes through nginx, whose default limit is
+   1 MB (the upload then fails with *413 Request Entity Too Large*): in the `server { }` block of the
+   site that proxies the portal set `client_max_body_size 256m;`, then `nginx -t && systemctl reload
+   nginx`. The API itself accepts archives up to 200 MB.
 
 Slow or session-limited platforms: **Backups → Backup settings** sets timeout, parallel sessions
 and collection commands per platform.

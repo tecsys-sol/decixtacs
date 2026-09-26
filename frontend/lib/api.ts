@@ -88,6 +88,15 @@ export class ApiError extends Error {
 /** Turn a FastAPI error body ({detail: string | {code,message} | ValidationError[]}) into an ApiError. */
 export function toApiError(status: number, body: unknown, fallback: string): ApiError {
   const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : body;
+  // a reverse proxy in front of the API answered with its own HTML error page
+  if (typeof detail === "string" && /^\s*<(!doctype|html)/i.test(detail)) {
+    const title = /<title>([^<]*)<\/title>/i.exec(detail)?.[1]?.trim();
+    const message =
+      status === 413
+        ? "The upload is larger than the web proxy allows. Raise client_max_body_size in the nginx site that fronts the portal (e.g. client_max_body_size 256m;) and reload nginx."
+        : `The web proxy returned ${title || `HTTP ${status}`}${status === 502 || status === 504 ? " - the API may be down or took too long to answer" : ""}.`;
+    return new ApiError(status, message, detail);
+  }
   if (typeof detail === "string") return new ApiError(status, detail, detail);
   if (Array.isArray(detail)) {
     const msg = detail

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiClient, ApiError, buildQuery, errorMessage, type AuthTokens, type TokenStorage } from "@/lib/api";
+import { ApiClient, ApiError, buildQuery, errorMessage, toApiError, type AuthTokens, type TokenStorage } from "@/lib/api";
 
 function memoryStorage(initial: AuthTokens | null): TokenStorage & { value: AuthTokens | null } {
   const s = {
@@ -133,5 +133,18 @@ describe("errorMessage", () => {
     expect(errorMessage(new Error("boom"))).toBe("boom");
     expect(errorMessage(42)).toBe("Unexpected error");
     expect(errorMessage("")).toBe("Unexpected error");
+  });
+});
+
+describe("toApiError", () => {
+  it("replaces a reverse proxy's HTML error page with a readable message", () => {
+    const html = "<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n<body><center><h1>413</h1></center><hr><center>nginx/1.18.0 (Ubuntu)</center></body></html>";
+    const e413 = toApiError(413, html, "Request Entity Too Large");
+    expect(e413.message).toContain("client_max_body_size");
+    expect(e413.message).not.toContain("<");
+    expect(toApiError(502, html.replace("413 Request Entity Too Large", "502 Bad Gateway"), "x").message).toBe(
+      "The web proxy returned 502 Bad Gateway - the API may be down or took too long to answer.",
+    );
+    expect(toApiError(400, { detail: "plain" }, "x").message).toBe("plain");
   });
 });
