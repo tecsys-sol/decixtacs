@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import difflib
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -15,10 +15,11 @@ from app.api.deps import Ctx, get_owned, require
 from app.api.v1.inventory import _default_credential_id, _set_default_credential, visible_devices_filter
 from app.core.security import decrypt_secret, encrypt_secret
 from app.db.base import utcnow
-from app.models import Credential, Device, Platform, RancidConfig
+from app.models import Credential, Device, Platform, RancidConfig, Tenant
 from app.services import audit
 from app.services import diff as diffsvc
 from app.services import rancid as rs
+from app.services import rancid_history as rhist
 from app.services.backup.engine import device_relpath, store_for
 
 router = APIRouter(prefix="/rancid", tags=["rancid"])
@@ -392,4 +393,104 @@ def compare_one(rancid_id: uuid.UUID, context: int = 3, ctx: Ctx = Depends(requi
 @router.delete("/configs", status_code=204)
 def clear_configs(ctx: Ctx = Depends(require("configs:backup"))):
     ctx.db.execute(delete(RancidConfig).where(RancidConfig.tenant_id == ctx.tenant_id))
+    ctx.db.commit()
+
+
+# --- CVS history import --------------------------------------------------------------------
+
+
+class HistoryStatus(BaseModel):
+    status: str  # none|queued|running|done|failed
+    filename: str | None = None
+    size_bytes: int | None = None
+    requested_by: str | None = None
+    requested_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+    stats: dict | None = None
+
+
+def _history_status(ctx: Ctx) -> HistoryStatus:
+    tenant = ctx.db.get(Tenant, ctx.tenant_id)
+    st = (tenant.settings or {}).get(rhist.HISTORY_KEY) if tenant else None
+    return HistoryStatus(**st) if st else HistoryStatus(status="none")
+
+
+@router.get("/history", response_model=HistoryStatus)
+def history_status(ctx: Ctx = Depends(require("configs:read"))):
+    return _history_status(ctx)
+
+
+@router.post("/history", response_model=HistoryStatus, status_code=202)
+async def upload_history(
+    file: UploadFile = File(...),
+    run_async: bool = True,
+    ctx: Ctx = Depends(require("configs:backup")),
+):
+    """Upload RANCID's CVS repository (``tar czf rancid-cvs.tgz -C /var/lib/rancid/CVS .``) and
+    rebuild every revision into device history. Runs in the background; poll ``GET /rancid/history``.
+    A new upload replaces the previous import."""
+    current = _history_status(ctx)
+    if (
+        current.status in ("queued", "running")
+        and (current.requested_at or "") > (utcnow() - timedelta(hours=2)).isoformat()
+    ):
+        raise HTTPException(409, "an import is already running")
+    data = await file.read(MAX_ARCHIVE + 1)
+    if len(data) > MAX_ARCHIVE:
+        raise HTTPException(413, "archive larger than 200 MB")
+    try:
+        found = rhist.read_rcs_archive(data)
+    except Exception as e:  # noqa: BLE001 - corrupt/unsupported archives
+        raise HTTPException(422, f"could not read the archive: {e}") from e
+    if not found:
+        raise HTTPException(422, "no <group>/configs/<router>,v files found - upload RANCID's CVS directory")
+    path = rhist.upload_path(ctx.tenant_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    rhist.set_status(
+        ctx.db,
+        ctx.tenant_id,
+        status="queued",
+        filename=file.filename,
+        size_bytes=len(data),
+        requested_by=ctx.user.username,
+        requested_at=utcnow().isoformat(),
+        started_at=None,
+        finished_at=None,
+        error=None,
+        stats=None,
+    )
+    audit.record(
+        ctx.db,
+        tenant_id=ctx.tenant_id,
+        action="config.rancid_history_import",
+        actor=ctx.user,
+        after={"routers": len(found), "bytes": len(data)},
+        source_ip=ctx.ip,
+    )
+    ctx.db.commit()
+    if run_async:
+        from app.workers.tasks import import_rancid_history
+
+        import_rancid_history.delay(str(ctx.tenant_id))
+    else:
+        rhist.run_import(ctx.db, ctx.tenant_id)
+    return _history_status(ctx)
+
+
+@router.delete("/history", status_code=204)
+def delete_history(ctx: Ctx = Depends(require("configs:backup"))):
+    """Remove the imported RANCID history (NOM's own backups are untouched)."""
+    import shutil
+    from pathlib import Path
+
+    from app.core.config import get_settings
+
+    tenant = ctx.db.get(Tenant, ctx.tenant_id)
+    shutil.rmtree(Path(get_settings().backup_repo_root) / rhist.repo_name(tenant.slug), ignore_errors=True)
+    settings = dict(tenant.settings or {})
+    settings.pop(rhist.HISTORY_KEY, None)
+    tenant.settings = settings
     ctx.db.commit()

@@ -35,7 +35,7 @@ interface Activity {
     authors: number;
   } & Partial<SessionSummary>;
   per_day: { day: string; changes: number; sessions: number; commands: number; backups: number; failed: number }[];
-  changes: { id: string; at: string; commit: string | null; author: string | null; reason: string | null; added: number; removed: number; risk: number | null; trigger: string; change_request_id: string | null }[];
+  changes: { id: string; at: string; commit: string | null; author: string | null; reason: string | null; added: number; removed: number; risk: number | null; trigger: string; change_request_id: string | null; source?: "nom" | "rancid" }[];
   sessions: UserSession[];
   logins: { at: string; user: string; source: string | null; result: string; detail: string | null }[];
 }
@@ -107,7 +107,7 @@ export function ActivityTab({ device }: { device: Device }) {
       <Card className="overflow-hidden">
         <CardHeader>
           <CardTitle>Configuration changes</CardTitle>
-          <CardDescription>Every stored change, newest first. Unchanged scheduled backups are not listed.</CardDescription>
+          <CardDescription>Every stored change, newest first, including revisions imported from RANCID. Unchanged scheduled backups are not listed.</CardDescription>
         </CardHeader>
         <Table>
           <TableHeader>
@@ -136,6 +136,11 @@ export function ActivityTab({ device }: { device: Device }) {
                 <TableCell className="font-medium">{c.author ?? "—"}</TableCell>
                 <TableCell className="max-w-[360px] truncate text-sm" title={c.reason ?? undefined}>
                   {c.reason ?? humanize(c.trigger)}
+                  {c.source === "rancid" ? (
+                    <Badge variant="muted" className="ml-2" title="Imported from RANCID's CVS history">
+                      RANCID
+                    </Badge>
+                  ) : null}
                   {c.change_request_id ? (
                     <Link href={`/changes/${c.change_request_id}`} className="ml-2">
                       <Badge variant="info">change request</Badge>

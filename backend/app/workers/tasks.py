@@ -149,6 +149,14 @@ def run_integration_sync(db, integration: Integration) -> dict:
         raise
 
 
+@celery_app.task(name="app.workers.tasks.import_rancid_history")
+def import_rancid_history(tenant_id: str) -> dict:
+    from app.services.rancid_history import run_import
+
+    with session() as db:
+        return run_import(db, uuid.UUID(tenant_id))
+
+
 @celery_app.task(name="app.workers.tasks.sync_integration")
 def sync_integration(integration_id: str) -> dict:
     with session() as db:

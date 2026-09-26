@@ -5,6 +5,7 @@ import { GitCommitHorizontal, GitCompare } from "lucide-react";
 import { EmptyState } from "@/components/common/empty-state";
 import { RelativeTime } from "@/components/common/relative-time";
 import { TableState } from "@/components/common/table-skeleton";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,7 +23,7 @@ export function HistoryTab({
   onDiff: (oldRev: string, newRev: string) => void;
   onView: (rev: string) => void;
 }) {
-  const history = useDeviceHistory(device.id);
+  const history = useDeviceHistory(device.id, 1000);
   const commits = history.data ?? [];
   return (
     <Card>
@@ -51,6 +52,11 @@ export function HistoryTab({
               <TableRow key={c.sha}>
                 <TableCell className="font-mono text-xs">
                   <span title={c.sha}>{shortSha(c.sha, 10)}</span>
+                  {c.source === "rancid" ? (
+                    <Badge variant="muted" className="ml-1.5 font-sans" title="Imported from RANCID's CVS history">
+                      RANCID
+                    </Badge>
+                  ) : null}
                 </TableCell>
                 <TableCell className="max-w-0">
                   <p className="truncate" title={c.message}>

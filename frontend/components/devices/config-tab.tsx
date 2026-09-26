@@ -15,7 +15,7 @@ import { formatDateTime, shortSha } from "@/lib/utils";
 import { useDeviceHistory } from "./use-device-history";
 
 export function ConfigTab({ device, rev, onRevChange }: { device: Device; rev: string; onRevChange: (rev: string) => void }) {
-  const history = useDeviceHistory(device.id);
+  const history = useDeviceHistory(device.id, 1000);
   const config = useQuery({
     queryKey: ["device", device.id, "config", rev],
     queryFn: () => api.get<string>(`/devices/${device.id}/config`, { rev }, { responseType: "text", headers: { Accept: "text/plain" } }),
@@ -25,7 +25,7 @@ export function ConfigTab({ device, rev, onRevChange }: { device: Device; rev: s
     { value: "HEAD", label: "Latest (HEAD)" },
     ...(history.data ?? []).map((c) => ({
       value: c.sha,
-      label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}`,
+      label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}${c.source === "rancid" ? " · RANCID" : ""}`,
     })),
   ];
 

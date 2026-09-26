@@ -315,6 +315,8 @@ export interface CommitInfo {
   email: string;
   timestamp: string;
   message: string;
+  /** "rancid": a revision imported from RANCID's CVS history */
+  source?: "nom" | "rancid";
 }
 
 export type DiffRowType = "equal" | "added" | "removed" | "modified" | "skip";

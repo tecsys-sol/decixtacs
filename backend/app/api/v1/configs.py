@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.services import attribution, audit
 from app.services import diff as diffsvc
+from app.services import rancid_history as rhist
 from app.services.backup.engine import (
     build_target,
     default_credential,
@@ -243,19 +244,46 @@ def put_backup_settings(slug: str, body: PlatformBackupSettingsIn, ctx: Ctx = De
     return _backup_settings(ctx)
 
 
+class _Stores:
+    """NOM's own backups, then the imported RANCID history: a revision resolves in whichever holds it."""
+
+    def __init__(self, ctx: Ctx):
+        self.main = store_for(ctx.db, ctx.tenant_id)
+        self.rancid = rhist.history_store(ctx.db, ctx.tenant_id)
+
+    def read(self, path: str, rev: str) -> str | None:
+        content = self.main.read(path, rev)
+        if content is None and self.rancid is not None:
+            content = self.rancid.read(path, rev)
+        return content
+
+    def commit_info(self, rev: str):
+        info = self.main.commit_info(rev)
+        if info is None and self.rancid is not None:
+            info = self.rancid.commit_info(rev)
+        return info
+
+
 @router.get("/devices/{device_id}/config", response_class=PlainTextResponse)
 def device_config(device_id: uuid.UUID, rev: str = "HEAD", ctx: Ctx = Depends(require("configs:read"))):
     d = _device(ctx, device_id)
-    content = store_for(ctx.db, ctx.tenant_id).read(device_relpath(d), rev)
+    content = _Stores(ctx).read(device_relpath(d), rev)
     if content is None:
         raise HTTPException(404, "no configuration stored for this revision")
     return content
 
 
 @router.get("/devices/{device_id}/history")
-def device_history(device_id: uuid.UUID, limit: int = Query(100, le=1000), ctx: Ctx = Depends(require("configs:read"))):
+def device_history(device_id: uuid.UUID, limit: int = Query(100, le=2000), ctx: Ctx = Depends(require("configs:read"))):
+    """Newest first: NOM's commits, then (older) revisions imported from RANCID's CVS history."""
     d = _device(ctx, device_id)
-    return [c.__dict__ for c in store_for(ctx.db, ctx.tenant_id).history(device_relpath(d), limit)]
+    stores = _Stores(ctx)
+    path = device_relpath(d)
+    out = [{**c.__dict__, "source": "nom"} for c in stores.main.history(path, limit)]
+    if stores.rancid is not None and len(out) < limit:
+        out += [{**c.__dict__, "source": "rancid"} for c in stores.rancid.history(path, limit)]
+        out.sort(key=lambda c: c["timestamp"], reverse=True)
+    return out[:limit]
 
 
 EMPTY_REV = "empty"
@@ -292,7 +320,7 @@ def device_diff(
     With ``attribute`` (and ``accounting:read``), changed rows carry ``right_by``/``left_by``: the
     engineer and logged command that produced the line."""
     d = _device(ctx, device_id)
-    store = store_for(ctx.db, ctx.tenant_id)
+    store = _Stores(ctx)
     path = device_relpath(d)
     # old="empty": compare with nothing, e.g. to show a device's first (only) stored version
     a = "" if old == EMPTY_REV else store.read(path, old)

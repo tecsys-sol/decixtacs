@@ -347,6 +347,15 @@ language and cannot be driven by the agent. Migrate without touching devices or 
 2. Run a backup, then on the RANCID host `tar czf rancid-configs.tgz -C /var/lib/rancid .` and
    **Upload RANCID configs**. Each router shows *Identical* / *Differs* (with a side-by-side diff) /
    *No NOM backup yet*. Retire RANCID once everything is identical or differs only by recent changes.
+3. Keep RANCID's change history: on the RANCID host (`RCSSYS=cvs`)
+   `tar czf /tmp/rancid-cvs.tgz -C /var/lib/rancid/CVS .` and **Upload CVS archive**. A worker rebuilds
+   every revision of `<group>/configs/<router>,v` (Attic included), converts it to NOM's format
+   (Junos → `display set`, RANCID's comment header dropped, secrets masked when sanitising is on) and
+   writes it, with its original date, author and log message, to a separate Git repository
+   (`$NOM_BACKUP_REPO_ROOT/<tenant>-rancid`). History & diff and the Change history tab then list those
+   revisions (marked *RANCID*) before NOM's own backups, and can diff across the boundary. Re-uploading
+   replaces the import; **Remove** deletes it. The upload goes through nginx: keep
+   `client_max_body_size` above the archive size (the API accepts up to 200 MB).
 
 Slow or session-limited platforms: **Backups → Backup settings** sets timeout, parallel sessions
 and collection commands per platform.

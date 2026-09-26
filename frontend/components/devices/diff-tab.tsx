@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { RelativeTime } from "@/components/common/relative-time";
 import { DiffViewer } from "@/components/diff/diff-viewer";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SimpleSelect } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -110,6 +111,11 @@ function CommitList({
                   </span>
                   <span className="font-mono text-[11.5px] text-muted-foreground">
                     {shortSha(c.sha, 7)}
+                    {c.source === "rancid" ? (
+                      <Badge variant="muted" className="ml-1.5 px-1.5 py-0 font-sans text-[10.5px]" title="Imported from RANCID's CVS history">
+                        RANCID
+                      </Badge>
+                    ) : null}
                     {(runs.get(c.sha)?.count ?? 0) > 1 ? (
                       <span className="ml-1.5 font-sans">
                         · confirmed by {runs.get(c.sha)!.count} backups, last <RelativeTime value={runs.get(c.sha)!.last} />
@@ -141,7 +147,7 @@ export function DiffTab({
   onChange: (oldRev: string, newRev: string) => void;
 }) {
   const theme = useChartTheme();
-  const history = useDeviceHistory(device.id);
+  const history = useDeviceHistory(device.id, 1000);
   const backups = useDeviceBackups(device.id);
   const commits = React.useMemo(() => history.data ?? [], [history.data]);
   const bySha = React.useMemo(() => {
@@ -229,7 +235,7 @@ export function DiffTab({
   );
 
   const options = [
-    ...commits.map((c) => ({ value: c.sha, label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}` })),
+    ...commits.map((c) => ({ value: c.sha, label: `${shortSha(c.sha)} · ${formatDateTime(c.timestamp)} · ${c.author}${c.source === "rancid" ? " · RANCID" : ""}` })),
     { value: EMPTY, label: "(empty - before the first backup)" },
   ];
   // keep a revision passed via URL selectable even if it is outside the loaded history window

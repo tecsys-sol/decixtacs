@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArchiveRestore, CheckCircle2, FileUp, GitCompare, KeyRound, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArchiveRestore, CheckCircle2, FileUp, GitCompare, History, KeyRound, Loader2, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
 
@@ -477,6 +477,151 @@ function CompareStep() {
   );
 }
 
+interface HistoryStatus {
+  status: "none" | "queued" | "running" | "done" | "failed";
+  filename: string | null;
+  size_bytes: number | null;
+  requested_by: string | null;
+  requested_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  stats: {
+    routers: number;
+    matched: number;
+    revisions: number;
+    commits: number;
+    unmatched: string[];
+    errors: string[];
+    first: string | null;
+    last: string | null;
+  } | null;
+}
+
+const CVS_TAR = "tar czf /tmp/rancid-cvs.tgz -C /var/lib/rancid/CVS .";
+
+function HistoryStep() {
+  const qc = useQueryClient();
+  const { can } = useAuth();
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const [confirmClear, setConfirmClear] = React.useState(false);
+  const status = useQuery({
+    queryKey: ["rancid", "history"],
+    queryFn: () => api.get<HistoryStatus>("/rancid/history"),
+    refetchInterval: (q) => (q.state.data && ["queued", "running"].includes(q.state.data.status) ? 3000 : false),
+  });
+  const st = status.data;
+  const busy = st?.status === "queued" || st?.status === "running";
+  const prev = React.useRef(st?.status);
+  React.useEffect(() => {
+    if (prev.current && ["queued", "running"].includes(prev.current) && st && !busy) {
+      if (st.status === "done") toast.success("RANCID history imported", `${formatNumber(st.stats?.commits ?? 0)} revisions added to device history.`);
+      else if (st.status === "failed") toast.error("RANCID history import failed", st.error ?? undefined);
+      void qc.invalidateQueries({ queryKey: ["device"] });
+    }
+    prev.current = st?.status;
+  }, [st, busy, qc]);
+  const upload = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api.post<HistoryStatus>("/rancid/history", fd);
+    },
+    onSuccess: (r) => qc.setQueryData(["rancid", "history"], r),
+    onError: (e) => toast.error("Upload failed", errorMessage(e)),
+  });
+  const clear = useMutation({
+    mutationFn: () => api.delete("/rancid/history"),
+    onSuccess: () => {
+      setConfirmClear(false);
+      void qc.invalidateQueries({ queryKey: ["rancid", "history"] });
+      void qc.invalidateQueries({ queryKey: ["device"] });
+    },
+    onError: (e) => toast.error("Could not remove the history", errorMessage(e)),
+  });
+  const s = st?.stats;
+
+  return (
+    <Card data-testid="rancid-history-step">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+        <div className="max-w-3xl">
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-4 w-4" /> 3 · Import RANCID&apos;s change history
+          </CardTitle>
+          <CardDescription>
+            RANCID keeps every earlier version of each config in CVS. On the RANCID host run <code>{CVS_TAR}</code> and upload the archive: every revision is added to the
+            device&apos;s <em>History &amp; diff</em> (marked <Badge variant="muted">RANCID</Badge>) before NOM&apos;s own backups, with its original date, author and log message.
+            A new upload replaces the previous import.
+          </CardDescription>
+        </div>
+        {can("configs:backup") ? (
+          <div className="flex gap-2">
+            {st?.status === "done" || st?.status === "failed" ? (
+              <Button variant="ghost" size="sm" onClick={() => setConfirmClear(true)}>
+                <Trash2 /> Remove
+              </Button>
+            ) : null}
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".tgz,.tar.gz,.tar,.zip,application/gzip,application/zip,application/x-tar"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) upload.mutate(f);
+                e.target.value = "";
+              }}
+            />
+            <Button size="sm" loading={upload.isPending || busy} disabled={busy} onClick={() => fileRef.current?.click()}>
+              <Upload /> {busy ? "Importing…" : "Upload CVS archive"}
+            </Button>
+          </div>
+        ) : null}
+      </CardHeader>
+      <div className="grid gap-4 px-6 pb-6">
+        {status.isLoading ? <Skeleton className="h-20" /> : null}
+        {busy ? (
+          <div className="flex items-center gap-2 rounded-md border bg-accent/30 px-4 py-3 text-sm" role="status">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {st?.status === "queued" ? "Waiting for a worker…" : "Rebuilding revisions and writing history…"} {st?.filename ? <span className="text-muted-foreground">({st.filename})</span> : null}
+          </div>
+        ) : null}
+        {st?.status === "failed" ? (
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+            <AlertTriangle className="mr-1 inline h-4 w-4" /> Import failed: {st.error}
+          </div>
+        ) : null}
+        {st?.status === "done" && s ? (
+          <>
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <KpiTile label="Devices with history" value={formatNumber(s.matched)} icon={CheckCircle2} tone="success" sub={`of ${formatNumber(s.routers)} RANCID routers`} />
+              <KpiTile label="Revisions added" value={formatNumber(s.commits)} icon={History} delay={1} sub={`${formatNumber(s.revisions)} in CVS; unchanged ones merged`} />
+              <KpiTile label="Oldest" value={s.first ? new Date(s.first).toLocaleDateString() : "—"} icon={ArchiveRestore} delay={2} />
+              <KpiTile label="Newest" value={s.last ? new Date(s.last).toLocaleDateString() : "—"} icon={GitCompare} delay={3} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Imported {st.finished_at ? <RelativeTime value={st.finished_at} /> : null}
+              {st.requested_by ? ` by ${st.requested_by}` : ""}. Open any device&apos;s History &amp; diff or Change history tab to browse it.
+            </p>
+            {s.unmatched.length ? <NameList title="Not in inventory (history not imported)" items={s.unmatched} tone="warning" /> : null}
+            {s.errors.length ? <NameList title="Unreadable RCS files" items={s.errors} tone="danger" /> : null}
+          </>
+        ) : null}
+      </div>
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Remove the imported RANCID history?"
+        description="Device history then shows NOM's own backups only. The CVS archive can be imported again at any time."
+        confirmLabel="Remove"
+        destructive
+        loading={clear.isPending}
+        onConfirm={() => clear.mutate()}
+      />
+    </Card>
+  );
+}
+
 export default function RancidPage() {
   const { can } = useAuth();
   return (
@@ -488,6 +633,7 @@ export default function RancidPage() {
       <div className="grid gap-4">
         {can("credentials:write") ? <CredentialsStep /> : null}
         <CompareStep />
+        <HistoryStep />
       </div>
     </>
   );

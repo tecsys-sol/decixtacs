@@ -30,7 +30,8 @@ from app.models import (
     SessionRecording,
     TacacsServer,
 )
-from app.services import audit
+from app.services import audit, rancid_history
+from app.services.backup.engine import device_relpath
 from app.services.changes import TRANSITIONS, TransitionError, apply_transition
 from app.services.risk import classify_command
 from app.services.tacacs.ingest import ingest_lines
@@ -380,32 +381,41 @@ def device_activity(
         e["backups"] += 1
         e["failed"] += b.status == "failed"
         e["changes"] += b.id in change_ids
+    rows = [
+        {
+            "id": str(b.id),
+            "at": b.collected_at,
+            "commit": b.commit_sha,
+            "author": b.author,
+            "reason": b.reason,
+            "added": b.lines_added,
+            "removed": b.lines_removed,
+            "risk": b.risk_score,
+            "trigger": b.trigger,
+            "change_request_id": str(b.change_request_id) if b.change_request_id else None,
+            "source": "nom",
+        }
+        for b in changes
+    ]
+    # revisions imported from RANCID's CVS history (older than NOM's own backups)
+    rstore = rancid_history.history_store(ctx.db, ctx.tenant_id)
+    if rstore is not None:
+        imported = rancid_history.device_changes(rstore, device_relpath(d), since)
+        for r in imported:
+            day(r["at"])["changes"] += 1
+        rows = sorted(rows + imported, key=lambda r: r["at"], reverse=True)
     out = {
         "device": {"id": str(d.id), "hostname": d.hostname},
         "days": days,
         "summary": {
-            "changes": len(changes),
-            "lines_added": sum(b.lines_added for b in changes),
-            "lines_removed": sum(b.lines_removed for b in changes),
+            "changes": len(rows),
+            "lines_added": sum(r["added"] for r in rows),
+            "lines_removed": sum(r["removed"] for r in rows),
             "backups": len(backups),
             "failed_backups": sum(1 for b in backups if b.status == "failed"),
-            "authors": len({b.author for b in changes if b.author}),
+            "authors": len({r["author"] for r in rows if r["author"]}),
         },
-        "changes": [
-            {
-                "id": str(b.id),
-                "at": b.collected_at,
-                "commit": b.commit_sha,
-                "author": b.author,
-                "reason": b.reason,
-                "added": b.lines_added,
-                "removed": b.lines_removed,
-                "risk": b.risk_score,
-                "trigger": b.trigger,
-                "change_request_id": str(b.change_request_id) if b.change_request_id else None,
-            }
-            for b in changes[:200]
-        ],
+        "changes": rows[:200],
         "accounting": ctx.principal.can_on_device("accounting:read", d),
         "sessions": [],
         "logins": [],
