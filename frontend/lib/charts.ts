@@ -592,7 +592,8 @@ export function barOption(input: BarInput, theme: ThemeArg): EChartsOption {
     type: "value" as const,
     minInterval: 1,
     splitLine: { lineStyle: { color: t.split } },
-    axisLabel: axisLabel(th, { formatter: (v: number) => compact(v) }),
+    // a horizontal value axis ends at the plot's right edge: keep its last label inside the chart
+    axisLabel: axisLabel(th, { formatter: (v: number) => compact(v), ...(horizontal ? { alignMaxLabel: "right" } : {}) }),
   };
   const multi = input.series.length > 1;
   return {

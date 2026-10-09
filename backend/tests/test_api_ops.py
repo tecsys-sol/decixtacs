@@ -189,6 +189,8 @@ def test_ixpmanager_and_birdseye(admin):
             },
         )
     )
+    # a read-only API key: IXP Manager refuses the VLAN interface mapping (superuser only)
+    respx.get(f"{ixp_url}/api/v4/sflow-db-mapper/configured-macs").mock(return_value=httpx.Response(403))
     respx.get(f"{rs_url}/api/protocols/bgp").mock(
         return_value=httpx.Response(
             200,
@@ -228,7 +230,12 @@ def test_ixpmanager_and_birdseye(admin):
             "options": {"rs_asn": 65000, "filter_reasons": True},
         },
     ).json()
-    assert admin.post(f"/api/v1/integrations/{ixp['id']}/sync", params={"run_async": False}).json() == {"members": 1}
+    assert admin.post(f"/api/v1/integrations/{ixp['id']}/sync", params={"run_async": False}).json() == {
+        "members": 1,
+        "vlan_interfaces": 0,
+    }
+    lookup = admin.get("/api/v1/ixp/fabric").json()["integration"]["vlan_interface_lookup"]
+    assert lookup.startswith("forbidden") and "superuser" in lookup
     admin.post(f"/api/v1/integrations/{rs['id']}/sync", params={"run_async": False})
     m = admin.get("/api/v1/ixp/members").json()[0]
     assert m["asn"] == 13335 and m["connections"][0]["ports"][0]["switch"] == "sw1-blr"

@@ -146,6 +146,223 @@ def ixp_members(q: str | None = None, ctx: Ctx = Depends(require("devices:read")
     ]
 
 
+# --- IXP traffic graphs (IXP Manager Grapher) ---------------------------------------------
+
+
+def _ixpm(ctx: Ctx) -> Integration | None:
+    return ctx.db.scalar(
+        select(Integration)
+        .where(Integration.tenant_id == ctx.tenant_id, Integration.kind == "ixpmanager", Integration.enabled)
+        .order_by(Integration.created_at)
+        .limit(1)
+    )
+
+
+NO_IXPM = (
+    "No IXP Manager integration is configured: add one under Integrations (base URL + API key of an IXP Manager "
+    "superuser) to see traffic graphs."
+)
+
+
+@router.get("/ixp/fabric")
+def ixp_fabric(ctx: Ctx = Depends(require("devices:read"))):
+    """Exchanges, switches and VLANs the traffic graphs can show, and whether member/P2P graphs can be resolved."""
+    i = _ixpm(ctx)
+    if i is None:
+        return {"integration": None, "fabric": [], "message": NO_IXPM}
+    detail = i.last_sync_detail or {}
+    members = list(ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id)))
+    vlans_total = sum(len(c.get("vlans") or []) for m in members for c in m.connections or [])
+    return {
+        "integration": {
+            "id": str(i.id),
+            "name": i.name,
+            "base_url": i.base_url,
+            "last_sync_at": i.last_sync_at,
+            "last_sync_status": i.last_sync_status,
+            "vlan_interface_lookup": detail.get("vlan_interface_lookup"),
+            "vlan_interfaces": detail.get("vlan_interfaces", 0),
+            "member_vlans": vlans_total,
+        },
+        "fabric": detail.get("fabric") or [],
+        "message": None,
+    }
+
+
+@router.get("/ixp/graph")
+def ixp_graph(
+    graph: str = "ixp",
+    id: int | None = None,  # noqa: A002 - IXP Manager's parameter name
+    svli: int | None = None,
+    dvli: int | None = None,
+    period: str = "day",
+    category: str = "bits",
+    protocol: str | None = None,
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """One Grapher graph as a series (bits/s or packets/s) plus statistics; ``reason``/``error`` say why a
+    graph is empty (no integration, refused, no sFlow/MRTG data)."""
+    from app.services.integrations.grapher import Grapher
+
+    params = {"id": id, "svli": svli, "dvli": dvli, "period": period, "category": category, "protocol": protocol}
+    i = _ixpm(ctx)
+    if i is None:
+        return {
+            "graph": graph,
+            "params": params,
+            "points": [],
+            "statistics": None,
+            "error": NO_IXPM,
+            "reason": "no_integration",
+        }
+    return Grapher(i).series(graph, {k: v for k, v in params.items() if v is not None}).to_dict()
+
+
+def _member_vlis(m: IxpMember) -> list[dict]:
+    return [
+        {**v, "ixp_id": c.get("ixp_id")} for c in m.connections or [] for v in c.get("vlans") or [] if v.get("vli_id")
+    ]
+
+
+@router.get("/ixp/members/{asn}/p2p")
+def ixp_member_p2p(
+    asn: int,
+    vlan_id: int | None = None,
+    protocol: str = "ipv4",
+    period: str = "day",
+    category: str = "bits",
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """Traffic between one member and every other member on a peering VLAN (P2P), busiest first."""
+    from app.services.integrations.grapher import Grapher
+
+    i = _ixpm(ctx)
+    if i is None:
+        return {"asn": asn, "peers": [], "error": NO_IXPM, "reason": "no_integration"}
+    members = list(ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id)))
+    me = next((m for m in members if m.asn == asn), None)
+    if me is None:
+        raise HTTPException(404, "member not found")
+    mine = [v for v in _member_vlis(me) if vlan_id is None or v.get("vlan_id") == vlan_id]
+    if not mine:
+        lookup = (i.last_sync_detail or {}).get("vlan_interface_lookup")
+        return {
+            "asn": asn,
+            "name": me.name,
+            "peers": [],
+            "reason": "no_vlan_interface",
+            "error": (
+                "IXP Manager's VLAN interface ids are not known: "
+                + (lookup or "sync the IXP Manager integration")
+                + ". P2P graphs are keyed by them."
+                if lookup != "ok"
+                else "This member has no VLAN interface with a MAC address in IXP Manager on that VLAN "
+                "(P2P graphs are keyed by the VLAN interface, found through its configured MAC)."
+            ),
+        }
+    src = mine[0]
+    peers: list[tuple[int, dict]] = []
+    for m in members:
+        if m.asn == asn:
+            continue
+        for v in _member_vlis(m):
+            if v.get("vlan_id") == src.get("vlan_id"):
+                peers.append((v["vli_id"], {"asn": m.asn, "name": m.name}))
+                break
+    rows = Grapher(i).p2p_matrix(
+        src["vli_id"], peers[:500], {"period": period, "category": category, "protocol": protocol}
+    )
+    errors = [r for r in rows if r.get("error")]
+    with_data = [r for r in rows if not r.get("error") and ((r.get("totalin") or 0) + (r.get("totalout") or 0)) > 0]
+    out = {
+        "asn": asn,
+        "name": me.name,
+        "vlan_id": src.get("vlan_id"),
+        "vlan": src.get("vlan"),
+        "svli": src["vli_id"],
+        "protocol": protocol,
+        "peers": rows,
+        "peers_total": len(peers),
+        "peers_with_traffic": len(with_data),
+        "reason": None,
+        "error": None,
+    }
+    if errors and len(errors) == len(rows):
+        out["reason"], out["error"] = errors[0].get("reason"), errors[0].get("error")
+    elif rows and not with_data:
+        out["reason"] = "no_data"
+        out["error"] = (
+            "IXP Manager has no P2P data for this member: the sflow-to-rrd handler writes P2P RRD files only from "
+            "sampled traffic - check sflowtool, the sflow-to-rrd-handler and that the member's MAC addresses are "
+            "configured (or learned) in IXP Manager."
+        )
+    return out
+
+
+@router.get("/ixp/graphs/health")
+def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
+    """Fetch one graph of every kind and report which populate - and why the others do not."""
+    from app.services.integrations.grapher import Grapher
+
+    i = _ixpm(ctx)
+    if i is None:
+        return {"checks": [], "error": NO_IXPM}
+    g = Grapher(i)
+    detail = i.last_sync_detail or {}
+    fabric = detail.get("fabric") or []
+    members = list(ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id)))
+    vlis = [(m, v) for m in members for v in _member_vlis(m)]
+    checks: list[dict] = []
+
+    def check(label: str, graph: str, params: dict | None, missing: str | None = None):
+        if params is None:
+            checks.append({"label": label, "graph": graph, "ok": False, "reason": "no_object", "error": missing})
+            return
+        r = g.series(graph, {**params, "period": "day"})
+        checks.append(
+            {
+                "label": label,
+                "graph": graph,
+                "params": r.params,
+                "ok": not r.reason,
+                "points": len(r.points),
+                "reason": r.reason,
+                "error": r.error,
+            }
+        )
+
+    check("IXP total (MRTG)", "ixp", {"id": 1})
+    sw = next((s for f in fabric for s in f.get("switches") or []), None)
+    check("Switch traffic (MRTG)", "switch", {"id": sw["id"]} if sw else None, "no switch in the IX-F export")
+    vl = next((v for f in fabric for v in f.get("vlans") or []), None)
+    check("Peering VLAN (sFlow)", "vlan", {"id": vl["id"], "protocol": "ipv4"} if vl else None, "no VLAN in the export")
+    first = vlis[0] if vlis else None
+    no_vli = "no member VLAN interface id known (" + str(detail.get("vlan_interface_lookup") or "not synced") + ")"
+    check(
+        "Member traffic (sFlow)",
+        "vlaninterface",
+        {"id": first[1]["vli_id"], "protocol": "ipv4"} if first else None,
+        no_vli,
+    )
+    pair = None
+    if first:
+        pair = next(
+            (
+                (first, other)
+                for other in vlis
+                if other[0].asn != first[0].asn and other[1].get("vlan_id") == first[1].get("vlan_id")
+            ),
+            None,
+        )
+    check(
+        "Member-to-member P2P (sFlow)",
+        "p2p",
+        {"svli": pair[0][1]["vli_id"], "dvli": pair[1][1]["vli_id"], "protocol": "ipv4"} if pair else None,
+        no_vli if not first else "no second member on the same VLAN",
+    )
+    return {"checks": checks, "error": None}
+
+
 @router.get("/ixp/route-server-clients")
 def rs_clients(asn: int | None = None, only_problems: bool = False, ctx: Ctx = Depends(require("devices:read"))):
     stmt = (

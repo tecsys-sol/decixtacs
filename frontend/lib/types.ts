@@ -746,10 +746,14 @@ export interface IxpVlan {
   as_macro: string | null;
   max_prefix_v4: number | null;
   max_prefix_v6: number | null;
+  /** IXP Manager VLAN interface id (keys member and P2P traffic graphs) and VLAN tag, when known */
+  vli_id?: number | null;
+  tag?: number | null;
 }
 
 export interface IxpConnection {
   state: string | null;
+  ixp_id?: number | null;
   ports: { switch: string | number | null; speed_mbps: number | null }[];
   vlans: IxpVlan[];
 }

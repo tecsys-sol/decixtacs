@@ -421,7 +421,8 @@ command again after changing a variable rotates the stored token (audited as
    "push_back": false,                                        // write serial / os_version back
    "verify_tls": true}}
 
-// IXP Manager - IX-F member export (API key of a read-only user)
+// IXP Manager - IX-F member export and traffic graphs (API key of an IXP Manager superuser for
+// member and P2P graphs; a read-only user is enough for members and exchange-wide graphs)
 {"kind": "ixpmanager", "name": "ixpm", "base_url": "https://portal.example-ix.net", "token": "<api key>"}
 
 // birdseye (BIRD route server looking glass API) - one integration per route server / AFI
@@ -434,6 +435,24 @@ Results: devices/sites/racks/links and mirrored IPAM objects (`GET /external-obj
 reasons (`GET /ixp/route-server-clients?only_problems=true`). Filter reasons are decoded from the
 large communities of IXP Manager's standard route-server template (`options.filter_codes`
 overrides the mapping for modified templates).
+
+### IXP traffic graphs (including P2P)
+
+**IXP → Traffic** shows IXP Manager's Grapher graphs: exchange total, per switch (MRTG) and per
+peering VLAN (sFlow). Each member row on **IXP → Members** shows the member's traffic on each VLAN
+and its **P2P** (member-to-member) traffic with every other member, busiest first; click a peer for
+the pair's graph. A **Graph sources** panel fetches one graph of each kind and says why a kind does
+not populate:
+
+| Shown | Cause | Fix in IXP Manager |
+|---|---|---|
+| *IXP Manager refused the graph* | member/P2P graphs default to `own_graphs_only` | use an API key of a **superuser** in the integration |
+| *Member not mapped* | P2P graphs are keyed by VLAN interface ids, found through the MAC addresses configured on the member's VLAN interface (`/api/v4/sflow-db-mapper/configured-macs`, superuser) | configure the members' MAC addresses (or import learned ones), then sync the integration |
+| *No data in IXP Manager* (sFlow) | no RRD file for the graph | check sflowtool, the sflow-to-rrd handler and `GRAPHER_BACKEND_SFLOW_ENABLED`; P2P files only exist for pairs that exchanged sampled traffic |
+| *No data in IXP Manager* (MRTG) | MRTG does not poll the ports | check `GRAPHER_BACKEND_MRTG_ENABLED`, the generated MRTG config and its cron job |
+
+Graphs are fetched live (cached 2 minutes) with `GET /api/v1/ixp/graph`,
+`GET /api/v1/ixp/members/{asn}/p2p` and `GET /api/v1/ixp/graphs/health`.
 
 ## 10. Onboarding devices to TACACS+
 

@@ -1092,6 +1092,7 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
                                             "routeserver": k != 5,
                                             "as_macro": macro,
                                             "max_prefix": 1000 * (k + 1),
+                                            "mac_addresses": [f"02:00:00:00:{k:02x}:01"],
                                         },
                                         "ipv6": {"address": f"2001:7f8:1::{asn:x}:1", "routeserver": k != 5},
                                     }
@@ -1109,6 +1110,9 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
                 ],
                 "member_list": members,
             }
+
+        def configured_macs(self) -> dict:
+            return {"1": {"100": {f"02000000{k:02x}01": 100 + k for k in range(len(PEERS))}}}
 
     class _Birdseye:
         def bgp_protocols(self) -> dict:
@@ -1140,7 +1144,7 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
         kind="ixpmanager",
         name="ixpmanager-demo",
         base_url="https://ixp.demo.invalid",
-        enabled=False,
+        enabled=True,  # graphs are synthetic (options.demo); scheduled syncs skip demo integrations
         options={"demo": True},
     )
     rs_int = Integration(

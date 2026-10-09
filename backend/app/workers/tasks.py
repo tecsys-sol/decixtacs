@@ -118,6 +118,8 @@ def run_backup_schedule(chunk_size: int = 250) -> int:
 def run_integration_sync(db, integration: Integration) -> dict:
     from app.services.integrations import ixpmanager, netbox
 
+    if (integration.options or {}).get("demo"):
+        return {"skipped": "demo integration"}
     try:
         if integration.kind == "netbox":
             stats = netbox.sync(db, integration)

@@ -1,13 +1,14 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ExternalLink, Network, RadioTower } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, ExternalLink, Network, RadioTower } from "lucide-react";
 import * as React from "react";
 
 import { Chart, useChartTheme } from "@/components/charts/chart";
 import { ChartBody, ChartCard } from "@/components/common/chart-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { FilterBar } from "@/components/common/filter-bar";
+import { MemberTraffic, TrafficTab } from "@/components/ixp/traffic";
 import { PageHeader } from "@/components/common/page-header";
 import { RelativeTime } from "@/components/common/relative-time";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -186,6 +187,7 @@ function MembersTab({ q, setQ }: { q: string; setQ: (v: string) => void }) {
                   <TableRow className="hover:bg-transparent">
                     <TableCell colSpan={7} className="bg-secondary/60 p-0">
                       <MemberConnections member={m} />
+                      <MemberTraffic member={m} />
                       {m.contacts?.length ? <p className="px-4 pb-3 text-xs text-muted-foreground">Contacts: {m.contacts.join(", ")}</p> : null}
                     </TableCell>
                   </TableRow>
@@ -356,12 +358,16 @@ export default function IxpPage() {
   const memberQ = f.q || (f.asn ? `AS${f.asn}` : "");
   return (
     <>
-      <PageHeader title="IXP" description="Members from IXP Manager and route-server session state from birdseye." />
+      <PageHeader title="IXP" description="Members and traffic (including member-to-member P2P graphs) from IXP Manager, route-server session state from birdseye." />
       <Tabs value={f.tab} onValueChange={(v) => setF({ tab: v })}>
         <TabsList>
           <TabsTrigger value="members"><Network /> Members</TabsTrigger>
+          <TabsTrigger value="traffic"><Activity /> Traffic</TabsTrigger>
           <TabsTrigger value="rs"><RadioTower /> Route-server clients</TabsTrigger>
         </TabsList>
+        <TabsContent value="traffic">
+          <TrafficTab />
+        </TabsContent>
         <TabsContent value="members">
           <MembersTab q={memberQ} setQ={(v) => setF({ q: v, asn: "" })} />
         </TabsContent>

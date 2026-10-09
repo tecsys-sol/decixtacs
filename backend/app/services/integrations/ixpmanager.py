@@ -57,6 +57,12 @@ class IxpManagerClient:
         r.raise_for_status()
         return r.json()
 
+    def configured_macs(self) -> dict:
+        """{infrastructure id: {vlan tag: {mac: vlan interface id}}} - superuser API key only."""
+        r = self.http.get("/api/v4/sflow-db-mapper/configured-macs")
+        r.raise_for_status()
+        return r.json()
+
     def graph(self, graph: str, params: dict) -> Any:
         r = self.http.get(f"/grapher/{graph}", params={"type": "json", **params})
         r.raise_for_status()
@@ -78,11 +84,42 @@ class BirdseyeClient:
         return r.json().get("routes", [])
 
 
+def _mac(m: str) -> str:
+    return "".join(c for c in str(m).lower() if c in "0123456789abcdef")
+
+
+def vlan_interface_ids(client: IxpManagerClient) -> tuple[dict[str, tuple[int, int, int]], str]:
+    """mac -> (infrastructure id, vlan tag, vlan interface id) from IXP Manager's configured MACs, and
+    a status. The VLAN interface id is what per-member and P2P traffic graphs are keyed by."""
+    try:
+        data = client.configured_macs()
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code
+        return {}, (
+            "forbidden: the API key is not an IXP Manager superuser - member and P2P traffic graphs need one"
+            if code in (401, 403)
+            else f"failed: HTTP {code}"
+        )
+    except (httpx.HTTPError, ValueError) as e:
+        return {}, f"failed: {e}"
+    out: dict[str, tuple[int, int, int]] = {}
+    for infra, tags in (data or {}).items() if isinstance(data, dict) else []:
+        for tag, macs in (tags or {}).items():
+            for mac, vli in (macs or {}).items():
+                try:
+                    out[_mac(mac)] = (int(infra), int(tag), int(vli))
+                except (TypeError, ValueError):
+                    continue
+    return out, "ok"
+
+
 def sync_members(db: Session, integration: Integration, client: IxpManagerClient | None = None) -> dict:
     client = client or IxpManagerClient(integration.base_url, decrypt_secret(integration.token_enc) or "")
     data = client.ixf_export()
     switches = {sw["id"]: sw.get("name") for ixp in data.get("ixp_list", []) for sw in ixp.get("switch", [])}
     vlans = {v["id"]: v.get("name") for ixp in data.get("ixp_list", []) for v in ixp.get("vlan", [])}
+    by_mac, vli_status = vlan_interface_ids(client)
+    mapped = 0
     existing = {m.asn: m for m in db.scalars(select(IxpMember).where(IxpMember.tenant_id == integration.tenant_id))}
     n = 0
     for mem in data.get("member_list", []):
@@ -111,6 +148,7 @@ def sync_members(db: Session, integration: Integration, client: IxpManagerClient
                         }
                         for i in c.get("if_list", [])
                     ],
+                    "ixp_id": c.get("ixp_id"),
                     "vlans": [
                         {
                             "vlan_id": v.get("vlan_id"),
@@ -127,14 +165,35 @@ def sync_members(db: Session, integration: Integration, client: IxpManagerClient
                     ],
                 }
             )
+        for conn, c in zip(conns, mem.get("connection_list", []), strict=True):
+            for entry, v in zip(conn["vlans"], c.get("vlan_list", []), strict=True):
+                macs = [_mac(x) for fam in ("ipv4", "ipv6") for x in ((v.get(fam) or {}).get("mac_addresses") or [])]
+                hit = next((by_mac[x] for x in macs if x in by_mac), None)
+                if hit:
+                    entry["tag"], entry["vli_id"] = hit[1], hit[2]
+                    mapped += 1
         m.connections = conns
         n += 1
     integration.last_sync_at = utcnow()
     integration.last_sync_status = "success"
-    integration.last_sync_detail = {"members": n}
+    integration.last_sync_detail = {
+        "members": n,
+        "vlan_interfaces": mapped,
+        "vlan_interface_lookup": vli_status,
+        # what the traffic graph pickers offer
+        "fabric": [
+            {
+                "id": ixp.get("ixp_id"),
+                "name": ixp.get("shortname") or ixp.get("name"),
+                "switches": [{"id": sw.get("id"), "name": sw.get("name")} for sw in ixp.get("switch", [])],
+                "vlans": [{"id": v.get("id"), "name": v.get("name")} for v in ixp.get("vlan", [])],
+            }
+            for ixp in data.get("ixp_list", [])
+        ],
+    }
     metrics.SYNC_RUNS.labels(kind="ixpmanager", status="success").inc()
     db.flush()
-    return {"members": n}
+    return {"members": n, "vlan_interfaces": mapped}
 
 
 def _decode_communities(route: dict, rs_asn: int | None) -> tuple[set[int], str | None]:
