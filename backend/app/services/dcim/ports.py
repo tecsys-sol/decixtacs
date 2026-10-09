@@ -18,7 +18,7 @@ _JUNOS_VIRTUAL = re.compile(
     r"^(lo\d*|irb|vlan|vme|dsc|gr-|ip-|lt-|mt-|pd-|pe-|pfe-|pfh-|tap|vtep|st0|ms-|si-|sp-|jsrv|bme|em\d)"
 )
 _IOS_VIRTUAL = re.compile(r"^(loopback|vlan|tunnel|nve|null|bdi|virtual|dialer|bvi|mgmt\d?$)", re.I)
-_LAG = re.compile(r"^(ae\d+|reth\d+|port-channel\s*\d+|bundle-ether\d+|po\d+)$", re.I)
+_LAG = re.compile(r"^(ae\d+|reth\d+|port-channel\s*\d+|bundle-ether\d+|po\d+|bond\d+)$", re.I)
 
 
 @dataclass
@@ -44,10 +44,15 @@ class Interface:
     speed: str | None = None
     units: dict[str, Unit] = field(default_factory=dict)
     protocols: set[str] = field(default_factory=set)
+    kind: str | None = None  # "lag" / "virtual" when the config says so (FortiOS, RouterOS, VyOS)
 
     @property
     def is_lag(self) -> bool:
-        return bool(_LAG.match(self.name))
+        return self.kind == "lag" or bool(_LAG.match(self.name))
+
+    @property
+    def is_virtual(self) -> bool:
+        return self.kind == "virtual" or is_virtual(self.name)
 
     def unit(self, name: str) -> Unit:
         return self.units.setdefault(name, Unit(name))
@@ -263,10 +268,226 @@ def parse_ios_like(config: str) -> dict[str, Interface]:
     return ifs
 
 
+# --- FortiOS -----------------------------------------------------------------------------------
+
+_FORTI_VIRTUAL_TYPES = {"tunnel", "loopback", "vap-switch", "switch", "wl-mesh", "fext-wan", "ssl", "emac-vlan"}
+
+
+def _forti_values(rest: str) -> list[str]:
+    return _tokens(rest)
+
+
+def parse_fortios(config: str) -> dict[str, Interface]:
+    """``config system interface`` blocks of a FortiGate ``show`` (VDOM or global); VLAN interfaces
+    become units of their parent port, aggregates are LAGs."""
+    ifs: dict[str, Interface] = {}
+    raw: dict[str, dict] = {}  # edit name -> {key: value(s)}, plus "ipv6" addresses
+    depth = 0
+    in_if = False
+    if_depth = 0
+    cur: dict | None = None
+    for line in (ln.strip() for ln in config.splitlines()):
+        if line.startswith("config "):
+            depth += 1
+            if line == "config system interface":
+                in_if, if_depth = True, depth
+            continue
+        if line == "end":
+            if in_if and depth == if_depth:
+                in_if, cur = False, None
+            depth = max(0, depth - 1)
+            continue
+        if not in_if:
+            continue
+        if line.startswith("edit ") and depth == if_depth:
+            name = _forti_values(line[5:])[0] if line[5:].strip() else ""
+            cur = raw.setdefault(name, {"_v6": []})
+            continue
+        if line == "next" and depth == if_depth:
+            cur = None
+            continue
+        if cur is None or not line.startswith("set "):
+            continue
+        key, _, rest = line[4:].partition(" ")
+        vals = _forti_values(rest)
+        if depth > if_depth:  # inside "config ipv6" (or secondaryip) of the interface
+            if key in ("ip6-address", "ip6-extra-addr") or (key == "ip" and len(vals) == 1 and ":" in vals[0]):
+                cur["_v6"] += [v for v in vals if "/" in v and v != "::/0"]
+            elif key == "ip" and len(vals) >= 2:
+                cur.setdefault("_secondary", []).append(_mask_to_prefix(vals[0], vals[1]))
+            continue
+        cur[key] = vals
+    for name, kv in raw.items():
+        parent = (kv.get("interface") or [None])[0]
+        vlan = _int((kv.get("vlanid") or [""])[0])
+        if parent and vlan is not None:
+            i = ifs.setdefault(parent, Interface(parent))
+            u = i.unit(str(vlan))
+            u.vlan = vlan
+        else:
+            i = ifs.setdefault(name, Interface(name))
+            u = i.unit("0")
+        desc = " ".join(kv.get("description") or []) or " ".join(kv.get("alias") or []) or None
+        if u.name == "0":
+            i.description = desc or i.description
+            i.disabled = (kv.get("status") or [""])[0] == "down"
+            if kv.get("speed"):
+                i.speed = kv["speed"][0]
+            if kv.get("mtu"):
+                i.mtu = _int(kv["mtu"][0])
+            itype = (kv.get("type") or [""])[0]
+            if itype == "aggregate" or itype == "redundant":
+                i.kind = "lag"
+                for m in kv.get("member") or []:
+                    ifs.setdefault(m, Interface(m)).lag = name
+            elif itype in _FORTI_VIRTUAL_TYPES or name.startswith(("ssl.", "naf.", "l2t.", "npu", "modem")):
+                i.kind = "virtual"
+        else:
+            u.description = desc
+            u.disabled = (kv.get("status") or [""])[0] == "down"
+        ip = kv.get("ip") or []
+        if len(ip) >= 2 and ip[0] != "0.0.0.0":  # noqa: S104 - FortiOS's "no address"
+            u.addresses.append(_mask_to_prefix(ip[0], ip[1]))
+        u.addresses += kv.get("_secondary", []) + kv["_v6"]
+        if kv.get("vrf"):
+            u.vrf = kv["vrf"][0]
+    return ifs
+
+
+# --- RouterOS (/export terse) -----------------------------------------------------------------------
+
+
+def _kv(text: str) -> dict[str, str]:
+    out = {}
+    for tok in _tokens(text):
+        k, eq, v = tok.partition("=")
+        if eq:
+            out[k] = v
+    return out
+
+
+_ROS_VERBS = {"add", "set"}
+_ROS_VIRTUAL = {"bridge", "eoip", "gre", "ipip", "l2tp-client", "pppoe-client", "wireguard", "vrrp", "veth", "vxlan"}
+
+
+def parse_routeros(config: str) -> dict[str, Interface]:
+    """``/export terse``: one command per line, ``/menu path verb [ find ... ] key=value ...``."""
+    ifs: dict[str, Interface] = {}
+    vlans: dict[str, tuple[str, str]] = {}  # vlan interface name -> (parent, vlan id)
+    addresses: list[tuple[str, str]] = []
+
+    def get(name: str) -> Interface:
+        return ifs.setdefault(name, Interface(name))
+
+    for line in (ln.strip() for ln in config.replace("\\\n", "").splitlines()):
+        if not line.startswith("/"):
+            continue
+        default = re.search(r"\[\s*find\s+default-name=\"?([^\s\"\]]+)\"?\s*\]", line)
+        words = re.sub(r"\[[^\]]*\]", " ", line).split()
+        verb_at = next((n for n, w in enumerate(words) if w in _ROS_VERBS), None)
+        if verb_at is None:
+            continue
+        menu = [w.lstrip("/") for w in words[:verb_at]]
+        kv = _kv(" ".join(words[verb_at + 1 :]))
+        if menu[:1] == ["interface"]:
+            sub = menu[1] if len(menu) > 1 else ""
+            name = kv.get("name") or (default.group(1) if default else None)
+            if not name:
+                continue
+            if sub == "vlan":
+                parent, vid = kv.get("interface", name), kv.get("vlan-id", "0")
+                vlans[name] = (parent, vid)
+                u = get(parent).unit(vid)
+                u.vlan = _int(vid)
+                u.description = kv.get("comment") or u.description
+                u.disabled = kv.get("disabled") == "yes"
+                continue
+            if sub == "list":
+                continue
+            i = get(name)
+            i.description = kv.get("comment") or i.description
+            i.disabled = kv.get("disabled") == "yes" or i.disabled
+            if kv.get("mtu"):
+                i.mtu = _int(kv["mtu"])
+            if sub == "bonding":
+                i.kind = "lag"
+                for m in kv.get("slaves", "").split(","):
+                    if m:
+                        get(m).lag = name
+            elif sub in _ROS_VIRTUAL:
+                i.kind = "virtual"
+        elif menu[:2] in (["ip", "address"], ["ipv6", "address"]) and kv.get("disabled") != "yes":
+            addresses.append((kv.get("interface", ""), kv.get("address", "")))
+    for ifname, addr in addresses:
+        if ifname and addr:
+            parent, unit = vlans.get(ifname, (ifname, "0"))
+            get(parent).unit(unit).addresses.append(addr if "/" in addr else f"{addr}/32")
+    return ifs
+
+
+# --- VyOS (show configuration commands) ---------------------------------------------------------------
+
+_VYOS_VIRTUAL = {"loopback", "tunnel", "wireguard", "vti", "dummy", "bridge", "openvpn", "pppoe", "l2tpv3", "vxlan"}
+
+
+def parse_vyos(config: str) -> dict[str, Interface]:
+    ifs: dict[str, Interface] = {}
+
+    def get(name: str) -> Interface:
+        return ifs.setdefault(name, Interface(name))
+
+    for line in (ln.strip() for ln in config.splitlines()):
+        if not line.startswith("set interfaces "):
+            continue
+        t = _tokens(line)[2:]
+        if len(t) < 3:
+            continue
+        itype, name, rest = t[0], t[1], t[2:]
+        i = get(name)
+        if itype == "bonding":
+            i.kind = "lag"
+        elif itype in _VYOS_VIRTUAL:
+            i.kind = "virtual"
+        u = i.unit("0")
+        if rest[0] in ("vif", "vif-s") and len(rest) > 2:
+            u = i.unit(rest[1])
+            u.vlan = _int(rest[1])
+            rest = rest[2:]
+        key = rest[0]
+        if key == "description" and len(rest) > 1:
+            if u.name == "0":
+                i.description = " ".join(rest[1:])
+            else:
+                u.description = " ".join(rest[1:])
+        elif key == "disable":
+            if u.name == "0":
+                i.disabled = True
+            else:
+                u.disabled = True
+        elif key == "address" and len(rest) > 1 and "/" in rest[1]:
+            u.addresses.append(rest[1])
+        elif key == "mtu" and len(rest) > 1:
+            i.mtu = _int(rest[1])
+        elif key == "bond-group" and len(rest) > 1:
+            i.lag = rest[1]
+            get(rest[1]).kind = "lag"
+        elif key == "member" and len(rest) > 2 and rest[1] == "interface":
+            get(rest[2]).lag = name
+        elif key == "vrf" and len(rest) > 1:
+            u.vrf = rest[1]
+    return ifs
+
+
 def parse(config: str, platform: str | None) -> dict[str, Interface]:
-    if platform == "junos" or (platform is None and "\nset interfaces " in config):
+    if platform == "junos" or (platform is None and "\nset interfaces " in config and " unit " in config):
         return parse_junos(config)
-    if platform in ("ios", "eos", "nxos") or (platform is None and "\ninterface " in config):
+    if platform == "fortios" or (platform is None and "config system interface" in config):
+        return parse_fortios(config)
+    if platform == "routeros" or (platform is None and "\n/ip address add" in config):
+        return parse_routeros(config)
+    if platform == "vyos" or (platform is None and "\nset interfaces ethernet " in config):
+        return parse_vyos(config)
+    if platform in ("ios", "eos", "nxos", "iosxr") or (platform is None and "\ninterface " in config):
         return parse_ios_like(config)
     return {}
 

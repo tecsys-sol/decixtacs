@@ -373,8 +373,22 @@ configure/commit logged, lines are attributed as *inferred* when one engineer co
 Each device's **Ports & connections** tab draws its front panel from the NetBox community
 [devicetype-library](https://github.com/netbox-community/devicetype-library) (CC0) and fills every
 port from the latest backed-up config: description, admin state, LAG, VLANs, addresses, IGP/MPLS.
-Neighbours come from NetBox cables, the other end of point-to-point subnets, BGP neighbours on the
-port (with IXP member names) and devices/ASNs named in descriptions.
+Neighbours come from NetBox cables, LLDP, the other end of point-to-point subnets, BGP neighbours on
+the port (with IXP member names) and devices/ASNs named in descriptions. The **Network map** draws
+links between devices from the same sources.
+
+* **Configurations read**: Junos, IOS/IOS-XE, NX-OS, EOS, FortiOS, RouterOS and VyOS. A device NOM
+  has not backed up yet uses RANCID's newest revision (imported CVS history) or the config uploaded
+  under **RANCID migration**, so it still shows its ports and links.
+* **LLDP**: every backup also runs an LLDP command in the same SSH session (Junos
+  `show lldp neighbors | display json`, EOS/NX-OS `show lldp neighbors detail | json`, IOS
+  `show lldp neighbors detail`, RouterOS `/ip neighbor print detail`) and keeps the neighbours it
+  reports. This is the only source for layer-2 links that carry no IP addresses (IXP fabric trunks
+  and LAGs); a failing command never fails the backup. Change or switch it off per platform under
+  **Backups → Backup settings**. The backup account needs permission to run it (Junos: `view`).
+* **Descriptions**: a device is recognised with or without separators and in any case
+  (`TO_DEL-02-IXP01_et-0/0/1`, `del02-ixp01`), and the far port is taken from the description when
+  it names one.
 
 * The model comes from NetBox (device type), else RANCID's header, else **Set model** on the tab.
 * ~50 common models are bundled; others (and front-panel photos) are fetched from GitHub once and

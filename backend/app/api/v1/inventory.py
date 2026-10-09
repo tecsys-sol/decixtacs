@@ -739,7 +739,7 @@ def delete_device_group(group_id: uuid.UUID, ctx: Ctx = Depends(require("devices
 @router.get("/topology")
 def topology(
     site_id: uuid.UUID | None = None,
-    sources: str = "cable,subnet,description",
+    sources: str = "cable,lldp,subnet,description",
     ctx: Ctx = Depends(require("devices:read")),
 ):
     """Graph for the network map: sites as clusters, devices as nodes, links as edges.
@@ -789,8 +789,8 @@ def topology(
                 link.status,
                 "cable",
             )
-    if wanted & {"subnet", "description"}:
-        for lk in discover_links(ctx.db, ctx.tenant_id, visible):
+    if wanted & {"lldp", "subnet", "description"}:
+        for lk in discover_links(ctx.db, ctx.tenant_id, visible, lldp="lldp" in wanted):
             if lk.source in wanted:
                 add(
                     lk.a.device_id,

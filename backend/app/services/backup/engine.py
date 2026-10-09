@@ -32,6 +32,7 @@ from app.services.backup.collector import Collector, CollectResult, CollectTarge
 from app.services.backup.git_store import GitConfigStore
 from app.services.backup.sanitize import prepare
 from app.services.backup.sfos import sfos_collect
+from app.services.dcim.neighbors import NEIGHBOR_COMMANDS
 from app.services.drift import compare_golden
 from app.services.intel.parser import parse
 from app.services.risk import analyse_diff
@@ -138,6 +139,11 @@ def build_target(
             k: v for k, v in (device.custom_fields or {}).items() if k in ("api_port", "verify_tls", "sfos_entities")
         },
         timeout=int(tune.get("timeout") or 60),
+        neighbor_commands=(
+            tune["neighbor_commands"]
+            if tune.get("neighbor_commands") is not None
+            else NEIGHBOR_COMMANDS.get(device.platform.slug, [])
+        ),
         workers=int(tune["concurrency"]) if tune.get("concurrency") else None,
     )
 
@@ -241,6 +247,29 @@ def _record_failure(db: Session, device: Device, error: str, trigger: str) -> Co
     return b
 
 
+_NEIGHBOR_LIMITS = {"local_interface": 128, "remote_chassis": 128, "remote_address": 64, "protocol": 16}
+
+
+def store_neighbors(db: Session, device: Device, output: str, at: datetime | None = None) -> int:
+    """Replace the device's neighbour list with what the last collection saw."""
+    from app.models import DeviceNeighbor
+    from app.services.dcim import neighbors
+
+    found = neighbors.parse(output, device.platform.slug if device.platform else None)
+    db.execute(delete(DeviceNeighbor).where(DeviceNeighbor.device_id == device.id))
+    when = at or utcnow()
+    for n in found:
+        db.add(
+            DeviceNeighbor(
+                tenant_id=device.tenant_id,
+                device_id=device.id,
+                collected_at=when,
+                **{k: (v[: _NEIGHBOR_LIMITS.get(k, 255)] if isinstance(v, str) else v) for k, v in n.to_dict().items()},
+            )
+        )
+    return len(found)
+
+
 def process_result(
     db: Session,
     device: Device,
@@ -257,6 +286,8 @@ def process_result(
         return _record_failure(db, device, result.error or "unknown error", trigger)
 
     metrics.BACKUP_DURATION.labels(platform=platform).observe(result.duration_ms / 1000)
+    if result.neighbors is not None:
+        store_neighbors(db, device, result.neighbors, at)
     store = store_for(db, device.tenant_id)
     relpath = device_relpath(device)
     content = prepare(result.config, platform, sanitize_for(db, device.tenant_id))

@@ -42,6 +42,7 @@ from app.services.backup.engine import (
     store_for,
 )
 from app.services.compliance.engine import Rule, evaluate_rule
+from app.services.dcim.neighbors import NEIGHBOR_COMMANDS
 from app.services.risk import analyse_diff
 
 router = APIRouter(tags=["configs"])
@@ -160,6 +161,9 @@ class PlatformBackupSettings(BaseModel):
     timeout: int | None  # seconds, None = 60
     concurrency: int | None  # parallel sessions, None = NOM_BACKUP_CONCURRENCY
     device_count: int
+    # LLDP neighbour commands run after the config (map / connection graphs); [] = off
+    default_neighbor_commands: list[str] = []
+    neighbor_commands: list[str] | None = None
 
 
 class BackupSettingsOut(BaseModel):
@@ -172,6 +176,7 @@ class PlatformBackupSettingsIn(BaseModel):
     timeout: int | None = Field(None, ge=5, le=900)
     concurrency: int | None = Field(None, ge=1, le=500)
     commands: list[str] | None = None
+    neighbor_commands: list[str] | None = None  # None = platform default, [] = do not collect
 
 
 def _backup_settings(ctx: Ctx) -> BackupSettingsOut:
@@ -197,6 +202,8 @@ def _backup_settings(ctx: Ctx) -> BackupSettingsOut:
                 timeout=t.get("timeout"),
                 concurrency=t.get("concurrency"),
                 device_count=counts.get(p.id, 0),
+                default_neighbor_commands=NEIGHBOR_COMMANDS.get(p.slug, []),
+                neighbor_commands=t.get("neighbor_commands"),
             )
         )
     return BackupSettingsOut(default_timeout=60, max_concurrency=get_settings().backup_concurrency, platforms=out)
@@ -223,6 +230,8 @@ def put_backup_settings(slug: str, body: PlatformBackupSettingsIn, ctx: Ctx = De
     entry = {
         k: v for k, v in {"timeout": body.timeout, "concurrency": body.concurrency, "commands": commands}.items() if v
     }
+    if body.neighbor_commands is not None:
+        entry["neighbor_commands"] = [c.strip() for c in body.neighbor_commands if c.strip()]
     if entry:
         tuned[slug] = entry
     else:

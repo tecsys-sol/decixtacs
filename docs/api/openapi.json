@@ -3658,7 +3658,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "cable,subnet,description",
+              "default": "cable,lldp,subnet,description",
               "title": "Sources"
             }
           },
@@ -15208,6 +15208,28 @@
           "device_count": {
             "type": "integer",
             "title": "Device Count"
+          },
+          "default_neighbor_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Neighbor Commands",
+            "default": []
+          },
+          "neighbor_commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbor Commands"
           }
         },
         "type": "object",
@@ -15263,6 +15285,20 @@
               }
             ],
             "title": "Commands"
+          },
+          "neighbor_commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Neighbor Commands"
           }
         },
         "type": "object",

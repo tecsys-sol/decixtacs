@@ -44,6 +44,7 @@ every tenant-owned table carries `tenant_id → tenants.id ON DELETE CASCADE` wi
 | `devices` | unique `(tenant_id, hostname)`; `management_ip`, platform/vendor/site/credential, `status`, `reachability`, `backup_enabled`, `ssh_port`, `tags`, `custom_fields`, `last_backup_*` |
 | `device_groups`, `device_group_members` | static or dynamic (`dynamic_filter`) groups, nesting via `parent_id` |
 | `links` | topology (from NetBox cables) |
+| `device_neighbors` | LLDP neighbours per device port, replaced at every successful backup (`local_interface`, `remote_system`, `remote_port`, `remote_chassis`, `remote_address`) |
 
 ### TACACS+ (Module 2) - `models/tacacs.py`
 

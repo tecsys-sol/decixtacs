@@ -115,6 +115,8 @@ class CollectTarget:
     # per-platform tuning (tenant "Backup settings"): SSH/command timeout and parallel sessions
     timeout: int = 60
     workers: int | None = None
+    # run after the config, same session, best effort (services/dcim/neighbors.py)
+    neighbor_commands: Sequence[str] = ()
 
 
 @dataclass
@@ -124,6 +126,7 @@ class CollectResult:
     config: str = ""
     error: str | None = None
     duration_ms: int = 0
+    neighbors: str | None = None  # raw neighbour command output; None = not collected
 
 
 Collector = Callable[[list[CollectTarget]], list[CollectResult]]
@@ -188,8 +191,23 @@ def nornir_collect(targets: list[CollectTarget], workers: int = 50, timeout: int
             conn = task.host.get_connection("netmiko", task.nornir.config)
             for cmd in t.commands:
                 outputs.append(conn.send_command(cmd, read_timeout=timeout))
+        ms = int((time.monotonic() - start) * 1000)
+        neighbors: list[str] = []
+        for cmd in t.neighbor_commands:
+            try:  # LLDP may be off or the command unsupported: never fail the backup for it
+                if t.scrapli_platform:
+                    neighbors.append(conn.send_command(cmd).result)
+                else:
+                    neighbors.append(conn.send_command(cmd, read_timeout=timeout))
+            except Exception:  # noqa: BLE001
+                log.info("neighbour command %r failed on %s", cmd, t.hostname, exc_info=True)
         return Result(
-            host=task.host, result={"config": "\n".join(outputs), "ms": int((time.monotonic() - start) * 1000)}
+            host=task.host,
+            result={
+                "config": "\n".join(outputs),
+                "ms": ms,
+                "neighbors": "\n".join(neighbors) if t.neighbor_commands else None,
+            },
         )
 
     agg = nr.run(task=collect)
@@ -199,6 +217,14 @@ def nornir_collect(targets: list[CollectTarget], workers: int = 50, timeout: int
         if r.failed:
             results.append(CollectResult(device_id, False, error=str(r.exception or r.result)[:2000]))
         else:
-            results.append(CollectResult(device_id, True, config=r.result["config"], duration_ms=r.result["ms"]))
+            results.append(
+                CollectResult(
+                    device_id,
+                    True,
+                    config=r.result["config"],
+                    duration_ms=r.result["ms"],
+                    neighbors=r.result.get("neighbors"),
+                )
+            )
     nr.close_connections()
     return results

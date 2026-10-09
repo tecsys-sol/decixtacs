@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, JSONType, TenantScoped, Timestamps, UUIDPk
+from app.db.base import Base, JSONType, TenantScoped, Timestamps, UUIDPk, utcnow
 
 device_group_members = Table(
     "device_group_members",
@@ -168,3 +168,18 @@ class Link(UUIDPk, Timestamps, TenantScoped, Base):
     speed_mbps: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="up")
     source: Mapped[str] = mapped_column(String(16), default="netbox")
+
+
+class DeviceNeighbor(UUIDPk, TenantScoped, Base):
+    """An LLDP (or CDP / RouterOS discovery) neighbour seen on a device port at its last backup."""
+
+    __tablename__ = "device_neighbors"
+    device_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    local_interface: Mapped[str] = mapped_column(String(128))
+    remote_system: Mapped[str | None] = mapped_column(String(255))
+    remote_port: Mapped[str | None] = mapped_column(String(255))
+    remote_port_description: Mapped[str | None] = mapped_column(String(255))
+    remote_chassis: Mapped[str | None] = mapped_column(String(128))
+    remote_address: Mapped[str | None] = mapped_column(String(64))
+    protocol: Mapped[str] = mapped_column(String(16), default="lldp")
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

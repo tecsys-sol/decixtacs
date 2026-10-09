@@ -6,6 +6,7 @@ import * as React from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +24,9 @@ export interface PlatformBackupSettings {
   timeout: number | null;
   concurrency: number | null;
   device_count: number;
+  /** LLDP neighbour commands run after the config (network map, connection graphs) */
+  default_neighbor_commands: string[];
+  neighbor_commands: string[] | null; // null = default, [] = off
 }
 
 export interface BackupSettings {
@@ -35,22 +39,33 @@ interface Draft {
   timeout: string;
   concurrency: string;
   commands: string;
+  lldpOff: boolean;
+  lldp: string;
 }
 
 const toDraft = (p: PlatformBackupSettings): Draft => ({
   timeout: p.timeout ? String(p.timeout) : "",
   concurrency: p.concurrency ? String(p.concurrency) : "",
   commands: (p.commands ?? []).join("\n"),
+  lldpOff: p.neighbor_commands !== null && p.neighbor_commands !== undefined && p.neighbor_commands.length === 0,
+  lldp: (p.neighbor_commands ?? []).join("\n"),
 });
+
+const lines = (v: string) => v.split("\n").map((c) => c.trim()).filter(Boolean);
 
 function PlatformRow({ p, settings, writable }: { p: PlatformBackupSettings; settings: BackupSettings; writable: boolean }) {
   const qc = useQueryClient();
   const [d, setD] = React.useState<Draft>(() => toDraft(p));
   const [showCmds, setShowCmds] = React.useState(!!p.commands);
   const saved = toDraft(p);
-  const dirty = d.timeout !== saved.timeout || d.concurrency !== saved.concurrency || d.commands.trim() !== saved.commands;
+  const dirty =
+    d.timeout !== saved.timeout ||
+    d.concurrency !== saved.concurrency ||
+    d.commands.trim() !== saved.commands ||
+    d.lldpOff !== saved.lldpOff ||
+    d.lldp.trim() !== saved.lldp;
   const save = useMutation({
-    mutationFn: (body: { timeout: number | null; concurrency: number | null; commands: string[] | null }) =>
+    mutationFn: (body: { timeout: number | null; concurrency: number | null; commands: string[] | null; neighbor_commands: string[] | null }) =>
       api.put<BackupSettings>(`/backup-settings/${p.slug}`, body),
     onSuccess: (s) => {
       qc.setQueryData(["backup-settings"], s);
@@ -63,14 +78,16 @@ function PlatformRow({ p, settings, writable }: { p: PlatformBackupSettings; set
   const submit = (reset = false) =>
     save.mutate(
       reset
-        ? { timeout: null, concurrency: null, commands: null }
+        ? { timeout: null, concurrency: null, commands: null, neighbor_commands: null }
         : {
             timeout: d.timeout ? Number(d.timeout) : null,
             concurrency: d.concurrency ? Number(d.concurrency) : null,
-            commands: d.commands.trim() ? d.commands.split("\n").map((c) => c.trim()).filter(Boolean) : null,
+            commands: d.commands.trim() ? lines(d.commands) : null,
+            neighbor_commands: d.lldpOff ? [] : d.lldp.trim() ? lines(d.lldp) : null,
           },
     );
-  const tuned = !!(p.timeout || p.concurrency || p.commands);
+  const tuned = !!(p.timeout || p.concurrency || p.commands || p.neighbor_commands);
+  const lldpCmds = p.neighbor_commands ?? p.default_neighbor_commands;
 
   return (
     <>
@@ -114,6 +131,9 @@ function PlatformRow({ p, settings, writable }: { p: PlatformBackupSettings; set
           <p className="truncate font-mono text-[11px] text-muted-foreground" title={(p.commands ?? p.default_commands).join("\n")}>
             {(p.commands ?? p.default_commands)[0] ?? "(API collection)"}
           </p>
+          <p className="truncate text-[11px] text-muted-foreground" title={lldpCmds.join("\n")}>
+            LLDP: {lldpCmds.length ? (p.neighbor_commands ? "custom" : "on") : p.neighbor_commands ? "off" : "not supported"}
+          </p>
         </TableCell>
         <TableCell className="whitespace-nowrap text-right">
           {writable ? (
@@ -145,6 +165,28 @@ function PlatformRow({ p, settings, writable }: { p: PlatformBackupSettings; set
               disabled={!writable}
               spellCheck={false}
             />
+            <div className="mt-3 flex items-center gap-2">
+              <Checkbox
+                id={`lldp-${p.slug}`}
+                checked={!d.lldpOff}
+                onCheckedChange={(v) => setD({ ...d, lldpOff: v !== true })}
+                disabled={!writable}
+              />
+              <label htmlFor={`lldp-${p.slug}`} className="text-xs font-medium">
+                Collect LLDP neighbours after the config (links on the network map and connection graphs)
+              </label>
+            </div>
+            {!d.lldpOff ? (
+              <Textarea
+                aria-label={`LLDP commands for ${p.name}`}
+                value={d.lldp}
+                onChange={(e) => setD({ ...d, lldp: e.target.value })}
+                placeholder={p.default_neighbor_commands.join("\n") || "no default for this platform - enter a command that lists LLDP neighbours"}
+                className="mt-1 min-h-[44px] font-mono text-xs"
+                disabled={!writable}
+                spellCheck={false}
+              />
+            ) : null}
           </TableCell>
         </TableRow>
       ) : null}

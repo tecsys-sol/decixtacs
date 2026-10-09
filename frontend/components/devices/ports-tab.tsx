@@ -40,6 +40,7 @@ const STATE: Record<Port["state"], { label: string; variant: BadgeVariant }> = {
 
 const SOURCE_LABEL: Record<Peer["source"], string> = {
   cable: "NetBox cable",
+  lldp: "LLDP neighbour",
   subnet: "shared point-to-point subnet",
   bgp: "BGP neighbour",
   description: "named in the description",
@@ -281,9 +282,14 @@ export function PortsTab({ device }: { device: Device }) {
   if (!data.has_config)
     return (
       <Card>
-        <EmptyState icon={Unplug} title="No configuration backed up yet" description="The port view is built from the device's configuration. Run a backup first." />
+        <EmptyState
+          icon={Unplug}
+          title="No configuration backed up yet"
+          description="The port view is built from the device's configuration. Run a backup, or upload RANCID's configs under RANCID migration."
+        />
       </Card>
     );
+  const noInterfaces = !data.ports.some((p) => p.interfaces.length) && !data.lags.length && !data.unmatched.length;
 
   const port = data.ports.find((p) => p.name === selected) ?? null;
   const lag = port?.lag ? (data.lags.find((l) => l.name === port.lag) ?? null) : null;
@@ -293,6 +299,16 @@ export function PortsTab({ device }: { device: Device }) {
 
   return (
     <div className="grid gap-4">
+      {data.config_source && data.config_source !== "nom" ? (
+        <p className="rounded-md border border-warning/30 bg-warning-soft px-4 py-2 text-sm text-warning" data-testid="ports-config-source">
+          NOM has no backup of this device yet - ports and connections are read from {data.config_source === "rancid_history" ? "RANCID's newest revision (imported CVS history)" : "the config uploaded from RANCID"}.
+        </p>
+      ) : null}
+      {noInterfaces ? (
+        <p className="rounded-md border bg-accent/30 px-4 py-2 text-sm text-muted-foreground">
+          No interfaces could be read from this device&apos;s {data.device.platform ?? "unknown platform"} configuration, so ports and connections stay empty. Interfaces are read from Junos, IOS/IOS-XE, NX-OS, EOS, FortiOS, RouterOS and VyOS configurations.
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <KpiTile label="Ports" value={data.summary.ports} icon={Boxes} sub={dt ? `${dt.manufacturer} ${dt.model}` : "from the configuration"} />
         <KpiTile label="In use" value={data.summary.up} icon={PlugZap} tone="success" delay={1} />

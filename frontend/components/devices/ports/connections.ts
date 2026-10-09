@@ -9,7 +9,7 @@ export const BGP_FOLD = 6;
 
 export interface GraphNode {
   id: string;
-  kind: "self" | "port" | "lag" | "device" | "bgp" | "asn" | "bgp-group";
+  kind: "self" | "port" | "lag" | "device" | "bgp" | "asn" | "bgp-group" | "lldp";
   label: string;
   x: number;
   y: number;
@@ -36,6 +36,7 @@ function speedWidth(speed: string | null): number {
 function peerKey(p: Peer): string {
   if (p.kind === "device") return `dev:${p.device_id}`;
   if (p.kind === "asn") return `asn:${p.asn}`;
+  if (p.kind === "lldp") return `lldp:${p.name ?? p.chassis ?? p.address ?? p.interface}`;
   return p.device_id ? `dev:${p.device_id}` : `bgp:${p.address}`;
 }
 
@@ -104,7 +105,13 @@ export function buildConnections(data: DevicePorts, lagColors: Map<string, strin
         const node: GraphNode = {
           id: key,
           kind: p.kind === "device" || p.device_id ? "device" : p.kind,
-          label: p.kind === "device" || p.device_id ? (p.hostname ?? "device") : peerLabel(p),
+          // outer labels name the neighbour only; its port goes on the edge and in the tooltip
+          label:
+            p.kind === "device" || p.device_id
+              ? (p.hostname ?? "device")
+              : p.kind === "lldp"
+                ? (p.name ?? p.chassis ?? p.address ?? "LLDP neighbour")
+                : peerLabel(p),
           x: 0,
           y: 0,
           ports: [],
@@ -123,7 +130,7 @@ export function buildConnections(data: DevicePorts, lagColors: Map<string, strin
         edges.push({
           source: a.id,
           target: key,
-          label: p.kind === "device" && p.interface ? p.interface : undefined,
+          label: (p.kind === "device" || p.kind === "lldp") && p.interface ? p.interface : undefined,
           dashed: p.source === "description",
         });
       }
@@ -187,6 +194,7 @@ export function connectionsOption(graph: { nodes: GraphNode[]; edges: GraphEdge[
     bgp: { color: c[1], symbol: "circle", size: 16 },
     asn: { color: c[3], symbol: "diamond", size: 18 },
     "bgp-group": { color: c[1], symbol: "circle", size: 38 },
+    lldp: { color: c[2], symbol: "triangle", size: 20 },
   };
   return {
     animationDurationUpdate: 400,
@@ -237,7 +245,12 @@ export function connectionsOption(graph: { nodes: GraphNode[]; edges: GraphEdge[
                 ? { position: "inside", color: t.onBrand, fontWeight: 700, fontSize: 13, fontFamily: th.fonts.display }
                 : n.kind === "port" || n.kind === "lag"
                   ? { position: n.x >= 0 ? "right" : "left", fontFamily: th.fonts.mono, fontSize: 10.5, color: t.ink2 }
-                  : { position: n.x >= 0 ? "right" : "left", fontWeight: n.kind === "device" ? 700 : 500 },
+                  : {
+                      position: n.x >= 0 ? "right" : "left",
+                      fontWeight: n.kind === "device" ? 700 : 500,
+                      width: 150,
+                      overflow: "truncate",
+                    },
           };
         }),
         links: graph.edges.map((e) => ({

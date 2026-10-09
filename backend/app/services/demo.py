@@ -116,6 +116,8 @@ LINKS = [
     ("mx204-ams1-core", "xe-0/1/6", "asr1001x-ams1-ce", "TenGigabitEthernet0/1/0"),
     ("mx204-blr1-core", "xe-0/1/6", "isr4451-blr1-ce", "GigabitEthernet0/0/0"),
     ("mx10003-fra1-edge", "xe-1/0/6", "asr1001x-sin1-ce", "TenGigabitEthernet0/1/0"),
+    ("mx10003-fra1-edge", "xe-1/0/7", "fg600f-fra1-fw", "port1"),
+    ("isr4451-blr1-ce", "GigabitEthernet0/1/0", "fg200f-blr1-fw", "port1"),
 ]
 # Router IX LAG (ae0) -> peering switch Port-Channel1
 IX_UPLINKS = {
@@ -162,6 +164,34 @@ class DevState:
     # (local interface, address/prefix, description) of point-to-point links
     p2p: list[tuple[str, str, str]] = field(default_factory=list)
     ix_uplink: str | None = None  # peering switch behind ae0 (routers) / router behind Port-Channel1 (switches)
+    # (local port, neighbour system name, neighbour port) as LLDP reports them
+    lldp: list[tuple[str, str, str]] = field(default_factory=list)
+
+    def lldp_output(self) -> str | None:
+        """What the device's LLDP command prints (native format per platform); None = not collected."""
+        if self.platform == "junos":
+
+            def d(v: str) -> list[dict]:
+                return [{"data": v}]
+
+            items = [
+                {"lldp-local-port-id": d(a), "lldp-remote-system-name": d(sys_), "lldp-remote-port-id": d(b)}
+                for a, sys_, b in self.lldp
+            ]
+            body = json.dumps({"lldp-neighbors-information": [{"lldp-neighbor-information": items}]}, indent=1)
+            return "{master:0}\n" + body + "\n"
+        if self.platform == "eos":
+            rows = [{"port": a, "neighborDevice": sys_, "neighborPort": b, "ttl": 120} for a, sys_, b in self.lldp]
+            return json.dumps({"lldpNeighbors": rows})
+        if self.platform == "ios":
+            blocks = [
+                f"Local Intf: {a}\nChassis id: 2c6b.f5{n:02x}.0001\nPort id: {b}\nSystem Name: {sys_}\n"
+                for n, (a, sys_, b) in enumerate(self.lldp)
+            ]
+            return (
+                "------------------------------------------------\n".join([""] + blocks) + "\nTotal entries displayed"
+            )
+        return None
 
     def render(self) -> str:
         return {"junos": self._junos, "fortios": self._fortios}.get(self.platform, self._ios_like)()
@@ -291,6 +321,39 @@ class DevState:
 
     def _fortios(self) -> str:
         out = ["config system global", f'    set hostname "{self.hostname}"', '    set timezone "Etc/UTC"', "end"]
+        out += ["config system interface"]
+        if self.mgmt_ip:
+            out += [
+                '    edit "mgmt"',
+                f"        set ip {self.mgmt_ip} 255.255.255.0",
+                "        set allowaccess ping https ssh",
+            ]
+            out += ['        set description "oob management"', "    next"]
+        for ifn, addr, desc in self.p2p:
+            ip, plen = addr.split("/")
+            mask = "255.255.255.254" if plen == "31" else "255.255.255.252"
+            out += [
+                f'    edit "{ifn}"',
+                '        set vdom "root"',
+                f"        set ip {ip} {mask}",
+                "        set type physical",
+            ]
+            out += [f'        set description "{desc}"', "        set role wan", "    next"]
+        out += [
+            '    edit "LAN-AGG"',
+            '        set vdom "root"',
+            "        set type aggregate",
+            '        set member "port3" "port4"',
+        ]
+        out += ['        set description "inside LAN"', f"        set ip 10.50.{self.idx}.1 255.255.255.0", "    next"]
+        out += [
+            '    edit "port9"',
+            '        set vdom "root"',
+            "        set status down",
+            '        set description "spare"',
+            "    next",
+        ]
+        out.append("end")
         out += ["config system ntp", "    set ntpsync enable", "    config ntpserver"]
         for i, n in enumerate(self.ntp, 1):
             out += [f"        edit {i}", f'            set server "{n}"', "        next"]
@@ -427,6 +490,7 @@ def _acct_lines(
 class _Collector:
     def __init__(self):
         self.configs: dict[str, str] = {}  # device_id -> running config
+        self.neighbors: dict[str, str | None] = {}  # device_id -> LLDP command output
         self.failing: set[str] = set()
 
     def __call__(self, targets: list[CollectTarget]) -> list[CollectResult]:
@@ -434,7 +498,11 @@ class _Collector:
             CollectResult(t.device_id, False, error="connection timed out after 60s")
             if t.device_id in self.failing
             else CollectResult(
-                t.device_id, True, config=self.configs[t.device_id], duration_ms=900 + len(t.hostname) * 37
+                t.device_id,
+                True,
+                config=self.configs[t.device_id],
+                duration_ms=900 + len(t.hostname) * 37,
+                neighbors=self.neighbors.get(t.device_id),
             )
             for t in targets
         ]
@@ -609,6 +677,19 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
     for router, switch in IX_UPLINKS.items():
         states[router].ix_uplink = switch
         states[switch].ix_uplink = router
+    for a, a_if, b, b_if in LINKS:
+        if states[a].platform != "fortios" and states[b].platform != "fortios":
+            states[a].lldp.append((a_if, b, b_if))
+            states[b].lldp.append((b_if, a, a_if))
+    for router, switch in IX_UPLINKS.items():
+        sw_ports = ("Ethernet31/1", "Ethernet32/1") if "7280" in switch else ("Ethernet49/1", "Ethernet50/1")
+        for r_if, s_if in zip(("et-0/0/2", "et-0/0/3"), sw_ports, strict=True):
+            states[router].lldp.append((r_if, f"{switch}.demo.example", s_if))
+            states[switch].lldp.append((s_if, router, r_if))
+    for host, st in states.items():
+        if st.platform == "junos":  # a transit customer's router answers LLDP on the first customer port
+            cust = "xe-1/0/0" if host.startswith("mx10003") else "xe-0/1/0"
+            st.lldp.append((cust, f"cust-{1000 + st.idx * 10}-rtr1", "TenGigE0/0/0/0"))
     db.flush()
 
     # --- TACACS+ --------------------------------------------------------------------------
@@ -691,6 +772,7 @@ def seed_demo(db: Session, tenant: Tenant, *, force: bool = False, seed: int = 4
     def snapshot(hosts: list[str], when: datetime, **kw) -> list[ConfigBackup]:
         for h in hosts:
             collector.configs[ids[h]] = states[h].render()
+            collector.neighbors[ids[h]] = states[h].lldp_output()
         marker = utcnow()
         out = run_backups(db, tid, [devices[h].id for h in hosts], collector=collector, at=when, **kw)
         _backdate(db, tid, marker, when)

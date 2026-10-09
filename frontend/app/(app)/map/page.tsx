@@ -24,6 +24,7 @@ type View = "sites" | "devices";
 
 const SOURCES = [
   { key: "cable", label: "NetBox cables" },
+  { key: "lldp", label: "LLDP neighbours" },
   { key: "subnet", label: "Point-to-point subnets" },
   { key: "description", label: "Interface descriptions" },
 ] as const;
@@ -56,7 +57,7 @@ function Legend({ topo, view }: { topo: Topology; view: View }) {
       ))}
       <span>
         {topo.edges.length} link{topo.edges.length === 1 ? "" : "s"}
-        {SOURCES.filter((s) => kinds[s.key]).map((s) => ` · ${kinds[s.key]} ${s.key === "cable" ? "cabled" : s.key === "subnet" ? "routed" : "described"}`).join("")}
+        {SOURCES.filter((s) => kinds[s.key]).map((s) => ` · ${kinds[s.key]} ${s.key === "cable" ? "cabled" : s.key === "lldp" ? "seen by LLDP" : s.key === "subnet" ? "routed" : "described"}`).join("")}
       </span>
       {external ? <span>{external} neighbour{external === 1 ? "" : "s"} at other sites (faded)</span> : null}
       <span className="text-ink-3">
@@ -70,7 +71,7 @@ export default function MapPage() {
   const router = useRouter();
   const theme = useChartTheme();
   const sites = useSites();
-  const [f, setF] = useUrlState({ site: "", layout: "clustered", view: "", sources: "cable,subnet,description" });
+  const [f, setF] = useUrlState({ site: "", layout: "clustered", view: "", sources: "cable,lldp,subnet,description" });
   const layout: GraphLayout = f.layout === "force" ? "force" : "clustered";
   const multiSite = (sites.data?.length ?? 0) > 1;
   // default: the location overview when there is more than one site and none is selected

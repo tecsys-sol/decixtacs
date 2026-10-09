@@ -35,7 +35,7 @@ The platform is organised in 20 modules (numbering used throughout the code):
 | 10 | Change management | draft → approval (four-eyes) → implement → close; automatic pre/post-change backups |
 | 11 | Restore / rollback | dry-run with device-computed diff, push gated by an approved change |
 | 12 | Device groups | static/dynamic groups used by policies, RBAC scopes, golden configs |
-| 13 | Network map | topology links (NetBox cables) |
+| 13 | Network map | topology links (NetBox cables, LLDP, point-to-point subnets, descriptions) |
 | 14 | NetBox | sync of sites, racks, devices, cables, VLANs, prefixes, IPs, VRFs, ASNs, contacts; optional push-back |
 | 15 | IXP Manager | IX-F member export, member/port data |
 | 16 | Monitoring | Prometheus `nom_*` metrics, alert rules, Grafana dashboard |

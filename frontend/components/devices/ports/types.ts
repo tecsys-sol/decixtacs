@@ -2,8 +2,8 @@ export type PortState = "up" | "lag" | "disabled" | "unused";
 export type PortForm = "qsfp" | "qsfpdd" | "sfp" | "rj45" | "virtual";
 
 export interface Peer {
-  kind: "device" | "bgp" | "asn";
-  source: "cable" | "subnet" | "bgp" | "description";
+  kind: "device" | "bgp" | "asn" | "lldp";
+  source: "cable" | "lldp" | "subnet" | "bgp" | "description";
   device_id?: string;
   hostname?: string;
   interface?: string | null;
@@ -12,6 +12,7 @@ export interface Peer {
   name?: string | null;
   group?: string | null;
   unit?: string;
+  chassis?: string | null;
 }
 
 export interface IfaceUnit {
@@ -81,6 +82,7 @@ export interface DevicePorts {
   vendor: string | null;
   model_source: "inventory" | "override" | "rancid" | null;
   has_config: boolean;
+  config_source?: "nom" | "rancid_history" | "rancid_upload" | null;
   ports: Port[];
   unmatched: ConfigInterface[];
   lags: ConfigInterface[];
@@ -91,6 +93,10 @@ export interface DevicePorts {
 /** Human label for a peer: device + interface, "AS13335 Cloudflare", or the neighbour address. */
 export function peerLabel(p: Peer): string {
   if (p.kind === "device") return p.interface ? `${p.hostname} · ${p.interface}` : (p.hostname ?? "device");
+  if (p.kind === "lldp") {
+    const who = p.name ?? p.chassis ?? p.address ?? "LLDP neighbour";
+    return p.interface ? `${who} · ${p.interface}` : who;
+  }
   const as = p.asn ? `AS${p.asn}` : "";
   const name = p.name ? ` ${p.name}` : "";
   if (p.kind === "asn") return `${as}${name}`.trim();

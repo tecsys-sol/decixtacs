@@ -1,9 +1,15 @@
-"""Links between inventory devices discovered from their configurations.
+"""Links between inventory devices discovered from what the devices report and their configurations.
 
+* **lldp** - LLDP neighbours collected with each backup: what the ports actually see. The only
+  source for layer-2 links (IXP fabric trunks) that carry no addresses.
 * **subnet** - two devices hold the two addresses of a point-to-point subnet (/29../31, /112../127):
-  a routed link, the strongest evidence.
+  a routed link. On a link LLDP already found it only adds the subnet as detail.
 * **description** - an interface (or the members of a LAG) is described with another device's
-  hostname ("to mx204-ams1-core et-0/0/0"); the far side is paired when it names us back.
+  hostname ("to mx204-ams1-core et-0/0/0"); the far port is taken from the description when it
+  names one, else paired when the far side names us back.
+
+The configuration used is NOM's latest backup, else RANCID's newest revision (imported CVS
+history or the uploaded configs), so devices NOM cannot back up yet still take part.
 
 LAG members collapse onto their aggregate, so a 2x100G bundle is one 200G link. Parsed
 interfaces are cached per device and commit, so the map stays cheap to redraw.
@@ -11,14 +17,17 @@ interfaces are cached per device and commit, so the map stays cheap to redraw.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 import threading
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import Device
@@ -60,25 +69,169 @@ def latest_commits(db: Session, tenant_id: uuid.UUID) -> dict[uuid.UUID, str]:
     return {r[0]: r[1] for r in rows}
 
 
-def parsed_interfaces(db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, Device]) -> dict[uuid.UUID, dict]:
-    """device id -> {interface name: Interface} from the device's latest stored config."""
+@dataclass
+class ConfigSource:
+    key: str  # cache key: changes when the content does
+    source: str  # nom|rancid_history|rancid_upload
+    reader: Callable[[], str | None]
+    _text: str | None = None
+
+    @property
+    def text(self) -> str:
+        if self._text is None:
+            self._text = self.reader() or ""
+        return self._text
+
+
+def device_configs(
+    db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, Device]
+) -> dict[uuid.UUID, ConfigSource]:
+    """The newest configuration known for each device: NOM's latest backup, else the newest revision
+    imported from RANCID's CVS history, else the config uploaded for the RANCID comparison - so
+    devices NOM cannot back up yet still show their ports and links. Content is read on demand."""
+    from app.models import RancidConfig
+    from app.services import rancid as rs
+    from app.services import rancid_history
+
+    out: dict[uuid.UUID, ConfigSource] = {}
     store = store_for(db, tenant_id)
-    out: dict[uuid.UUID, dict] = {}
     for did, sha in latest_commits(db, tenant_id).items():
         dev = devices.get(did)
-        if dev is None:
-            continue
+        if dev is not None:
+            out[did] = ConfigSource(f"nom:{sha}", "nom", partial(store.read, device_relpath(dev), sha))
+    missing = [d for d in devices.values() if d.id not in out]
+    hist = rancid_history.history_store(db, tenant_id) if missing else None
+    if hist is not None:
+        for d in missing:
+            path = device_relpath(d)
+            sha = hist.last_commit(path)
+            if sha:
+                out[d.id] = ConfigSource(f"rancid:{sha}", "rancid_history", partial(hist.read, path, sha))
+    missing = [d for d in devices.values() if d.id not in out]
+    if missing:
+        by_id = {d.id: d for d in missing}
+        by_short = {rs.short(d.hostname): d for d in missing}
+        for rc in db.scalars(select(RancidConfig).where(RancidConfig.tenant_id == tenant_id)):
+            d = by_id.get(rc.device_id) if rc.device_id else by_short.get(rs.short(rc.name))
+            if d is None or d.id in out:
+                continue
+            plat = d.platform.slug if d.platform else None
+            digest = hashlib.sha256(rc.content.encode()).hexdigest()[:16]
+            out[d.id] = ConfigSource(
+                f"upload:{digest}", "rancid_upload", partial(rancid_history.to_nom_format, rc.content, plat, False)
+            )
+    return out
+
+
+def device_config(db: Session, tenant_id: uuid.UUID, dev: Device) -> ConfigSource | None:
+    return device_configs(db, tenant_id, {dev.id: dev}).get(dev.id)
+
+
+def parsed_interfaces(db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, Device]) -> dict[uuid.UUID, dict]:
+    """device id -> {interface name: Interface} from the device's newest known config."""
+    out: dict[uuid.UUID, dict] = {}
+    for did, cs in device_configs(db, tenant_id, devices).items():
+        dev = devices[did]
         with _lock:
             hit = _cache.get(did)
-        if hit and hit[0] == sha:
+        if hit and hit[0] == cs.key:
             out[did] = hit[1]
             continue
-        content = store.read(device_relpath(dev), sha) or ""
-        ifs = ports.parse(content, dev.platform.slug if dev.platform else None)
+        ifs = ports.parse(cs.text, dev.platform.slug if dev.platform else None)
         with _lock:
-            _cache[did] = (sha, ifs)
+            _cache[did] = (cs.key, ifs)
         out[did] = ifs
     return out
+
+
+_SEP = r"[-_. ]?"
+_ASN = re.compile(r"(?<![A-Za-z0-9])AS[\s_:-]?(\d{1,10})(?!\d)", re.I)
+
+
+def asns_in(text: str) -> list[int]:
+    """ASNs named in a description: "AS13335", "AS 13335", "AS-13335 Cloudflare", "as13335_cf"."""
+    return [int(m.group(1)) for m in _ASN.finditer(text or "")]
+
+
+class DeviceNames:
+    """Finds inventory devices named in free text (interface descriptions). Matches the full
+    hostname or its first label, case-insensitively, with or without the separators between its
+    parts ("DEL-02-IXP01", "del02-ixp01", "TO_DEL-02-IXP01_et-0/0/1", "del-02-ixp01.del.int...")."""
+
+    def __init__(self, devices):
+        self.by_key: dict[str, object] = {}
+        for d in devices:
+            for name in {d.hostname.lower(), d.hostname.lower().split(".")[0]}:
+                key = re.sub(r"[^a-z0-9]", "", name)
+                if len(key) >= 4:
+                    self.by_key.setdefault(key, d)
+        self.rx = None
+        if self.by_key:
+            alts = []
+            for d in devices:
+                for name in {d.hostname.lower(), d.hostname.lower().split(".")[0]}:
+                    parts = [p for p in re.split(r"[^a-z0-9]+", name) if p]
+                    if len("".join(parts)) >= 4:
+                        alts.append(_SEP.join(re.escape(p) for p in parts))
+            alts = sorted(set(alts), key=len, reverse=True)
+            self.rx = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(alts) + r")(?![A-Za-z0-9])", re.I)
+
+    def find(self, text: str) -> list:
+        out = []
+        for d, _tail in self.find_with_tail(text):
+            if d not in out:
+                out.append(d)
+        return out
+
+    def find_with_tail(self, text: str) -> list[tuple[object, str]]:
+        """[(device, text after the name)] - the tail usually names the far-end port."""
+        if not self.rx or not text:
+            return []
+        out = []
+        for m in self.rx.finditer(text):
+            d = self.by_key.get(re.sub(r"[^a-z0-9]", "", m.group(1).lower()))
+            if d is not None:
+                out.append((d, text[m.end() :]))
+        return out
+
+
+_IFTOKEN = re.compile(r"[A-Za-z][A-Za-z-]*\s?\d+(?:[/:.]\d+)*")
+
+
+def canonical_ifname(token: str, ifs: dict[str, ports.Interface]) -> str | None:
+    """The interface of ``ifs`` a short or abbreviated name refers to ("Gi0/0/1", "et-0/0/1", "Eth1/1")."""
+    t = token.strip().replace(" ", "")
+    if not t:
+        return None
+    if t in ifs:
+        return t
+    low = {n.lower(): n for n in ifs}
+    if t.lower() in low:
+        return low[t.lower()]
+    m = re.match(r"^([A-Za-z-]*?)-?(\d+(?:[/:]\d+)*)$", t)
+    if not m:
+        return None
+    prefix, nums = m.group(1).lower(), m.group(2)
+    if not prefix and not re.search(r"[/:]", nums):
+        return None  # a bare number (SNMP ifIndex, "1") names no port reliably
+    cands = [
+        n
+        for n in ifs
+        if re.match(r"^([A-Za-z-]*?)-?(\d+(?:[/:]\d+)*)$", n)
+        and re.match(r"^([A-Za-z-]*?)-?(\d+(?:[/:]\d+)*)$", n).group(2) == nums
+        and (not prefix or n.lower().startswith(prefix))
+    ]
+    return cands[0] if len(cands) == 1 else None
+
+
+def port_hint(tail: str, ifs: dict[str, ports.Interface]) -> str | None:
+    """First interface of the far device named in a description tail, folded into its LAG."""
+    for m in _IFTOKEN.finditer(tail[:60]):
+        name = canonical_ifname(m.group(0), ifs)
+        if name:
+            i = ifs[name]
+            return i.lag or name
+    return None
 
 
 def is_p2p(net) -> bool:
@@ -133,10 +286,124 @@ def _side(did: uuid.UUID, ifs: dict[str, ports.Interface], name: str | None) -> 
     return Side(did, name, speed_mbps(name), 1, i.disabled or i.inactive)
 
 
-def discover_links(db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, Device]) -> list[DiscoveredLink]:
+@dataclass
+class SeenNeighbor:
+    """An LLDP neighbour with both ends resolved as far as the inventory allows."""
+
+    device_id: uuid.UUID
+    local: str  # local interface (canonical config name, LAG member folded into its LAG)
+    local_port: str  # the physical port as LLDP reported it (canonicalised)
+    remote_device: object | None  # inventory Device or None
+    remote_port: str | None  # far port, canonical + LAG-folded when the far device is known
+    raw: object  # the DeviceNeighbor row
+
+
+def resolve_neighbors(
+    db: Session,
+    tenant_id: uuid.UUID,
+    devices: dict[uuid.UUID, Device],
+    parsed: dict[uuid.UUID, dict],
+    names: DeviceNames | None = None,
+) -> dict[uuid.UUID, list[SeenNeighbor]]:
+    from app.models import DeviceNeighbor
+
+    if not devices:
+        return {}
+    names = names or DeviceNames(list(devices.values()))
+    by_ip = {d.management_ip: d for d in devices.values() if d.management_ip}
+    out: dict[uuid.UUID, list[SeenNeighbor]] = defaultdict(list)
+    rows = db.scalars(
+        select(DeviceNeighbor).where(DeviceNeighbor.tenant_id == tenant_id, DeviceNeighbor.device_id.in_(list(devices)))
+    )
+    for n in rows:
+        mine = parsed.get(n.device_id, {})
+        port = canonical_ifname(n.local_interface, mine) or n.local_interface
+        local = mine[port].lag or port if port in mine else port
+        remote = None
+        for cand in filter(None, [n.remote_system, (n.remote_system or "").split(".")[0]]):
+            remote = names.by_key.get(re.sub(r"[^a-z0-9]", "", cand.lower()))
+            if remote is not None:
+                break
+        if remote is None and n.remote_address:
+            remote = by_ip.get(n.remote_address)
+        rport = None
+        if remote is not None:
+            theirs = parsed.get(remote.id, {})
+            for cand in filter(None, [n.remote_port, n.remote_port_description]):
+                name = canonical_ifname(cand, theirs)
+                if name:
+                    rport = theirs[name].lag or name
+                    break
+            if rport is None and not theirs:
+                # far device without a parsed config: keep what LLDP said, unless it is an ifIndex
+                rport = next((c for c in (n.remote_port, n.remote_port_description) if c and not c.isdigit()), None)
+        if remote is not None and remote.id == n.device_id:
+            continue
+        out[n.device_id].append(SeenNeighbor(n.device_id, local, port, remote, rport, n))
+    return out
+
+
+def _lldp_links(seen: dict[uuid.UUID, list[SeenNeighbor]], parsed: dict[uuid.UUID, dict]) -> list[DiscoveredLink]:
+    """One link per (port, far port); both ends' reports merged, LAG members folded."""
+    views: dict[tuple, list[tuple[str, str | None]]] = defaultdict(list)  # (a, b) -> [(a port, b port?)]
+    for did, items in seen.items():
+        for sn in items:
+            if sn.remote_device is not None:
+                views[(did, sn.remote_device.id)].append((sn.local, sn.remote_port))
+    links: list[DiscoveredLink] = []
+    done: set[frozenset] = set()
+    for a, b in list(views):
+        key = frozenset((a, b))
+        if key in done:
+            continue
+        done.add(key)
+        pairs: set[tuple[str, str]] = set()
+        half_a: list[str] = []
+        half_b: list[str] = []
+        for ai, bi in views.get((a, b), []):
+            if bi:
+                pairs.add((ai, bi))
+            else:
+                half_a.append(ai)
+        for bi, ai in views.get((b, a), []):
+            if ai:
+                pairs.add((ai, bi))
+            else:
+                half_b.append(bi)
+        known_a = {p[0] for p in pairs}
+        known_b = {p[1] for p in pairs}
+        half_a = sorted(set(x for x in half_a if x not in known_a))
+        half_b = sorted(set(x for x in half_b if x not in known_b))
+        if len(half_a) == len(half_b):
+            pairs |= set(zip(half_a, half_b, strict=True))
+            half_a, half_b = [], []
+        pa, pb = parsed.get(a, {}), parsed.get(b, {})
+        for ai, bi in sorted(pairs):
+            links.append(DiscoveredLink(_side(a, pa, ai), _side(b, pb, bi), "lldp"))
+        for ai in half_a:
+            links.append(DiscoveredLink(_side(a, pa, ai), _side(b, pb, None), "lldp"))
+        for bi in half_b:
+            links.append(DiscoveredLink(_side(a, pa, None), _side(b, pb, bi), "lldp"))
+    return links
+
+
+def discover_links(
+    db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, Device], *, lldp: bool = True
+) -> list[DiscoveredLink]:
     parsed = parsed_interfaces(db, tenant_id, devices)
+    names = DeviceNames(list(devices.values()))
     links: list[DiscoveredLink] = []
     linked: set[tuple[uuid.UUID, str]] = set()  # (device, interface) already explained by a stronger link
+    by_end: dict[tuple[uuid.UUID, str], DiscoveredLink] = {}
+
+    # --- LLDP: what the devices actually see on their ports
+    seen = resolve_neighbors(db, tenant_id, devices, parsed, names) if lldp else {}
+    for lk in _lldp_links(seen, parsed):
+        links.append(lk)
+        for side in (lk.a, lk.b):
+            if side.interface:
+                linked.add((side.device_id, side.interface))
+                by_end[(side.device_id, side.interface)] = lk
 
     # --- point-to-point subnets
     ends: dict = defaultdict(list)
@@ -155,48 +422,72 @@ def discover_links(db: Session, tenant_id: uuid.UUID, devices: dict[uuid.UUID, D
         if len(members) != 2 or len(devs) != 2:
             continue
         (da, ia), (db_, ib) = sorted(members, key=lambda m: str(m[0]))
+        # the routed subnet on a link LLDP already found: annotate it instead of drawing it twice
+        ia_l = parsed[da][ia].lag or ia if ia in parsed[da] else ia
+        ib_l = parsed[db_][ib].lag or ib if ib in parsed[db_] else ib
+        seen_lk = by_end.get((da, ia)) or by_end.get((da, ia_l))
+        if seen_lk is not None and seen_lk is (by_end.get((db_, ib)) or by_end.get((db_, ib_l))):
+            seen_lk.detail = seen_lk.detail or str(net)
+            continue
         links.append(DiscoveredLink(_side(da, parsed[da], ia), _side(db_, parsed[db_], ib), "subnet", detail=str(net)))
         linked |= {(da, ia), (db_, ib)}
 
     # --- descriptions naming another device
-    names: dict[str, uuid.UUID] = {}
-    for d in devices.values():
-        if len(d.hostname) >= 4:
-            names[d.hostname.lower()] = d.id
-            names.setdefault(d.hostname.lower().split(".")[0], d.id)
-    if names:
-        rx = re.compile(
-            r"(?<![\w-])(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")(?![\w-])", re.I
-        )
-        # (from device, to device) -> interfaces on "from" that name "to" (LAG members folded into the LAG)
-        mentions: dict[tuple[uuid.UUID, uuid.UUID], set[str]] = defaultdict(set)
+    if names.rx:
+        # (from device, to device) -> {interface on "from" (LAG members folded): far port it names, if any}
+        mentions: dict[tuple[uuid.UUID, uuid.UUID], dict[str, str | None]] = defaultdict(dict)
         for did, ifs in parsed.items():
             for i in ifs.values():
-                if ports.is_virtual(i.name):
+                if i.is_virtual:
                     continue
                 texts = [i.description or ""] + [u.description or "" for u in i.units.values()]
                 for t in texts:
-                    for m in rx.finditer(t):
-                        other = names[m.group(1).lower()]
-                        if other != did:
-                            mentions[(did, other)].add(i.lag or i.name)
+                    for other_dev, tail in names.find_with_tail(t):
+                        other = other_dev.id
+                        if other == did:
+                            continue
+                        mine = i.lag or i.name
+                        hint = port_hint(tail, parsed[other]) if other in parsed else None
+                        if mentions[(did, other)].get(mine) is None:
+                            mentions[(did, other)][mine] = hint
         done: set[frozenset] = set()
-        for (a, b), a_ifs in mentions.items():
+        for (a, b), a_map in mentions.items():
             key = frozenset((a, b))
             if key in done:
                 continue
             done.add(key)
-            b_ifs = sorted(mentions.get((b, a), set()))
-            a_list = sorted(a_ifs)
-            for n, ai in enumerate(a_list):
-                if (a, ai) in linked:
+            b_map = mentions.get((b, a), {})
+            pairs: list[tuple[str | None, str | None]] = []
+            used_a: set[str] = set()
+            used_b: set[str] = set()
+            # 1. a description names the far port, or the far port names us back
+            for ai, hint in sorted(a_map.items()):
+                bi = hint or next((x for x, h in b_map.items() if h == ai), None)
+                if bi is not None and bi not in used_b:
+                    pairs.append((ai, bi))
+                    used_a.add(ai)
+                    used_b.add(bi)
+            for bi, hint in sorted(b_map.items()):
+                if bi in used_b or not hint or hint in used_a:
                     continue
-                # pair far-side interfaces only when both ends name each other one-to-one
-                bi = b_ifs[n] if len(b_ifs) == len(a_list) else None
-                if bi is not None and (b, bi) in linked:
+                pairs.append((hint, bi))
+                used_a.add(hint)
+                used_b.add(bi)
+            # 2. the rest: pair one-to-one when both ends list the same number of ports
+            rest_a = [x for x in sorted(a_map) if x not in used_a]
+            rest_b = [x for x in sorted(b_map) if x not in used_b]
+            for n, ai in enumerate(rest_a):
+                pairs.append((ai, rest_b[n] if len(rest_b) == len(rest_a) else None))
+            if not rest_a:
+                pairs += [(None, bi) for bi in rest_b]
+            for ai, bi in pairs:
+                if (ai and (a, ai) in linked) or (bi and (b, bi) in linked):
                     continue
-                links.append(DiscoveredLink(_side(a, parsed[a], ai), _side(b, parsed[b], bi), "description"))
-                linked.add((a, ai))
+                pa = parsed.get(a, {})
+                pb = parsed.get(b, {})
+                links.append(DiscoveredLink(_side(a, pa, ai), _side(b, pb, bi), "description"))
+                if ai:
+                    linked.add((a, ai))
                 if bi:
                     linked.add((b, bi))
     return links

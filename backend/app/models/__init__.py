@@ -36,6 +36,7 @@ from app.models.inventory import (
     Device,
     DeviceGroup,
     DeviceModel,
+    DeviceNeighbor,
     Link,
     Platform,
     Rack,

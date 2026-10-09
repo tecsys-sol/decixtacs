@@ -26,7 +26,6 @@ from app.api.deps import Ctx, require
 from app.api.v1.configs import _device
 from app.models import Device, IxpMember, Link, RancidConfig, Tenant
 from app.services import audit
-from app.services.backup.engine import device_relpath, store_for
 from app.services.dcim import devicetypes, ports, topology
 from app.services.intel.parser import parse as parse_intel
 
@@ -112,10 +111,10 @@ def _device_type(ctx: Ctx, d: Device) -> tuple[devicetypes.DeviceType | None, di
     return dt, {"model": model, "vendor": vendor_slug, "model_source": source}
 
 
-def _addresses_by_device(ctx: Ctx, devices: dict[uuid.UUID, Device]) -> dict[uuid.UUID, list[tuple[Any, str]]]:
+def _addresses_by_device(parsed: dict[uuid.UUID, dict]) -> dict[uuid.UUID, list[tuple[Any, str]]]:
     """device -> [(ip_interface, interface name)] from each device's latest config."""
     out = {}
-    for did, ifs in topology.parsed_interfaces(ctx.db, ctx.tenant_id, devices).items():
+    for did, ifs in parsed.items():
         addrs = []
         for i in ifs.values():
             for u in i.units.values():
@@ -139,8 +138,8 @@ def _is_p2p(net) -> bool:
 def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"))):
     d = _device(ctx, device_id)
     plat = d.platform.slug if d.platform else None
-    store = store_for(ctx.db, ctx.tenant_id)
-    config = store.read(device_relpath(d)) or ""
+    cs = topology.device_config(ctx.db, ctx.tenant_id, d)
+    config = cs.text if cs else ""
     ifs = ports.parse(config, plat)
     dt, model_info = _device_type(ctx, d)
 
@@ -151,20 +150,51 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
             select(Device).where(Device.tenant_id == ctx.tenant_id).options(selectinload(Device.platform))
         )
     }
-    names = {}
-    for x in devices.values():
-        if x.id != d.id and len(x.hostname) >= 4:
-            names[x.hostname.lower()] = x
-            names.setdefault(x.hostname.lower().split(".")[0], x)
-    name_re = (
-        re.compile(
-            r"(?<![\w-])(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")(?![\w-])", re.I
-        )
-        if names
-        else None
-    )
+    names = topology.DeviceNames([x for x in devices.values() if x.id != d.id])
+    names_all = topology.DeviceNames(list(devices.values()))
     members = {m.asn: m.name for m in ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id))}
-    addr_map = _addresses_by_device(ctx, devices)
+    parsed = topology.parsed_interfaces(ctx.db, ctx.tenant_id, devices)
+    parsed[d.id] = ifs
+    addr_map = _addresses_by_device(parsed)
+    # LLDP: what this device's ports see, and what other devices see of this one
+    lldp: dict[str, list[dict]] = {}
+    seen_all = topology.resolve_neighbors(ctx.db, ctx.tenant_id, devices, parsed, names_all)
+    for sn in seen_all.get(d.id, []):
+        raw = sn.raw
+        if sn.remote_device is not None:
+            peer = {
+                "kind": "device",
+                "source": "lldp",
+                "device_id": str(sn.remote_device.id),
+                "hostname": sn.remote_device.hostname,
+                "interface": sn.remote_port,
+            }
+        else:
+            peer = {
+                "kind": "lldp",
+                "source": "lldp",
+                "name": raw.remote_system or raw.remote_chassis,
+                "interface": raw.remote_port_description or raw.remote_port,
+                "address": raw.remote_address,
+                "chassis": raw.remote_chassis,
+            }
+        for key in {sn.local_port, sn.local}:
+            lldp.setdefault(key, []).append(peer)
+    for did, items in seen_all.items():
+        if did == d.id:
+            continue
+        for sn in items:
+            if sn.remote_device is not None and sn.remote_device.id == d.id and sn.remote_port:
+                x = devices[did]
+                lldp.setdefault(sn.remote_port, []).append(
+                    {
+                        "kind": "device",
+                        "source": "lldp",
+                        "device_id": str(x.id),
+                        "hostname": x.hostname,
+                        "interface": sn.local,
+                    }
+                )
     ip_owner: dict[str, tuple[uuid.UUID, str]] = {}
     for did, addrs in addr_map.items():
         if did == d.id:
@@ -197,7 +227,7 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
         return {"kind": "device", "source": source, "device_id": str(x.id), "hostname": x.hostname, "interface": iface}
 
     def peers_for(i: ports.Interface) -> tuple[list[dict], int]:
-        found: list[dict] = list(cables.get(i.name, []))
+        found: list[dict] = list(cables.get(i.name, [])) + list(lldp.get(i.name, []))
         bgp_total = 0
         for u in i.units.values():
             for a in u.addresses:
@@ -237,18 +267,15 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
                     )
         texts = [i.description or ""] + [u.description or "" for u in i.units.values()]
         for t in texts:
-            if name_re:
-                for m in name_re.finditer(t):
-                    x = names[m.group(1).lower()]
-                    found.append({**device_peer(x.id, None, "description")})
-            for m in re.finditer(r"\bAS\s?(\d{1,10})\b", t, re.I):
-                asn = int(m.group(1))
+            for x in names.find(t):
+                found.append({**device_peer(x.id, None, "description")})
+            for asn in topology.asns_in(t):
                 found.append({"kind": "asn", "source": "description", "asn": asn, "name": members.get(asn)})
         # de-duplicate: a cable/subnet match beats a description mention of the same device
-        rank = {"cable": 0, "subnet": 1, "bgp": 2, "description": 3}
+        rank = {"cable": 0, "lldp": 1, "subnet": 2, "bgp": 3, "description": 4}
         seen: dict[tuple, dict] = {}
         for p in sorted(found, key=lambda p: rank.get(p["source"], 9)):
-            key = (p["kind"], p.get("device_id") or p.get("address") or p.get("asn"))
+            key = (p["kind"], p.get("device_id") or p.get("address") or p.get("asn") or p.get("name"))
             if p["kind"] == "asn" and any(q.get("asn") == p["asn"] for q in seen.values()):
                 continue
             seen.setdefault(key, p)
@@ -272,7 +299,7 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
     # --- ports: device-type template, else physical interfaces from the config
     by_key: dict[str, list[str]] = {}
     for name in ifs:
-        if not ports.is_virtual(name) and not ifs[name].is_lag:
+        if not ifs[name].is_virtual and not ifs[name].is_lag:
             by_key.setdefault(ports.port_key(name), []).append(name)
     template = [i for i in (dt.interfaces if dt else []) if (i.get("type") or "") not in ("virtual", "lag")]
     out_ports = []
@@ -302,7 +329,7 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
         {**iface_out.get(lag, {"name": lag, "units": [], "peers": []}), "members": sorted(mem, key=_natural)}
         for lag, mem in sorted(lag_members.items(), key=lambda kv: _natural(kv[0]))
     ]
-    logical = [iface_out[n] for n in sorted(ifs, key=_natural) if ports.is_virtual(n) and iface_out[n]["units"]]
+    logical = [iface_out[n] for n in sorted(ifs, key=_natural) if ifs[n].is_virtual and iface_out[n]["units"]]
     summary = {
         "ports": len(out_ports),
         "configured": sum(1 for p in out_ports if p["state"] not in ("unused",)),
@@ -322,6 +349,8 @@ def device_ports(device_id: uuid.UUID, ctx: Ctx = Depends(require("configs:read"
         "device_type": dt.to_dict() if dt else None,
         **model_info,
         "has_config": bool(config),
+        # nom | rancid_history | rancid_upload: where the port data comes from
+        "config_source": cs.source if cs and config else None,
         "ports": out_ports,
         "unmatched": [iface_out[n] for n in sorted(extra, key=_natural)],
         "lags": lags,

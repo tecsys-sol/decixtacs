@@ -274,8 +274,8 @@ export interface Topology {
     label: string;
     speed_mbps: number | null;
     status: string;
-    /** cable (NetBox) | subnet (shared point-to-point subnet) | description (named in interface descriptions) */
-    kind?: "cable" | "subnet" | "description";
+    /** cable (NetBox) | lldp (LLDP neighbour) | subnet (shared point-to-point subnet) | description (named in interface descriptions) */
+    kind?: "cable" | "lldp" | "subnet" | "description";
     a_interface?: string | null;
     b_interface?: string | null;
     detail?: string | null;

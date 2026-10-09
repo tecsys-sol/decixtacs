@@ -730,7 +730,8 @@ export function lineOption(input: LineInput, theme: ThemeArg): EChartsOption {
       data: input.categories,
       axisLine: { lineStyle: { color: t.axisLine } },
       axisTick: { show: false },
-      axisLabel: axisLabel(th, { interval: input.labelInterval ?? "auto", hideOverlap: true }),
+      // the first/last labels sit on the plot edges (no boundary gap): keep them inside the chart
+      axisLabel: axisLabel(th, { interval: input.labelInterval ?? "auto", hideOverlap: true, alignMinLabel: "left", alignMaxLabel: "right" }),
     },
     yAxis: {
       type: "value",
@@ -909,6 +910,7 @@ export function linkWidth(mbps: number | null | undefined): number {
 
 export const LINK_KIND_LABEL: Record<string, string> = {
   cable: "NetBox cable",
+  lldp: "LLDP neighbour (seen by the device)",
   subnet: "point-to-point subnet (config)",
   description: "named in interface descriptions (config)",
 };
