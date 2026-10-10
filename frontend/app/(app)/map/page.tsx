@@ -27,17 +27,20 @@ const SOURCES = [
   { key: "lldp", label: "LLDP neighbours" },
   { key: "subnet", label: "Point-to-point subnets" },
   { key: "description", label: "Interface descriptions" },
+  { key: "customer", label: "Customer routers" },
 ] as const;
 
 function Legend({ topo, view }: { topo: Topology; view: View }) {
   const theme = useChartTheme();
-  const inside = topo.nodes.filter((n) => !n.external);
+  const inside = topo.nodes.filter((n) => !n.external && n.kind !== "customer");
+  const nCustomers = topo.nodes.filter((n) => n.kind === "customer").length;
+  const deviceEdges = topo.edges.filter((e) => !e.customer);
   const counts = inside.reduce<Record<string, number>>((acc, n) => {
     const k = n.status === "up" || n.status === "down" ? n.status : "unknown";
     acc[k] = (acc[k] ?? 0) + 1;
     return acc;
   }, {});
-  const kinds = topo.edges.reduce<Record<string, number>>((acc, e) => {
+  const kinds = deviceEdges.reduce<Record<string, number>>((acc, e) => {
     acc[e.kind ?? "cable"] = (acc[e.kind ?? "cable"] ?? 0) + 1;
     return acc;
   }, {});
@@ -46,7 +49,7 @@ function Legend({ topo, view }: { topo: Topology; view: View }) {
     { key: "down", label: "Down", icon: CircleX, color: theme.status.danger },
     { key: "unknown", label: "Unknown", icon: CircleHelp, color: theme.status.neutral },
   ];
-  const external = topo.nodes.length - inside.length;
+  const external = topo.nodes.filter((n) => n.external).length;
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-ink-3">
       {items.map((i) => (
@@ -56,10 +59,15 @@ function Legend({ topo, view }: { topo: Topology; view: View }) {
         </span>
       ))}
       <span>
-        {topo.edges.length} link{topo.edges.length === 1 ? "" : "s"}
+        {deviceEdges.length} link{deviceEdges.length === 1 ? "" : "s"}
         {SOURCES.filter((s) => kinds[s.key]).map((s) => ` · ${kinds[s.key]} ${s.key === "cable" ? "cabled" : s.key === "lldp" ? "seen by LLDP" : s.key === "subnet" ? "routed" : "described"}`).join("")}
       </span>
       {external ? <span>{external} neighbour{external === 1 ? "" : "s"} at other sites (faded)</span> : null}
+      {nCustomers ? (
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-2.5 rotate-45 border border-current" aria-hidden /> {nCustomers} customer router{nCustomers === 1 ? "" : "s"}
+        </span>
+      ) : null}
       <span className="text-ink-3">
         {view === "sites" ? "Bubble size = devices · line = links between sites (width by capacity)" : "Line width = capacity · dashed = only named in descriptions · red = down"}
       </span>
@@ -71,7 +79,7 @@ export default function MapPage() {
   const router = useRouter();
   const theme = useChartTheme();
   const sites = useSites();
-  const [f, setF] = useUrlState({ site: "", layout: "clustered", view: "", sources: "cable,lldp,subnet,description" });
+  const [f, setF] = useUrlState({ site: "", layout: "clustered", view: "", sources: "cable,lldp,subnet,description,customer" });
   const layout: GraphLayout = f.layout === "force" ? "force" : "clustered";
   const multiSite = (sites.data?.length ?? 0) > 1;
   // default: the location overview when there is more than one site and none is selected
@@ -178,8 +186,12 @@ export default function MapPage() {
               ariaLabel={view === "sites" ? "Sites and the links between them" : "Network topology graph"}
               onEvents={{
                 click: (p) => {
-                  const e = p as { dataType?: string; data?: { deviceId?: string; siteId?: string } };
+                  const e = p as { dataType?: string; data?: { deviceId?: string; siteId?: string; customer?: boolean; asn?: number | null } };
                   if (e.dataType !== "node") return;
+                  if (e.data?.customer) {
+                    if (e.data.asn) router.push(`/ixp?asn=${e.data.asn}`);
+                    return;
+                  }
                   if (e.data?.siteId) {
                     if (e.data.siteId !== "__none__") setF({ site: e.data.siteId });
                     else setF({ view: "devices" });

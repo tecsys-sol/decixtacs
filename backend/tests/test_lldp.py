@@ -196,10 +196,10 @@ def test_lldp_links_on_the_map_and_ports(admin, monkeypatch, offline_library):  
     assert {fabric["a_interface"], fabric["b_interface"]} == {"ae0", "ae3"}
     routed = by[frozenset((ids["ixp-a"], ids["rtr-c"]))]
     assert routed["kind"] == "lldp" and routed["detail"] == "10.9.0.0/31"  # the subnet annotates the LLDP link
-    assert len(t["edges"]) == 2
+    assert len([e for e in t["edges"] if not e.get("customer")]) == 2
 
     no_lldp = admin.get("/api/v1/topology", params={"sources": "subnet,description"}).json()
-    assert [e["kind"] for e in no_lldp["edges"]] == ["subnet"]
+    assert [e["kind"] for e in no_lldp["edges"] if not e.get("customer")] == ["subnet"]
 
     ports = admin.get(f"/api/v1/devices/{ids['ixp-a']}/ports").json()
     allp = {i["name"]: i for p in ports["ports"] + ports["unmatched"] for i in p.get("interfaces", [p])}
@@ -293,3 +293,79 @@ def test_neighbor_commands_in_backup_settings(admin):
     assert next(p for p in custom["platforms"] if p["slug"] == "junos")["neighbor_commands"] == ["show lldp neighbors"]
     reset = admin.put("/api/v1/backup-settings/junos", json={}).json()
     assert next(p for p in reset["platforms"] if p["slug"] == "junos")["neighbor_commands"] is None
+
+
+def test_customer_routers_on_the_map(admin, db, tenant, monkeypatch, offline_library):  # noqa: F811
+    from app.models import IxpMember
+
+    sw = (
+        IXP_A
+        + 'set interfaces xe-0/0/7 description "AS13335_Cloudflare 100G"\nset interfaces xe-0/0/8 description "spare"\n'
+    )
+    configs = {"ixp-a": sw, "ixp-b": IXP_B}
+    lldp = {
+        "ixp-a": _junos_json(
+            [
+                {"local": "et-0/0/0", "parent": "ae0", "system": "ixp-b", "port": "et-0/0/2"},
+                {"local": "xe-0/0/5", "system": "cust-rtr-42", "port": "TenGigE0/0/0/1"},  # no ASN in the description
+                {"local": "xe-0/0/7", "system": "edge01.cloudflare.example", "port": "Ethernet3/1"},
+            ]
+        ),
+        "ixp-b": "",
+    }
+
+    def collect(targets, workers=50, timeout=60):
+        return [
+            CollectResult(t.device_id, True, config=configs[t.hostname], duration_ms=1, neighbors=lldp[t.hostname])
+            for t in targets
+        ]
+
+    monkeypatch.setattr(engine, "nornir_collect", collect)
+    plat = {p["slug"]: p["id"] for p in admin.get("/api/v1/platforms").json()}
+    admin.post("/api/v1/credentials", json={"name": "c", "username": "u", "password": "p", "make_default": True})
+    site = admin.post("/api/v1/sites", json={"name": "BOM", "slug": "bom"}).json()["id"]
+    ids = {
+        h: admin.post(
+            "/api/v1/devices",
+            json={"hostname": h, "management_ip": f"10.0.8.{n + 1}", "platform_id": plat["junos"], "site_id": site},
+        ).json()["id"]
+        for n, h in enumerate(configs)
+    }
+    admin.post("/api/v1/backups/run", json={"run_async": False})
+    # IXP Manager: Cloudflare (also named on ixp-a's port) and Google on switch ixp-b
+    for asn, name, switch in ((13335, "Cloudflare", "ixp-a"), (15169, "Google", "IXP-B")):
+        db.add(
+            IxpMember(
+                tenant_id=tenant.id,
+                asn=asn,
+                name=name,
+                connections=[{"ports": [{"switch": switch, "speed_mbps": 100000}], "vlans": []}],
+            )
+        )
+    db.commit()
+
+    t = admin.get("/api/v1/topology").json()
+    nodes = {n["id"]: n for n in t["nodes"]}
+    cust = {n["label"]: n for n in t["nodes"] if n["kind"] == "customer"}
+    assert set(cust) == {"AS13335 Cloudflare", "AS15169 Google", "cust-rtr-42"}
+    assert all(n["site_id"] == site for n in cust.values())
+    edges = {(nodes[e["source"]]["label"], nodes[e["target"]]["label"]): e for e in t["edges"] if e.get("customer")}
+    cf = edges[("ixp-a", "AS13335 Cloudflare")]
+    # the port description gives the ASN, LLDP confirms it: one node, one link, no extra IXP Manager link
+    assert cf["kind"] == "lldp" and cf["a_interface"] == "xe-0/0/7" and cf["b_interface"] == "Ethernet3/1"
+    assert [k for k in edges if k[1] == "AS13335 Cloudflare"] == [("ixp-a", "AS13335 Cloudflare")]
+    assert edges[("ixp-a", "cust-rtr-42")]["b_interface"] == "TenGigE0/0/0/1"
+    assert edges[("ixp-b", "AS15169 Google")]["kind"] == "ixpmanager"
+    # the fabric link and the spare port are not customers
+    assert not any(k[0] == "ixp-a" and k[1] == "ixp-b" for k in edges)
+    assert len(edges) == 3
+
+    off = admin.get("/api/v1/topology", params={"sources": "lldp,subnet,description"}).json()
+    assert not [n for n in off["nodes"] if n["kind"] == "customer"] and not [
+        e for e in off["edges"] if e.get("customer")
+    ]
+    assert [e["kind"] for e in off["edges"]] == ["lldp"]
+    per_site = admin.get("/api/v1/topology", params={"site_id": site}).json()
+    assert len([n for n in per_site["nodes"] if n["kind"] == "customer"]) == 3
+    assert {s["device_count"] for s in t["sites"]} == {2}  # customers are not devices
+    assert ids

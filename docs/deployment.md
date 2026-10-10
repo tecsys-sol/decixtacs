@@ -375,7 +375,11 @@ Each device's **Ports & connections** tab draws its front panel from the NetBox 
 port from the latest backed-up config: description, admin state, LAG, VLANs, addresses, IGP/MPLS.
 Neighbours come from NetBox cables, LLDP, the other end of point-to-point subnets, BGP neighbours on
 the port (with IXP member names) and devices/ASNs named in descriptions. The **Network map** draws
-links between devices from the same sources.
+links between devices from the same sources, plus **customer routers** outside the inventory
+(diamonds; toggle *Customer routers*): ports whose description names an ASN (`CUST-1010 AS64510`),
+LLDP neighbours that are not inventory devices, and IXP Manager member connections on switches that
+are. A customer is one node per ASN however many sources find it; clicking it opens the IXP member.
+Ports that face another inventory device are never counted as customer ports.
 
 * **Configurations read**: Junos, IOS/IOS-XE, NX-OS, EOS, FortiOS, RouterOS and VyOS. A device NOM
   has not backed up yet uses RANCID's newest revision (imported CVS history) or the config uploaded

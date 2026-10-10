@@ -266,6 +266,10 @@ export interface Topology {
     backup: string | null;
     /** neighbour at another site, shown when the map is filtered to one site */
     external?: boolean;
+    /** "customer": a router outside the inventory (port description ASN, LLDP or IXP Manager member) */
+    kind?: "device" | "customer";
+    asn?: number | null;
+    name?: string | null;
   }[];
   edges: {
     id: string;
@@ -275,11 +279,13 @@ export interface Topology {
     speed_mbps: number | null;
     status: string;
     /** cable (NetBox) | lldp (LLDP neighbour) | subnet (shared point-to-point subnet) | description (named in interface descriptions) */
-    kind?: "cable" | "lldp" | "subnet" | "description";
+    kind?: "cable" | "lldp" | "subnet" | "description" | "ixpmanager";
     a_interface?: string | null;
     b_interface?: string | null;
     detail?: string | null;
     members?: number;
+    /** link to a customer router */
+    customer?: boolean;
   }[];
 }
 

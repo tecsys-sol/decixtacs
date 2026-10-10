@@ -491,3 +491,128 @@ def discover_links(
                 if bi:
                     linked.add((b, bi))
     return links
+
+
+# --- customers: routers outside the inventory --------------------------------------------------------
+
+
+@dataclass
+class Customer:
+    key: str  # "as13335" or "lldp:<system name>"
+    label: str
+    asn: int | None = None
+    name: str | None = None  # IXP member / LLDP system name
+    devices: list[uuid.UUID] = field(default_factory=list)  # where it is attached
+
+
+@dataclass
+class CustomerLink:
+    device_id: uuid.UUID
+    interface: str | None
+    customer: str  # Customer.key
+    source: str  # description|lldp|ixpmanager
+    speed_mbps: int | None = None
+    disabled: bool = False
+    remote_port: str | None = None
+    detail: str | None = None
+
+
+def discover_customers(
+    db: Session,
+    tenant_id: uuid.UUID,
+    devices: dict[uuid.UUID, Device],
+    device_links: list[DiscoveredLink],
+    *,
+    lldp: bool = True,
+) -> tuple[dict[str, Customer], list[CustomerLink]]:
+    """Customer routers attached to inventory devices: ports whose description names an ASN
+    ("CUST-1010 AS64510"), LLDP neighbours that are not in the inventory, and IXP Manager member
+    connections on switches that are. One node per customer (by ASN when it is known), so a member
+    found by several sources is drawn once; ports already linked to an inventory device are skipped."""
+    from app.models import IxpMember
+
+    parsed = parsed_interfaces(db, tenant_id, devices)
+    names = DeviceNames(list(devices.values()))
+    members = {m.asn: m for m in db.scalars(select(IxpMember).where(IxpMember.tenant_id == tenant_id))}
+    linked = {(s.device_id, s.interface) for lk in device_links for s in (lk.a, lk.b) if s.interface}
+    customers: dict[str, Customer] = {}
+    links: dict[tuple, CustomerLink] = {}
+
+    def customer(asn: int | None, system: str | None) -> Customer:
+        if asn is not None:
+            key = f"as{asn}"
+            m = members.get(asn)
+            label = f"AS{asn} {m.name}" if m else f"AS{asn}"
+            c = customers.setdefault(key, Customer(key, label, asn, m.name if m else system))
+        else:
+            key = "lldp:" + re.sub(r"[^a-z0-9.-]", "", (system or "").lower())
+            c = customers.setdefault(key, Customer(key, system or "LLDP neighbour", None, system))
+        return c
+
+    def attach(c: Customer, did: uuid.UUID, iface: str | None, source: str, **extra) -> None:
+        if did not in c.devices:
+            c.devices.append(did)
+        k = (did, iface, c.key)
+        if k in links:
+            return
+        if iface is None and any(x[0] == did and x[2] == c.key for x in links):
+            return  # already attached on a known port
+        side = _side(did, parsed.get(did, {}), iface)
+        links[k] = CustomerLink(
+            did, iface, c.key, source, side.speed_mbps and side.speed_mbps * side.members, side.disabled, **extra
+        )
+
+    # 1. port descriptions naming an ASN; 2. LLDP neighbours outside the inventory on the same ports
+    lldp_seen = resolve_neighbors(db, tenant_id, devices, parsed, names) if lldp else {}
+    unresolved: dict[tuple[uuid.UUID, str], list] = defaultdict(list)
+    for did, items in lldp_seen.items():
+        for sn in items:
+            if sn.remote_device is None and (sn.raw.remote_system or sn.raw.remote_chassis):
+                unresolved[(did, sn.local)].append(sn)
+    for did, ifs in parsed.items():
+        for i in ifs.values():
+            if i.is_virtual or i.lag or (did, i.name) in linked:
+                continue  # LAG members count through their LAG
+            texts = [i.description or ""] + [u.description or "" for u in i.units.values()]
+            asns = [a for t in texts for a in asns_in(t)]
+            if names.find(" ".join(texts)):
+                continue  # the port names an inventory device: not a customer port
+            seen_here = unresolved.pop((did, i.name), [])
+            if asns:
+                for asn in dict.fromkeys(asns):
+                    c = customer(asn, seen_here[0].raw.remote_system if seen_here else None)
+                    attach(
+                        c,
+                        did,
+                        i.name,
+                        "lldp" if seen_here else "description",
+                        remote_port=(seen_here[0].raw.remote_port_description or seen_here[0].raw.remote_port)
+                        if seen_here
+                        else None,
+                        detail=i.description,
+                    )
+            for sn in seen_here if not asns else []:
+                c = customer(None, sn.raw.remote_system or sn.raw.remote_chassis)
+                attach(c, did, i.name, "lldp", remote_port=sn.raw.remote_port_description or sn.raw.remote_port)
+    for (did, local), items in unresolved.items():  # LLDP on ports without a parsed config
+        if (did, local) in linked:
+            continue
+        for sn in items:
+            c = customer(None, sn.raw.remote_system or sn.raw.remote_chassis)
+            attach(c, did, local, "lldp", remote_port=sn.raw.remote_port_description or sn.raw.remote_port)
+
+    # 3. IXP Manager: every member connection names the switch it is on
+    for asn, m in members.items():
+        for conn in m.connections or []:
+            for p in conn.get("ports") or []:
+                sw = names.by_key.get(re.sub(r"[^a-z0-9]", "", str(p.get("switch") or "").lower()))
+                if sw is None:
+                    continue
+                c = customer(asn, None)
+                if not any(x.device_id == sw.id and x.customer == c.key for x in links.values()):
+                    if sw.id not in c.devices:
+                        c.devices.append(sw.id)
+                    links[(sw.id, None, c.key, len(links))] = CustomerLink(
+                        sw.id, None, c.key, "ixpmanager", p.get("speed_mbps")
+                    )
+    return customers, list(links.values())

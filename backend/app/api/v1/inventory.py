@@ -739,7 +739,7 @@ def delete_device_group(group_id: uuid.UUID, ctx: Ctx = Depends(require("devices
 @router.get("/topology")
 def topology(
     site_id: uuid.UUID | None = None,
-    sources: str = "cable,lldp,subnet,description",
+    sources: str = "cable,lldp,subnet,description,customer",
     ctx: Ctx = Depends(require("devices:read")),
 ):
     """Graph for the network map: sites as clusters, devices as nodes, links as edges.
@@ -748,7 +748,7 @@ def topology(
     (point-to-point subnets, interface descriptions naming another device; LAGs as one link).
     With ``site_id`` the graph holds that site's devices plus their direct neighbours elsewhere
     (``external: true``) so links leaving the site stay visible."""
-    from app.services.dcim.topology import discover_links
+    from app.services.dcim.topology import discover_customers, discover_links
 
     wanted = {x.strip() for x in sources.split(",") if x.strip()}
     visible = {d.id: d for d in ctx.db.scalars(visible_devices_filter(ctx, _device_query(ctx)))}
@@ -789,8 +789,12 @@ def topology(
                 link.status,
                 "cable",
             )
+    device_links = []
+    if wanted & {"lldp", "subnet", "description", "customer"}:
+        # customers need every device-to-device link, to skip ports that face another device
+        device_links = discover_links(ctx.db, ctx.tenant_id, visible, lldp="lldp" in wanted or "customer" in wanted)
     if wanted & {"lldp", "subnet", "description"}:
-        for lk in discover_links(ctx.db, ctx.tenant_id, visible, lldp="lldp" in wanted):
+        for lk in device_links:
             if lk.source in wanted:
                 add(
                     lk.a.device_id,
@@ -804,6 +808,13 @@ def topology(
                     max(lk.a.members, lk.b.members),
                 )
 
+    # customer routers outside the inventory, attached to the device ports they sit behind
+    customers, cust_links = (
+        discover_customers(ctx.db, ctx.tenant_id, visible, device_links, lldp="lldp" in wanted)
+        if "customer" in wanted
+        else ({}, [])
+    )
+
     devices = list(visible.values())
     external: set[uuid.UUID] = set()
     if site_id:
@@ -816,10 +827,52 @@ def topology(
                 external |= {x for x in (a, b) if x not in inside}
         edges = keep
         devices = [d for d in devices if d.id in inside or d.id in external]
+        cust_links = [cl for cl in cust_links if cl.device_id in inside]
     sites = {d.site.id: d.site for d in devices if d.site}
     per_site: dict = {}
     for d in devices:
         per_site[d.site_id] = per_site.get(d.site_id, 0) + 1
+    site_of = {d.id: d.site_id for d in devices}
+    shown = {cl.customer for cl in cust_links}
+
+    def _site_id(attached: list) -> str | None:
+        sid = next((site_of[x] for x in attached if x in site_of), None)
+        return str(sid) if sid else None
+
+    cust_nodes = [
+        {
+            "id": f"cust:{c.key}",
+            "label": c.label,
+            "site_id": _site_id(c.devices),
+            "role": "customer",
+            "platform": None,
+            "status": "up",
+            "backup": None,
+            "external": False,
+            "kind": "customer",
+            "asn": c.asn,
+            "name": c.name,
+        }
+        for c in customers.values()
+        if c.key in shown
+    ]
+    for cl in cust_links:
+        edges.append(
+            {
+                "id": f"customer:{cl.device_id}:{cl.interface}:{cl.customer}:{cl.source}",
+                "source": str(cl.device_id),
+                "target": f"cust:{cl.customer}",
+                "a_interface": cl.interface,
+                "b_interface": cl.remote_port,
+                "label": " - ".join(x for x in (cl.interface, cl.remote_port) if x) or cl.source,
+                "speed_mbps": cl.speed_mbps,
+                "status": "down" if cl.disabled else "up",
+                "kind": cl.source,
+                "detail": cl.detail,
+                "members": 1,
+                "customer": True,
+            }
+        )
     return {
         "sites": [
             {
@@ -842,8 +895,10 @@ def topology(
                 "status": d.reachability,
                 "backup": d.last_backup_status,
                 "external": d.id in external,
+                "kind": "device",
             }
             for d in devices
-        ],
+        ]
+        + cust_nodes,
         "edges": edges,
     }

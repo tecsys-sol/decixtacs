@@ -3658,7 +3658,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "cable,lldp,subnet,description",
+              "default": "cable,lldp,subnet,description,customer",
               "title": "Sources"
             }
           },

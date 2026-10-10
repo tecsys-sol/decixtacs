@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { aggregateSites, linkWidth, siteGraphOption } from "@/lib/charts";
+import { aggregateSites, linkWidth, networkGraphOption, siteGraphOption } from "@/lib/charts";
 import { chartTheme } from "@/lib/charts";
 
 const topo = {
@@ -45,5 +45,36 @@ describe("site overview", () => {
     expect(linkWidth(100_000)).toBeGreaterThan(linkWidth(10_000));
     expect(linkWidth(10_000)).toBeGreaterThan(linkWidth(1_000));
     expect(linkWidth(null)).toBeGreaterThan(0);
+  });
+});
+
+describe("customer routers", () => {
+  const withCustomers = {
+    ...topo,
+    nodes: [
+      ...topo.nodes,
+      { id: "cust:as13335", label: "AS13335 Cloudflare", site_id: "fra", role: "customer", platform: null, status: "up", backup: null, kind: "customer", asn: 13335 },
+      { id: "cust:as15169", label: "AS15169 Google", site_id: "ams", role: "customer", platform: null, status: "up", backup: null, kind: "customer", asn: 15169 },
+    ],
+    edges: [
+      ...topo.edges,
+      { id: "c1", source: "a", target: "cust:as13335", label: "xe-0/1/0", speed_mbps: 10_000, status: "up", kind: "description", customer: true },
+      { id: "c2", source: "c", target: "cust:as15169", label: "ixpmanager", speed_mbps: 100_000, status: "up", kind: "ixpmanager", customer: true },
+    ],
+  };
+
+  it("are counted per site, not as devices or site links", () => {
+    const { sites, links } = aggregateSites(withCustomers);
+    expect(sites.find((s) => s.id === "fra")).toMatchObject({ devices: 2, customers: 1, internal: 1 });
+    expect(sites.find((s) => s.id === "ams")).toMatchObject({ devices: 1, customers: 1, internal: 0 });
+    expect(links[0]).toMatchObject({ count: 2, capacity: 120_000 });
+  });
+
+  it("are drawn as small diamonds that open the IXP member", () => {
+    const opt = networkGraphOption(withCustomers, chartTheme("aurora", "light"));
+    const data = (opt.series as { type: string; data: Record<string, unknown>[] }[]).find((s) => s.type === "graph")!.data;
+    const cf = data.find((d) => d.id === "cust:as13335")!;
+    expect(cf).toMatchObject({ symbol: "diamond", customer: true, asn: 13335 });
+    expect(data.find((d) => d.id === "a")!.symbol).toBeUndefined();
   });
 });

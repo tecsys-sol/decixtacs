@@ -889,7 +889,19 @@ export function funnelOption(items: PieItem[], theme: ThemeArg, format: ValueFor
 
 export interface GraphInput {
   sites: { id: string; name: string }[];
-  nodes: { id: string; label: string; site_id: string | null; role: string | null; platform: string | null; status: string; backup: string | null; external?: boolean }[];
+  nodes: {
+    id: string;
+    label: string;
+    site_id: string | null;
+    role: string | null;
+    platform: string | null;
+    status: string;
+    backup: string | null;
+    external?: boolean;
+    kind?: string;
+    asn?: number | null;
+    name?: string | null;
+  }[];
   edges: {
     id: string;
     source: string;
@@ -914,6 +926,7 @@ export const LINK_KIND_LABEL: Record<string, string> = {
   lldp: "LLDP neighbour (seen by the device)",
   subnet: "point-to-point subnet (config)",
   description: "named in interface descriptions (config)",
+  ixpmanager: "IXP Manager member connection",
 };
 
 export type GraphLayout = "clustered" | "force";
@@ -1039,11 +1052,35 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
   const clustered = layout === "clustered";
   const positions = clustered ? clusteredLayout(input) : null;
   const external = new Set(input.nodes.filter((n) => n.external).map((n) => n.id));
-  const showLabels = input.nodes.length <= 60;
+  const nCustomers = input.nodes.filter((n) => n.kind === "customer").length;
+  const showLabels = input.nodes.length - nCustomers <= 60;
+  // many customers would bury the map in labels: name them on hover only
+  const showCustomerLabels = nCustomers <= 30;
 
   const nodes = input.nodes.map((n) => {
     const cat = catIndex.get(n.site_id ?? "__none__") ?? 0;
     const p = positions?.get(n.id);
+    if (n.kind === "customer") {
+      const c = categories[cat].itemStyle.color;
+      return {
+        id: n.id,
+        name: n.label,
+        category: cat,
+        value: p ? [p[0], p[1]] : undefined,
+        x: p?.[0],
+        y: p?.[1],
+        symbol: "diamond",
+        symbolSize: 11,
+        itemStyle: { color: alpha(c, 0.35), borderColor: c, borderWidth: 1.5 },
+        label: { show: showCustomerLabels, fontSize: 10, fontWeight: 500 },
+        emphasis: { label: { show: true } },
+        customer: true,
+        asn: n.asn ?? null,
+        memberName: n.name ?? null,
+        status: n.status,
+        site: categories[cat].name,
+      };
+    }
     return {
       id: n.id,
       name: n.label,
@@ -1102,6 +1139,9 @@ export function networkGraphOption(input: GraphInput, theme: ThemeArg, layout: G
         return `<b>${esc(String(d.linkLabel || "Link"))}</b><br/><span style="color:${t.label}">Status</span> ${String(d.status)}${d.speed ? ` · ${String(d.speed)}${bundle}` : ""}${d.kind ? `<br/><span style="color:${t.label}">From</span> ${esc(String(d.kind))}` : ""}${d.detail ? `<br/><span style="color:${t.label}">Subnet</span> ${esc(String(d.detail))}` : ""}`;
       }
       const d = p.data;
+      if (d.customer) {
+        return `<b>${esc(String(d.name))}</b><br/><span style="color:${t.label}">Customer router · ${esc(String(d.site))}</span>${d.memberName && !String(d.name).includes(String(d.memberName)) ? `<br/>${esc(String(d.memberName))}` : ""}${d.asn ? `<br/><span style="color:${t.label}">Click to open the IXP member</span>` : ""}`;
+      }
       const meta = [d.role, d.platform].filter(Boolean).join(" · ");
       return `<b>${esc(String(d.name))}</b><br/><span style="color:${t.label}">${esc(String(d.site))}</span>${meta ? `<br/>${String(meta)}` : ""}<br/>Status: <b>${String(d.status)}</b>${d.backup ? `<br/>Last backup: ${String(d.backup)}` : ""}`;
     },
@@ -1189,6 +1229,7 @@ export interface SiteSummary {
   id: string;
   name: string;
   devices: number;
+  customers?: number; // customer routers attached at the site
   down: number;
   internal: number; // links inside the site
   lat: number | null;
@@ -1213,16 +1254,23 @@ export function aggregateSites(input: Omit<GraphInput, "sites"> & { sites: { id:
   const byId = new Map<string, SiteSummary>();
   const meta = new Map(input.sites.map((s) => [s.id, s]));
   const nodeName = new Map(input.nodes.map((n) => [n.id, n.label]));
+  const customers = new Set(input.nodes.filter((n) => n.kind === "customer").map((n) => n.id));
   for (const n of input.nodes) {
     const id = n.site_id ?? NO_SITE;
     const m = meta.get(id);
-    const cur = byId.get(id) ?? { id, name: m?.name ?? "No site", devices: 0, down: 0, internal: 0, lat: m?.lat ?? null, lon: m?.lon ?? null };
+    const cur = byId.get(id) ?? { id, name: m?.name ?? "No site", devices: 0, customers: 0, down: 0, internal: 0, lat: m?.lat ?? null, lon: m?.lon ?? null };
+    if (customers.has(n.id)) {
+      cur.customers = (cur.customers ?? 0) + 1;
+      byId.set(id, cur);
+      continue;
+    }
     cur.devices += 1;
     if (n.status === "down") cur.down += 1;
     byId.set(id, cur);
   }
   const links = new Map<string, SiteLink>();
   for (const e of input.edges) {
+    if (customers.has(e.source) || customers.has(e.target)) continue; // access ports, not site links
     const a = siteOf.get(e.source);
     const b = siteOf.get(e.target);
     if (!a || !b) continue;
@@ -1308,7 +1356,7 @@ export function siteGraphOption(data: { sites: SiteSummary[]; links: SiteLink[] 
           return `<b>${l.count} link${l.count === 1 ? "" : "s"}</b>${l.capacity ? ` · ${capacityLabel(l.capacity)}` : ""}${l.down ? ` · <span style="color:${th.status.danger}">${l.down} down</span>` : ""}${l.inferred ? `<br/><span style="color:${t.label}">${l.inferred} from descriptions only</span>` : ""}<br/>${l.labels.map((x) => esc(x)).join("<br/>")}`;
         }
         const s = d.site as SiteSummary;
-        return `<b>${esc(s.name)}</b><br/>${s.devices} device${s.devices === 1 ? "" : "s"} · ${s.internal} link${s.internal === 1 ? "" : "s"} inside${s.down ? `<br/><span style="color:${th.status.danger}">${s.down} down</span>` : ""}<br/><span style="color:${t.label}">Click to open the site</span>`;
+        return `<b>${esc(s.name)}</b><br/>${s.devices} device${s.devices === 1 ? "" : "s"} · ${s.internal} link${s.internal === 1 ? "" : "s"} inside${s.customers ? `<br/>${s.customers} customer router${s.customers === 1 ? "" : "s"}` : ""}${s.down ? `<br/><span style="color:${th.status.danger}">${s.down} down</span>` : ""}<br/><span style="color:${t.label}">Click to open the site</span>`;
       },
     },
     xAxis: { show: false, min: bounds.xmin, max: bounds.xmax, type: "value" },
@@ -1336,7 +1384,7 @@ export function siteGraphOption(data: { sites: SiteSummary[]; links: SiteLink[] 
             },
             label: {
               show: true,
-              formatter: `{n|${s.name}}\n{c|${s.devices} device${s.devices === 1 ? "" : "s"}}`,
+              formatter: `{n|${s.name}}\n{c|${s.devices} device${s.devices === 1 ? "" : "s"}${s.customers ? ` · ${s.customers} customer${s.customers === 1 ? "" : "s"}` : ""}}`,
               rich: {
                 n: { fontWeight: 700, fontSize: 13, color: t.ink, fontFamily: th.fonts.display },
                 c: { fontSize: 11, color: t.label, fontFamily: th.fonts.body, padding: [2, 0, 0, 0] },
