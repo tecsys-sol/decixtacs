@@ -189,6 +189,10 @@ def ixp_fabric(ctx: Ctx = Depends(require("devices:read"))):
     }
 
 
+def _graph_params(**kw) -> dict:
+    return {k: v for k, v in kw.items() if v is not None and v != ""}
+
+
 @router.get("/ixp/graph")
 def ixp_graph(
     graph: str = "ixp",
@@ -198,13 +202,25 @@ def ixp_graph(
     period: str = "day",
     category: str = "bits",
     protocol: str | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
     ctx: Ctx = Depends(require("devices:read")),
 ):
-    """One Grapher graph as a series (bits/s or packets/s) plus statistics; ``reason``/``error`` say why a
-    graph is empty (no integration, refused, no sFlow/MRTG data)."""
+    """One Grapher graph as a series (bits/s or packets/s) with IXP Manager's statistics and the 95th
+    percentile; ``reason``/``error`` say why a graph is empty (no integration, key rejected, refused, no
+    sFlow/MRTG data). ``period=custom`` with ``period_start``/``period_end`` (ISO 8601) for P2P graphs."""
     from app.services.integrations.grapher import Grapher
 
-    params = {"id": id, "svli": svli, "dvli": dvli, "period": period, "category": category, "protocol": protocol}
+    params = _graph_params(
+        id=id,
+        svli=svli,
+        dvli=dvli,
+        period=period,
+        category=category,
+        protocol=protocol,
+        period_start=period_start,
+        period_end=period_end,
+    )
     i = _ixpm(ctx)
     if i is None:
         return {
@@ -212,91 +228,312 @@ def ixp_graph(
             "params": params,
             "points": [],
             "statistics": None,
+            "derived": {},
             "error": NO_IXPM,
             "reason": "no_integration",
         }
-    return Grapher(i).series(graph, {k: v for k, v in params.items() if v is not None}).to_dict()
+    return Grapher(i).series(graph, params).to_dict()
+
+
+@router.get("/ixp/graph.csv")
+def ixp_graph_csv(
+    graph: str = "ixp",
+    id: int | None = None,  # noqa: A002
+    svli: int | None = None,
+    dvli: int | None = None,
+    period: str = "day",
+    category: str = "bits",
+    protocol: str | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """The same series as a CSV download (UTC timestamps; average and peak in/out per sample)."""
+    import csv
+    import io
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    from app.services.integrations.grapher import Grapher
+
+    i = _ixpm(ctx)
+    if i is None:
+        raise HTTPException(404, NO_IXPM)
+    params = _graph_params(
+        id=id,
+        svli=svli,
+        dvli=dvli,
+        period=period,
+        category=category,
+        protocol=protocol,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    r = Grapher(i).series(graph, params)
+    if r.reason and r.reason not in ("no_data", "all_zero"):
+        raise HTTPException(502 if r.reason in ("auth", "forbidden", "unreachable", "bad_response") else 422, r.error)
+    unit = "bps" if r.params.get("category", "bits") == "bits" else "pps"
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["timestamp_utc", f"avg_in_{unit}", f"avg_out_{unit}", f"max_in_{unit}", f"max_out_{unit}"])
+    for pt in r.points:
+        w.writerow(
+            [
+                dt.fromtimestamp(pt["t"], UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                pt["in"],
+                pt["out"],
+                pt["max_in"],
+                pt["max_out"],
+            ]
+        )
+    ids = "-".join(str(r.params[k]) for k in ("id", "svli", "dvli") if k in r.params)
+    name = f"{graph}-{ids}-{r.params.get('protocol', 'all')}-{r.params.get('period', 'day')}.csv"
+    return Response(
+        buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'}
+    )
 
 
 def _member_vlis(m: IxpMember) -> list[dict]:
     return [
-        {**v, "ixp_id": c.get("ixp_id")} for c in m.connections or [] for v in c.get("vlans") or [] if v.get("vli_id")
+        {**v, "ixp_id": c.get("ixp_id"), "capacity_mbps": sum((p.get("speed_mbps") or 0) for p in c.get("ports") or [])}
+        for c in m.connections or []
+        for v in c.get("vlans") or []
+        if v.get("vli_id")
     ]
+
+
+def _rs_status(ctx: Ctx) -> dict[int, dict]:
+    """asn -> {"up": n, "down": n} route-server sessions (birdseye), for the peering view."""
+    out: dict[int, dict] = {}
+    for c in ctx.db.scalars(select(RouteServerClient).where(RouteServerClient.tenant_id == ctx.tenant_id)):
+        e = out.setdefault(c.asn, {"up": 0, "down": 0})
+        e["up" if (c.state or "").lower() in ("up", "established") else "down"] += 1
+    return out
+
+
+def _no_vli_error(i: Integration) -> str:
+    lookup = (i.last_sync_detail or {}).get("vlan_interface_lookup")
+    if lookup != "ok":
+        return (
+            "IXP Manager's VLAN interface ids are not known: "
+            + (lookup or "sync the IXP Manager integration")
+            + ". P2P graphs are keyed by them."
+        )
+    return (
+        "This member has no VLAN interface with a MAC address in IXP Manager on that VLAN "
+        "(P2P graphs are keyed by the VLAN interface, found through its configured MAC)."
+    )
+
+
+P2P_STATS = ("averagein", "averageout", "maxin", "maxout", "totalin", "totalout", "curin", "curout")
 
 
 @router.get("/ixp/members/{asn}/p2p")
 def ixp_member_p2p(
     asn: int,
     vlan_id: int | None = None,
-    protocol: str = "ipv4",
+    protocol: str = "ipv4",  # ipv4 | ipv6 | both
     period: str = "day",
     category: str = "bits",
+    period_start: str | None = None,
+    period_end: str | None = None,
     ctx: Ctx = Depends(require("devices:read")),
 ):
-    """Traffic between one member and every other member on a peering VLAN (P2P), busiest first."""
+    """Traffic between one member and every other member on a peering VLAN (P2P), busiest first, with each
+    peer's share of the member's P2P traffic, and the peering opportunities: members on the VLAN with no
+    traffic, their peering policy and whether both sides use the route servers."""
     from app.services.integrations.grapher import Grapher
 
     i = _ixpm(ctx)
     if i is None:
-        return {"asn": asn, "peers": [], "error": NO_IXPM, "reason": "no_integration"}
+        return {"asn": asn, "peers": [], "opportunities": [], "error": NO_IXPM, "reason": "no_integration"}
+    if protocol not in ("ipv4", "ipv6", "both"):
+        raise HTTPException(422, "protocol must be ipv4, ipv6 or both")
     members = list(ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id)))
     me = next((m for m in members if m.asn == asn), None)
     if me is None:
         raise HTTPException(404, "member not found")
     mine = [v for v in _member_vlis(me) if vlan_id is None or v.get("vlan_id") == vlan_id]
     if not mine:
-        lookup = (i.last_sync_detail or {}).get("vlan_interface_lookup")
         return {
             "asn": asn,
             "name": me.name,
             "peers": [],
+            "opportunities": [],
             "reason": "no_vlan_interface",
-            "error": (
-                "IXP Manager's VLAN interface ids are not known: "
-                + (lookup or "sync the IXP Manager integration")
-                + ". P2P graphs are keyed by them."
-                if lookup != "ok"
-                else "This member has no VLAN interface with a MAC address in IXP Manager on that VLAN "
-                "(P2P graphs are keyed by the VLAN interface, found through its configured MAC)."
-            ),
+            "error": _no_vli_error(i),
         }
     src = mine[0]
+    rs = _rs_status(ctx)
     peers: list[tuple[int, dict]] = []
     for m in members:
         if m.asn == asn:
             continue
         for v in _member_vlis(m):
             if v.get("vlan_id") == src.get("vlan_id"):
-                peers.append((v["vli_id"], {"asn": m.asn, "name": m.name}))
+                peers.append(
+                    (
+                        v["vli_id"],
+                        {
+                            "asn": m.asn,
+                            "name": m.name,
+                            "peering_policy": m.peering_policy,
+                            "rs_client": bool(v.get("rs_client_v4") or v.get("rs_client_v6")),
+                            "rs_sessions": rs.get(m.asn),
+                        },
+                    )
+                )
                 break
-    rows = Grapher(i).p2p_matrix(
-        src["vli_id"], peers[:500], {"period": period, "category": category, "protocol": protocol}
-    )
+    g = Grapher(i)
+    base = _graph_params(category=category, period=period, period_start=period_start, period_end=period_end)
+    protos = ("ipv4", "ipv6") if protocol == "both" else (protocol,)
+    by_proto = {pr: g.p2p_matrix(src["vli_id"], peers[:500], {**base, "protocol": pr}) for pr in protos}
+    rows: list[dict] = []
+    for idx in range(len(by_proto[protos[0]])):
+        first = by_proto[protos[0]][idx]
+        row = {k: v for k, v in first.items() if k not in P2P_STATS and k not in ("error", "reason")}
+        same = [next(r for r in by_proto[pr] if r["dvli"] == first["dvli"]) for pr in protos]
+        errs = [r for r in same if r.get("error")]
+        if len(errs) == len(same):
+            row.update(error=errs[0]["error"], reason=errs[0]["reason"])
+        for k in P2P_STATS:
+            vals = [r.get(k) or 0 for r in same if not r.get("error")]
+            # rates and totals add up across protocols; peaks only approximately (they need not coincide)
+            row[k] = sum(vals)
+        if protocol == "both":
+            row["by_protocol"] = {
+                pr: {k: r.get(k) or 0 for k in ("averagein", "averageout", "totalin", "totalout")}
+                for pr, r in zip(protos, same, strict=True)
+                if not r.get("error")
+            }
+        rows.append(row)
+    rows.sort(key=lambda r: -((r.get("totalin") or 0) + (r.get("totalout") or 0)))
+    grand = sum((r.get("totalin") or 0) + (r.get("totalout") or 0) for r in rows if not r.get("error"))
+    for r in rows:
+        tot = (r.get("totalin") or 0) + (r.get("totalout") or 0)
+        r["share"] = round(100 * tot / grand, 2) if grand and not r.get("error") else 0
     errors = [r for r in rows if r.get("error")]
     with_data = [r for r in rows if not r.get("error") and ((r.get("totalin") or 0) + (r.get("totalout") or 0)) > 0]
+    me_rs = bool(src.get("rs_client_v4") or src.get("rs_client_v6"))
+    # who could this member exchange traffic with, but does not (yet)?
+    rank = {"open": 0, "selective": 1, "case-by-case": 2, "restrictive": 3}
+    opportunities = sorted(
+        (
+            {
+                **{k: r[k] for k in ("asn", "name", "dvli", "peering_policy", "rs_client", "rs_sessions")},
+                "via_route_servers": me_rs and r.get("rs_client"),
+                "hint": (
+                    "both use the route servers - check the prefixes each side exports"
+                    if me_rs and r.get("rs_client")
+                    else "open peering policy - request a bilateral session"
+                    if (r.get("peering_policy") or "").lower() == "open"
+                    else "not on the route servers - bilateral session needed"
+                ),
+            }
+            for r in rows
+            if not r.get("error") and ((r.get("totalin") or 0) + (r.get("totalout") or 0)) == 0
+        ),
+        key=lambda o: (rank.get((o.get("peering_policy") or "").lower(), 9), o["name"] or ""),
+    )
     out = {
         "asn": asn,
         "name": me.name,
         "vlan_id": src.get("vlan_id"),
         "vlan": src.get("vlan"),
         "svli": src["vli_id"],
+        "capacity_mbps": src.get("capacity_mbps") or None,
+        "rs_client": me_rs,
         "protocol": protocol,
         "peers": rows,
         "peers_total": len(peers),
         "peers_with_traffic": len(with_data),
+        "opportunities": opportunities,
         "reason": None,
         "error": None,
     }
     if errors and len(errors) == len(rows):
         out["reason"], out["error"] = errors[0].get("reason"), errors[0].get("error")
+        out["opportunities"] = []
     elif rows and not with_data:
         out["reason"] = "no_data"
+        out["opportunities"] = []
         out["error"] = (
             "IXP Manager has no P2P data for this member: the sflow-to-rrd handler writes P2P RRD files only from "
             "sampled traffic - check sflowtool, the sflow-to-rrd-handler and that the member's MAC addresses are "
             "configured (or learned) in IXP Manager."
         )
     return out
+
+
+@router.get("/ixp/p2p-matrix")
+def ixp_p2p_matrix(
+    vlan_id: int | None = None,
+    top: int = Query(12, ge=2, le=25),
+    protocol: str = "ipv4",
+    period: str = "day",
+    category: str = "bits",
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """Exchange-wide view IXP Manager does not offer: traffic between each pair of the ``top`` busiest
+    members on a peering VLAN (``cells[i][j]`` = average rate member *i* receives from member *j*)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.integrations.grapher import Grapher, GraphError
+
+    i = _ixpm(ctx)
+    if i is None:
+        return {"members": [], "cells": [], "error": NO_IXPM, "reason": "no_integration"}
+    g = Grapher(i)
+    on_vlan: list[tuple[IxpMember, dict]] = []
+    for m in ctx.db.scalars(select(IxpMember).where(IxpMember.tenant_id == ctx.tenant_id)):
+        v = next((x for x in _member_vlis(m) if vlan_id is None or x.get("vlan_id") == vlan_id), None)
+        if v is not None:
+            on_vlan.append((m, v))
+    if vlan_id is None and on_vlan:
+        first_vlan = on_vlan[0][1].get("vlan_id")
+        on_vlan = [(m, v) for m, v in on_vlan if v.get("vlan_id") == first_vlan]
+    if len(on_vlan) < 2:
+        return {"members": [], "cells": [], "error": _no_vli_error(i), "reason": "no_vlan_interface"}
+    base = {"period": period, "category": category, "protocol": protocol}
+
+    def volume(item: tuple[IxpMember, dict]) -> float:
+        try:
+            st = g.statistics("vlaninterface", {**base, "id": item[1]["vli_id"]}) or {}
+        except GraphError:
+            return -1
+        return (st.get("totalin") or 0) + (st.get("totalout") or 0)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        volumes = list(ex.map(volume, on_vlan))
+    if all(v < 0 for v in volumes):
+        r = g.series("vlaninterface", {**base, "id": on_vlan[0][1]["vli_id"]})
+        return {"members": [], "cells": [], "error": r.error, "reason": r.reason}
+    ranked = [x for _, x in sorted(zip(volumes, on_vlan, strict=True), key=lambda p: -p[0])][:top]
+
+    def cell(pair: tuple[int, int]):
+        a, b = pair
+        if a == b:
+            return None
+        try:
+            st = g.statistics("p2p", {**base, "svli": ranked[a][1]["vli_id"], "dvli": ranked[b][1]["vli_id"]}) or {}
+        except GraphError:
+            return None
+        return st.get("averagein") or 0
+
+    pairs = [(a, b) for a in range(len(ranked)) for b in range(len(ranked))]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        values = list(ex.map(cell, pairs))
+    n = len(ranked)
+    cells = [[values[a * n + b] for b in range(n)] for a in range(n)]
+    return {
+        "vlan_id": ranked[0][1].get("vlan_id"),
+        "vlan": ranked[0][1].get("vlan"),
+        "protocol": protocol,
+        "members": [{"asn": m.asn, "name": m.name, "vli_id": v["vli_id"]} for m, v in ranked],
+        "cells": cells,
+        "error": None,
+        "reason": None,
+    }
 
 
 @router.get("/ixp/graphs/health")

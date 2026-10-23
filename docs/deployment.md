@@ -458,6 +458,22 @@ not populate:
 Graphs are fetched live (cached 2 minutes) with `GET /api/v1/ixp/graph`,
 `GET /api/v1/ixp/members/{asn}/p2p` and `GET /api/v1/ixp/graphs/health`.
 
+Checked against **IXP Manager 7.4.0** (member export, `sflow-db-mapper/configured-macs`, every Grapher
+route and its `type=json`/`type=log` output are unchanged from earlier 7.x). 7.x API keys (legacy
+and `ixpm_…`) can **expire**: a rejected key is reported with IXP Manager's own reason (*API key
+expired*, *Invalid credentials*, *User is disabled*) instead of a generic error.
+
+Beyond what IXP Manager shows its members:
+
+* every graph shows the **95th percentile** next to average/peak and, for a member port, the
+  **utilisation** of the port capacity; each graph downloads as **CSV** (`GET /api/v1/ixp/graph.csv`);
+* P2P graphs take a **custom date range** (IXP Manager 7.x supports it for P2P only), and IPv4 and
+  IPv6 can be shown **together**;
+* a member's P2P peers with each peer's **share** of the member's P2P traffic (and IPv6 share);
+* **peering opportunities**: members on the VLAN that exchanged no traffic with the member, with
+  their peering policy, route-server status and the next step;
+* the exchange-wide **P2P matrix** of the busiest members on a VLAN (`GET /api/v1/ixp/p2p-matrix`).
+
 ## 10. Onboarding devices to TACACS+
 
 Common preparation:

@@ -95,9 +95,13 @@ def vlan_interface_ids(client: IxpManagerClient) -> tuple[dict[str, tuple[int, i
         data = client.configured_macs()
     except httpx.HTTPStatusError as e:
         code = e.response.status_code
+        if code == 401:
+            # IXP Manager 7.x: "API key expired", "Invalid credentials", "Valid API key required", ...
+            why = " ".join((e.response.text or "").split())[:160] or "unauthorised"
+            return {}, f"rejected: the API key was refused ({why}) - create a new superuser API key"
         return {}, (
             "forbidden: the API key is not an IXP Manager superuser - member and P2P traffic graphs need one"
-            if code in (401, 403)
+            if code == 403
             else f"failed: HTTP {code}"
         )
     except (httpx.HTTPError, ValueError) as e:

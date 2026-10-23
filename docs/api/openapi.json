@@ -8857,7 +8857,7 @@
           "operations"
         ],
         "summary": "Ixp Graph",
-        "description": "One Grapher graph as a series (bits/s or packets/s) plus statistics; ``reason``/``error`` say why a\ngraph is empty (no integration, refused, no sFlow/MRTG data).",
+        "description": "One Grapher graph as a series (bits/s or packets/s) with IXP Manager's statistics and the 95th\npercentile; ``reason``/``error`` say why a graph is empty (no integration, key rejected, refused, no\nsFlow/MRTG data). ``period=custom`` with ``period_start``/``period_end`` (ISO 8601) for P2P graphs.",
         "operationId": "ixp_graph_api_v1_ixp_graph_get",
         "security": [
           {
@@ -8960,6 +8960,217 @@
             }
           },
           {
+            "name": "period_start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period Start"
+            }
+          },
+          {
+            "name": "period_end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period End"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ixp/graph.csv": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Ixp Graph Csv",
+        "description": "The same series as a CSV download (UTC timestamps; average and peak in/out per sample).",
+        "operationId": "ixp_graph_csv_api_v1_ixp_graph_csv_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "graph",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ixp",
+              "title": "Graph"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            }
+          },
+          {
+            "name": "svli",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Svli"
+            }
+          },
+          {
+            "name": "dvli",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dvli"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "bits",
+              "title": "Category"
+            }
+          },
+          {
+            "name": "protocol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Protocol"
+            }
+          },
+          {
+            "name": "period_start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period Start"
+            }
+          },
+          {
+            "name": "period_end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period End"
+            }
+          },
+          {
             "name": "X-Tenant",
             "in": "header",
             "required": false,
@@ -9004,7 +9215,7 @@
           "operations"
         ],
         "summary": "Ixp Member P2P",
-        "description": "Traffic between one member and every other member on a peering VLAN (P2P), busiest first.",
+        "description": "Traffic between one member and every other member on a peering VLAN (P2P), busiest first, with each\npeer's share of the member's P2P traffic, and the peering opportunities: members on the VLAN with no\ntraffic, their peering policy and whether both sides use the route servers.",
         "operationId": "ixp_member_p2p_api_v1_ixp_members__asn__p2p_get",
         "security": [
           {
@@ -9035,6 +9246,149 @@
                 }
               ],
               "title": "Vlan Id"
+            }
+          },
+          {
+            "name": "protocol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ipv4",
+              "title": "Protocol"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "bits",
+              "title": "Category"
+            }
+          },
+          {
+            "name": "period_start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period Start"
+            }
+          },
+          {
+            "name": "period_end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period End"
+            }
+          },
+          {
+            "name": "X-Tenant",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ixp/p2p-matrix": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Ixp P2P Matrix",
+        "description": "Exchange-wide view IXP Manager does not offer: traffic between each pair of the ``top`` busiest\nmembers on a peering VLAN (``cells[i][j]`` = average rate member *i* receives from member *j*).",
+        "operationId": "ixp_p2p_matrix_api_v1_ixp_p2p_matrix_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vlan_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vlan Id"
+            }
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 25,
+              "minimum": 2,
+              "default": 12,
+              "title": "Top"
             }
           },
           {

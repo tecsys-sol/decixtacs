@@ -7,15 +7,21 @@ max out]`` (bits/s for ``category=bits``), ``type=json`` the statistics. Aggrega
 Manager *superuser* (``GRAPHER_ACCESS_CUSTOMER`` / ``GRAPHER_ACCESS_P2P`` default to
 ``own_graphs_only``) - every failure is reported with the likely cause so an empty graph is never
 silent.
+
+Checked against IXP Manager 7.4.0: Grapher routes (``corebundle``, not ``core-bundle``), API keys
+(legacy and ``ixpm_`` keys, which can expire), and ``period=custom`` with ``period_start`` /
+``period_end`` for the sFlow drill-down graphs (``p2p``, ``multip2p``).
 """
 
 from __future__ import annotations
 
 import math
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -29,7 +35,7 @@ GRAPHS: dict[str, dict] = {
     "infrastructure": {"ids": ("id",), "family": "mrtg"},
     "location": {"ids": ("id",), "family": "mrtg"},
     "switch": {"ids": ("id",), "family": "mrtg"},
-    "core-bundle": {"ids": ("id",), "family": "mrtg"},
+    "corebundle": {"ids": ("id",), "family": "mrtg"},
     "physicalinterface": {"ids": ("id",), "family": "mrtg"},
     "virtualinterface": {"ids": ("id",), "family": "mrtg"},
     "customer": {"ids": ("id",), "family": "mrtg"},
@@ -39,6 +45,8 @@ GRAPHS: dict[str, dict] = {
     "multip2p": {"ids": ("scid", "dcid"), "family": "sflow"},
 }
 PERIODS = ("day", "week", "month", "year")
+CUSTOM_PERIOD_GRAPHS = ("p2p", "multip2p")  # IXP Manager's PERIODS_EXTENDED (7.x)
+MAX_CUSTOM_DAYS = 400
 CATEGORIES = ("bits", "pkts", "errs", "discs", "bcasts")
 PROTOCOLS = ("all", "ipv4", "ipv6")
 CACHE_SECONDS = 120
@@ -59,15 +67,52 @@ class GraphResult:
     error: str | None = None
     reason: str | None = None  # why there is no data: forbidden|no_data|... (None when populated)
 
+    def derived(self) -> dict:
+        """What IXP Manager does not report: 95th percentile (of the samples' averages, at the period's
+        resolution: 5 min for a day, 30 min for a week, 2 h for a month), sample step and coverage."""
+        if not self.points:
+            return {}
+        ins = sorted(p["in"] or 0 for p in self.points)
+        outs = sorted(p["out"] or 0 for p in self.points)
+
+        def p95(vals: list) -> float:
+            return vals[max(0, math.ceil(len(vals) * 0.95) - 1)]
+
+        steps = [b["t"] - a["t"] for a, b in zip(self.points, self.points[1:], strict=False) if b["t"] > a["t"]]
+        step = sorted(steps)[len(steps) // 2] if steps else None
+        return {
+            "p95_in": p95(ins),
+            "p95_out": p95(outs),
+            "p95": max(p95(ins), p95(outs)),
+            "peak_in": max(p["max_in"] or 0 for p in self.points),
+            "peak_out": max(p["max_out"] or 0 for p in self.points),
+            "step_seconds": step,
+            "samples": len(self.points),
+            "first": self.points[0]["t"],
+            "last": self.points[-1]["t"],
+        }
+
     def to_dict(self) -> dict:
         return {
             "graph": self.graph,
             "params": self.params,
             "points": self.points,
             "statistics": self.statistics,
+            "derived": self.derived(),
             "error": self.error,
             "reason": self.reason,
         }
+
+
+def _when(v) -> datetime:
+    if isinstance(v, datetime):
+        d = v
+    else:
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError as e:
+            raise GraphError(f"invalid date {v!r} (use ISO 8601, e.g. 2026-10-01T00:00)", "invalid") from e
+    return d if d.tzinfo else d.replace(tzinfo=UTC)
 
 
 def normalise_params(graph: str, params: dict) -> dict:
@@ -89,8 +134,23 @@ def normalise_params(graph: str, params: dict) -> dict:
     period = params.get("period") or "day"
     category = params.get("category") or "bits"
     protocol = params.get("protocol") or ("all" if spec["family"] == "mrtg" else "ipv4")
-    if period not in PERIODS or category not in CATEGORIES or protocol not in PROTOCOLS:
-        raise GraphError("invalid period/category/protocol", "invalid")
+    if period == "custom":
+        if graph not in CUSTOM_PERIOD_GRAPHS:
+            raise GraphError("a custom date range is only available for P2P graphs", "invalid")
+        if not params.get("period_start") or not params.get("period_end"):
+            raise GraphError("a custom date range needs period_start and period_end", "invalid")
+        start, end = _when(params["period_start"]), _when(params["period_end"])
+        if end <= start:
+            raise GraphError("period_end must be after period_start", "invalid")
+        if end - start > timedelta(days=MAX_CUSTOM_DAYS):
+            raise GraphError(f"a custom date range can span at most {MAX_CUSTOM_DAYS} days", "invalid")
+        # whole minutes, UTC: stable cache keys and what Carbon::parse() reads unambiguously
+        out["period_start"] = start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:00Z")
+        out["period_end"] = end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:00Z")
+    elif period not in PERIODS:
+        raise GraphError("invalid period", "invalid")
+    if category not in CATEGORIES or protocol not in PROTOCOLS:
+        raise GraphError("invalid category/protocol", "invalid")
     if spec["family"] == "mrtg":
         protocol = "all"  # MRTG graphs only exist for all protocols
     elif protocol == "all" and graph in ("vlan", "vlaninterface", "p2p"):
@@ -139,7 +199,15 @@ class Grapher:
             r = self.http.get(f"/grapher/{graph}", params={**params, "type": kind})
         except httpx.HTTPError as e:
             raise GraphError(f"IXP Manager is not reachable: {e}", "unreachable") from e
-        if r.status_code in (401, 403) or r.is_redirect:
+        if r.status_code == 401:
+            # IXP Manager 7.x says why: "API key expired", "Valid API key required", "User is disabled", ...
+            why = _short_text(r.text) or "unauthorised"
+            raise GraphError(
+                f"IXP Manager rejected the integration's API key: {why}. Create a new API key for an IXP Manager "
+                "superuser and update the integration.",
+                "auth",
+            )
+        if r.status_code == 403 or r.is_redirect:
             raise GraphError(
                 "IXP Manager refused this graph. Member and P2P graphs need the API key of an IXP Manager "
                 "superuser (GRAPHER_ACCESS_CUSTOMER / GRAPHER_ACCESS_P2P default to own_graphs_only).",
@@ -157,6 +225,7 @@ class Grapher:
             ) from e
 
     def statistics(self, graph: str, params: dict) -> dict | None:
+        """IXP Manager's own statistics (averages, maxima, totals) for the graph."""
         p = normalise_params(graph, params)
         key = (self.integration.id, graph, "json", tuple(sorted(p.items())))
         toc = _cached(key, lambda: self._get(graph, p, "json"))
@@ -230,6 +299,12 @@ class Grapher:
         return rows
 
 
+def _short_text(body: str) -> str:
+    """A plain-text error from IXP Manager, without HTML or noise."""
+    text = re.sub(r"<[^>]+>", " ", body or "")
+    return re.sub(r"\s+", " ", text).strip()[:200]
+
+
 # --- demo -----------------------------------------------------------------------------------------
 
 _DEMO_SCALE = {"ixp": 380e9, "infrastructure": 190e9, "switch": 60e9, "vlan": 160e9, "vlaninterface": 9e9, "p2p": 1.2e9}
@@ -241,9 +316,17 @@ def _demo(graph: str, params: dict, kind: str):
     scale = _DEMO_SCALE.get(graph, 5e9) * (0.35 + (seed % 13) / 13)
     if graph == "p2p" and seed % 5 == 0:
         scale = 0  # some pairs never exchange traffic
-    step = {"day": 300, "week": 1800, "month": 7200, "year": 86400}[params["period"]]
-    n = {"day": 288, "week": 336, "month": 360, "year": 365}[params["period"]]
-    now = int(time.time()) // step * step
+    if params["period"] == "custom":
+        t0 = int(_when(params["period_start"]).timestamp())
+        t1 = int(_when(params["period_end"]).timestamp())
+        span = max(t1 - t0, 300)
+        step = 300 if span <= 2 * 86400 else 1800 if span <= 14 * 86400 else 7200 if span <= 62 * 86400 else 86400
+        n = max(1, span // step)
+        now = t1 // step * step + step
+    else:
+        step = {"day": 300, "week": 1800, "month": 7200, "year": 86400}[params["period"]]
+        n = {"day": 288, "week": 336, "month": 360, "year": 365}[params["period"]]
+        now = int(time.time()) // step * step
     rows = []
     for i in range(n):
         t = now - (n - i) * step

@@ -10,8 +10,9 @@ PEERS = [(13335, "Cloudflare"), (15169, "Google"), (6939, "Hurricane Electric")]
 
 
 class FakeIxpm:
-    def __init__(self, macs_status: int | None = None):
+    def __init__(self, macs_status: int | None = None, macs_body: str = ""):
         self.macs_status = macs_status
+        self.macs_body = macs_body
 
     def ixf_export(self) -> dict:
         return {
@@ -48,7 +49,9 @@ class FakeIxpm:
     def configured_macs(self) -> dict:
         if self.macs_status:
             req = httpx.Request("GET", "http://x/api/v4/sflow-db-mapper/configured-macs")
-            raise httpx.HTTPStatusError("denied", request=req, response=httpx.Response(self.macs_status, request=req))
+            raise httpx.HTTPStatusError(
+                "denied", request=req, response=httpx.Response(self.macs_status, text=self.macs_body, request=req)
+            )
         # IXP Manager stores MACs without separators
         return {"1": {"100": {f"0200000000{k:02x}": 500 + k for k in range(1, len(PEERS) + 1)}}}
 
@@ -160,9 +163,15 @@ def test_ixp_graph_api(admin, db, tenant):
 
 def test_p2p_without_vlan_interface_ids_explains_why(admin, db, tenant):
     i = _integration(db, tenant, demo=True)
-    ixpmanager.sync_members(db, i, client=FakeIxpm(macs_status=401))
+    ixpmanager.sync_members(db, i, client=FakeIxpm(macs_status=403))
     db.commit()
     r = admin.get("/api/v1/ixp/members/13335/p2p").json()
     assert r["reason"] == "no_vlan_interface" and "superuser" in r["error"]
     checks = {c["graph"]: c for c in admin.get("/api/v1/ixp/graphs/health").json()["checks"]}
     assert checks["ixp"]["ok"] and not checks["p2p"]["ok"] and "forbidden" in checks["p2p"]["error"]
+
+    # IXP Manager 7.x API keys expire; the reason it gives is passed on
+    ixpmanager.sync_members(db, i, client=FakeIxpm(macs_status=401, macs_body="API key expired"))
+    db.commit()
+    lookup = admin.get("/api/v1/ixp/fabric").json()["integration"]["vlan_interface_lookup"]
+    assert lookup.startswith("rejected") and "API key expired" in lookup
