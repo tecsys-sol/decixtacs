@@ -600,6 +600,109 @@ def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
     return {"checks": checks, "error": None}
 
 
+def _coverage_verdict(ratio: float | None) -> tuple[str, str]:
+    if ratio is None:
+        return "unknown", "Not enough overlapping sFlow and port-counter data to compare."
+    if ratio > 1.05:
+        return "double", (
+            "sFlow records more than the member ports carry: some traffic is sampled twice - usually sFlow enabled on "
+            "core/inter-switch links or on egress. P2P graphs read high. Run tools/p2p/capture-and-audit.sh."
+        )
+    if ratio >= 0.9:
+        return "ok", (
+            "sFlow sees what the member ports carry. Totals behind the P2P graphs are sound; remaining differences "
+            "between single pairs are sampling noise."
+        )
+    return "loss", (
+        f"sFlow records only {ratio:.0%} of what the member ports carry, so P2P graphs read low. "
+        "Run tools/p2p/collector-check.sh on the collector (flush stalls, socket drops) and "
+        "tools/p2p/capture-and-audit.sh (MACs IXP Manager does not know)."
+    )
+
+
+@router.get("/ixp/sflow-coverage")
+def ixp_sflow_coverage(
+    period: str = Query("day", pattern="^(day|week|month)$"),
+    ctx: Ctx = Depends(require("devices:read")),
+):
+    """How much of the exchange's traffic the sFlow pipeline records - the data every P2P graph is built
+    from - measured against the switch port counters (MRTG), per infrastructure and over time.
+
+    The sFlow side is the sum of the peering VLANs' sFlow aggregates (IPv4 + IPv6): exactly the samples the
+    collector accepted. The MRTG side is the sum of all member ports. Below 1 means samples are lost before
+    they reach a graph; above 1 means some packets are sampled twice. Non-IP and broadcast traffic keep a
+    healthy exchange slightly under 1."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.integrations.grapher import Grapher
+
+    i = _ixpm(ctx)
+    if i is None:
+        return {"infrastructures": [], "error": NO_IXPM, "reason": "no_integration"}
+    g = Grapher(i)
+    fabric = (i.last_sync_detail or {}).get("fabric") or []
+    if not fabric:
+        return {"infrastructures": [], "error": "Sync the IXP Manager integration first.", "reason": "no_fabric"}
+    base = {"period": period, "category": "bits"}
+    bucket = {"day": 300, "week": 1800, "month": 7200}[period]
+
+    jobs = []
+    for f in fabric:
+        jobs.append((f["id"], "infrastructure", {**base, "id": f["id"], "protocol": "all"}))
+        for v in f.get("vlans") or []:
+            for proto in ("ipv4", "ipv6"):
+                jobs.append((f["id"], "vlan", {**base, "id": v["id"], "protocol": proto}))
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(lambda j: g.series(j[1], j[2]), jobs))
+
+    out = []
+    for f in fabric:
+        mrtg: dict[int, float] = {}
+        sflow: dict[int, float] = {}
+        errors = []
+        for (fid, graph, params), r in zip(jobs, results, strict=True):
+            if fid != f["id"]:
+                continue
+            if r.reason and r.reason not in ("all_zero", "no_data"):
+                errors.append(f"{graph} {params.get('protocol')}: {r.error or r.reason}")
+            target = mrtg if graph == "infrastructure" else sflow
+            for p in r.points:
+                t = p["t"] // bucket * bucket
+                target[t] = target.get(t, 0.0) + (p["in"] or 0)
+        series = []
+        for t in sorted(set(mrtg) & set(sflow)):
+            m, s = mrtg[t], sflow[t]
+            series.append({"t": t, "mrtg": m, "sflow": s, "ratio": round(s / m, 4) if m > 0 else None})
+        # whole-period ratio from volumes, so quiet hours do not weigh as much as busy ones
+        used = [p for p in series if p["mrtg"] > 0 and p["sflow"] > 0]
+        tm, ts = sum(p["mrtg"] for p in used), sum(p["sflow"] for p in used)
+        ratio = round(ts / tm, 4) if tm else None
+        rs = sorted(p["ratio"] for p in used)
+        # points where sFlow fell to nothing while the ports carried traffic: collector outages
+        gaps = sum(1 for p in series if p["mrtg"] > 0 and p["sflow"] == 0)
+        verdict, message = _coverage_verdict(ratio)
+        if errors and ratio is None:
+            verdict, message = "error", "; ".join(errors)
+        out.append(
+            {
+                "id": f["id"],
+                "name": f.get("name"),
+                "ratio": ratio,
+                "ratio_p10": rs[len(rs) // 10] if rs else None,
+                "ratio_p90": rs[min(len(rs) - 1, len(rs) * 9 // 10)] if rs else None,
+                "mrtg_avg": tm / len(used) if used else None,
+                "sflow_avg": ts / len(used) if used else None,
+                "outage_points": gaps,
+                "bucket_seconds": bucket,
+                "series": series,
+                "verdict": verdict,
+                "message": message,
+                "errors": errors,
+            }
+        )
+    return {"infrastructures": out, "period": period, "error": None, "reason": None}
+
+
 @router.get("/ixp/route-server-clients")
 def rs_clients(asn: int | None = None, only_problems: bool = False, ctx: Ctx = Depends(require("devices:read"))):
     stmt = (

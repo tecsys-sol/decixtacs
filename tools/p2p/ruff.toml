@@ -1,0 +1,6 @@
+# Operator scripts for the sFlow collector: same rules as the backend, except that
+# running rrdtool/sflowtool by name and fetching an operator-supplied URL is the point.
+extend = "../../backend/pyproject.toml"
+
+[lint.per-file-ignores]
+"*" = ["S603", "S607", "S310"]

@@ -336,6 +336,90 @@ function GraphHealth() {
   );
 }
 
+interface CoverageInfra {
+  id: number;
+  name: string | null;
+  ratio: number | null;
+  ratio_p10: number | null;
+  ratio_p90: number | null;
+  outage_points: number;
+  bucket_seconds: number;
+  series: { t: number; mrtg: number; sflow: number; ratio: number | null }[];
+  verdict: "ok" | "loss" | "double" | "unknown" | "error";
+  message: string;
+}
+
+const pct = (v: number | null | undefined) => (v == null ? "-" : `${Math.round(v * 100)}%`);
+
+/** How much of the traffic on the member ports the sFlow pipeline records - the base of every P2P graph. */
+function SflowCoverage({ period }: { period: Exclude<Period, "custom"> }) {
+  const theme = useChartTheme();
+  const p = period === "year" ? "month" : period;
+  const q = useQuery({
+    queryKey: ["ixp", "sflow-coverage", p],
+    queryFn: () => api.get<{ infrastructures: CoverageInfra[]; error: string | null }>("/ixp/sflow-coverage", { period: p }),
+    staleTime: 5 * 60_000,
+  });
+  if (q.isLoading) return <Skeleton className="h-40" />;
+  const infras = q.data?.infrastructures ?? [];
+  if (!infras.length) return null;
+  return (
+    <Card data-testid="sflow-coverage">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {infras.every((i) => i.verdict === "ok") ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+          P2P accuracy - sFlow against port counters
+        </CardTitle>
+        <CardDescription>
+          P2P graphs are built from the sFlow samples the collector keeps. Their total, compared with what the member ports carried (MRTG), shows
+          whether samples are lost (below 100%) or counted twice (above). A few percent under is normal: ARP, broadcast and other non-IP traffic.
+        </CardDescription>
+      </CardHeader>
+      <div className="grid gap-4 px-6 pb-5">
+        {infras.map((i) => (
+          <CoverageRow key={i.id} infra={i} period={p} theme={theme} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function CoverageRow({ infra, period, theme }: { infra: CoverageInfra; period: Exclude<Period, "custom" | "year">; theme: ReturnType<typeof useChartTheme> }) {
+  const option = React.useMemo(() => {
+    if (!infra.series.length) return null;
+    const pal = palette(theme);
+    const span = infra.series[infra.series.length - 1].t - infra.series[0].t;
+    return lineOption(
+      {
+        categories: infra.series.map((s) => timeLabel(s.t, period, span)),
+        series: [
+          { name: "Member ports (MRTG)", data: infra.series.map((s) => s.mrtg), color: pal[0] },
+          { name: "sFlow (P2P total)", data: infra.series.map((s) => s.sflow), color: pal[1] },
+        ],
+        min: 0,
+        format: (v) => formatRate(v),
+        axisFormat: (v) => formatRate(v),
+      },
+      theme,
+    );
+  }, [infra, period, theme]);
+  const tone = infra.verdict === "ok" ? "success" : infra.verdict === "unknown" ? "secondary" : "warning";
+  return (
+    <div className={cn("rounded-md border p-3", infra.verdict === "ok" ? "border-success/30" : "border-warning/40")}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        <span className="font-medium text-foreground">{infra.name ?? `Infrastructure ${infra.id}`}</span>
+        <Badge variant={tone}>sFlow records {pct(infra.ratio)}</Badge>
+        <span className="text-xs text-muted-foreground">
+          range {pct(infra.ratio_p10)}-{pct(infra.ratio_p90)} (10th-90th percentile of {Math.round(infra.bucket_seconds / 60)}-minute points)
+        </span>
+        {infra.outage_points ? <span className="text-xs text-warning">{infra.outage_points} point(s) with no sFlow data at all</span> : null}
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{infra.message}</p>
+      {option ? <Chart option={option} height={180} ariaLabel={`sFlow coverage, ${infra.name ?? infra.id}`} /> : null}
+    </div>
+  );
+}
+
 function toLocalInput(iso: string): string {
   const d = new Date(iso);
   const off = d.getTimezoneOffset() * 60_000;
@@ -435,6 +519,7 @@ export function TrafficTab() {
         <GraphControls period={std} setPeriod={setPeriod} category={category} setCategory={setCategory} protocol={proto} setProtocol={setProtocol} />
       </div>
       <GraphHealth />
+      <SflowCoverage period={std} />
       <TrafficChart title="Exchange traffic" description="All peering ports (IXP Manager MRTG)" graph="ixp" params={{ id: 1 }} period={std} category={category} height={260} />
       <div className="grid gap-4 xl:grid-cols-2">
         <ChartCardWithPicker

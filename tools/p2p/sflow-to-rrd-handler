@@ -1,0 +1,474 @@
+#!/usr/bin/env perl
+#
+# sflow-to-rrd-handler - drop-in replacement for IXP Manager 7.4.0's
+# tools/runtime/sflow/sflow-to-rrd-handler, for exchanges where the stock
+# handler cannot keep up.
+#
+# Derived from the IXP Manager original:
+#   Copyright (C) 2009 - 2019 Internet Neutral Exchange Association Company
+#   Limited By Guarantee. All Rights Reserved.
+# and, like it, distributed under the GNU General Public License v2.0:
+#   http://www.gnu.org/licenses/gpl-2.0.html
+#
+# Same input (sflowtool -l), same configuration (ixpmanager.conf <ixp>), same
+# command-line options, same RRD files, layout and data-source definitions,
+# so IXP Manager's Grapher reads them unchanged. What differs:
+#
+#  1. Samples are never left unread. The stock handler stops reading sflowtool
+#     while it writes every RRD (and while it re-fetches the MAC table), then
+#     divides what it did read by the whole interval. With N member interfaces
+#     a flush is 4*N*(N-1) RRD updates; once that takes longer than the 60s
+#     cycle, P2P values are understated and the samples queued meanwhile are
+#     dropped by the kernel. Here the flush and the MAC-table fetch run in a
+#     forked child while the parent keeps reading. If a flush is still running
+#     when the next is due, the interval is extended instead - rates stay exact.
+#
+#  2. Writes scale with traffic, not with N squared. A pair with traffic is
+#     written every flush; an idle pair whose file exists gets a zero every
+#     ~5 minutes (inside the RRDs' 600s heartbeat, so idle stays 0, never
+#     unknown); a pair that has never carried traffic gets no file at all
+#     (--create-idle restores the stock behaviour). When an idle pair turns
+#     active, a zero is written at the previous flush first, so the new rate is
+#     not smeared back over the idle minutes.
+#
+#  3. --infraid works. The stock 'qw ( $infraid )' never interpolates, so with
+#     --infraid every sample was dropped.
+#
+#  4. MAC-table keys are normalised to lower-case hex without separators, as
+#     sflowtool prints them, so a MAC stored as AA:BB:... still matches.
+#
+#  5. One line per flush on STDERR (the journal under systemd): interval, flush
+#     duration, samples, and how many were dropped and why. --quiet turns it off.
+#
+# Requires the same Perl modules as the original: RRDs, JSON, REST::Client,
+# Config::General (via IXPManager::Config), Time::HiRes.
+
+use warnings;
+use strict;
+use Getopt::Long;
+use RRDs;
+use Time::HiRes qw(ualarm gettimeofday tv_interval);
+use JSON;
+use REST::Client;
+use POSIX qw(:sys_wait_h);
+use File::Path qw(make_path);
+use File::Basename;
+
+use FindBin qw($Bin);
+use File::Spec;
+use lib File::Spec->catdir( $Bin, File::Spec->updir(), File::Spec->updir(), 'perl-lib', 'IXPManager', 'lib' );
+use lib File::Spec->catdir( $Bin, File::Spec->updir(), 'perl-lib', 'IXPManager', 'lib' );
+use lib '/srv/ixpmanager/tools/perl-lib/IXPManager/lib';
+
+my $ixpconf = { ixp => {} };
+if (!$ENV{SFLOW_HANDLER_NO_CONFIG}) {
+	require IXPManager::Config;
+	$ixpconf = IXPManager::Config->new(dbase_disable => 1);
+}
+my $c = $ixpconf->{ixp} || {};
+
+my $debug = defined($c->{debug}) ? $c->{debug} : 0;
+my $rrdcached = defined($c->{sflow_rrdcached}) && $c->{sflow_rrdcached} ne '' ? $c->{sflow_rrdcached} : 1;
+my $sflowtool = $c->{sflowtool} || '/usr/bin/sflowtool';
+my $sflowtool_opts = $c->{sflowtool_opts} || '-l';
+my $basedir = $c->{sflow_rrddir} || '/data/ixpmatrix';
+my $apikey = $c->{apikey};
+my $apibaseurl = $c->{apibaseurl};
+my $macdbtype = defined($c->{macdbtype}) ? $c->{macdbtype} : '';
+my $rrdcached_sock = $c->{sflow_rrdcached_socket} || 'unix:/var/run/rrdcached.sock';
+
+my $timer_period = 60;
+my $mactabletimeout = 86400;
+my $idle_refresh = 300;		# seconds between zero writes to idle pairs (< 600s heartbeat)
+my $daemon = 1;
+my $infraid;
+my $insanedebug = 0;
+my $create_idle = 0;
+my $quiet = 0;
+
+GetOptions(
+	'debug!'		=> \$debug,
+	'insanedebug!'		=> \$insanedebug,
+	'daemon!'		=> \$daemon,
+	'sflowtool=s'		=> \$sflowtool,
+	'sflowtool_opts=s'	=> \$sflowtool_opts,
+	'sflow_rrddir=s'	=> \$basedir,
+	'flushtimer=i'		=> \$timer_period,
+	'infraid=i'		=> \$infraid,
+	'macdbtype=s'		=> \$macdbtype,
+	'apikey=s'		=> \$apikey,
+	'apibaseurl=s'		=> \$apibaseurl,
+	'rrdcached!'		=> \$rrdcached,
+	'rrdcached-socket=s'	=> \$rrdcached_sock,
+	'idle-refresh=i'	=> \$idle_refresh,
+	'create-idle!'		=> \$create_idle,
+	'quiet!'		=> \$quiet,
+) or die "bad options\n";
+
+$debug = 1 if $insanedebug;
+die "FATAL: must set 'apikey' parameter in <ixp> section of ixpmanager.conf\n" unless defined $apikey;
+die "FATAL: must set 'apibaseurl' parameter in <ixp> section of ixpmanager.conf\n" unless defined $apibaseurl;
+
+my $macdbrest = $macdbtype eq 'configured' ? '/sflow-db-mapper/configured-macs' : '/sflow-db-mapper/learned-macs';
+my $mactable_cache = "$basedir/.sflow-to-rrd-handler.mactable.json";
+
+make_path($basedir) unless -d $basedir;
+
+# --- MAC table ---------------------------------------------------------------------------
+
+sub fetch_mactable {
+	my $client = REST::Client->new();
+	$client->setTimeout(30);
+	$client->setHost($apibaseurl);
+	$client->addHeader('X-IXP-Manager-API-Key', $apikey);
+	$client->GET($macdbrest);
+	my $code = $client->responseCode();
+	if ($code != 200) {
+		print STDERR "WARNING: MAC table fetch: HTTP $code: ".substr($client->responseContent() // '', 0, 200)."\n";
+		return undef;
+	}
+	my $json = eval { from_json($client->responseContent()) };
+	if (!defined $json || (ref $json ne 'HASH' && ref $json ne 'ARRAY')) {
+		print STDERR "WARNING: MAC table fetch: response was not JSON\n";
+		return undef;
+	}
+	return ref $json eq 'HASH' ? $json : {};
+}
+
+# infra -> tag -> mac -> vli, restricted to --infraid and with normalised MACs;
+# plus vlan -> {vli => 1} for every VLAN with at least one known interface.
+sub index_mactable {
+	my ($raw) = @_;
+	my (%table, %vlilist);
+	foreach my $infra (keys %$raw) {
+		next if defined($infraid) && $infra ne $infraid;
+		foreach my $tag (keys %{$raw->{$infra}}) {
+			foreach my $mac (keys %{$raw->{$infra}->{$tag}}) {
+				my $vli = $raw->{$infra}->{$tag}->{$mac};
+				(my $norm = lc $mac) =~ s/[^0-9a-f]//g;
+				next unless length($norm) == 12 && $vli;
+				$table{$tag}{$norm} //= $vli;
+				$vlilist{$tag}{$vli} = 1;
+			}
+		}
+	}
+	return (\%table, \%vlilist);
+}
+
+sub write_mactable_cache {
+	my ($raw) = @_;
+	my $tmp = "$mactable_cache.$$";
+	open(my $fh, '>', $tmp) or return 0;
+	print $fh to_json($raw);
+	close($fh) or return 0;
+	return rename($tmp, $mactable_cache);
+}
+
+my $raw = fetch_mactable();
+$raw || die "FATAL: could not read IXP Manager API call on $apibaseurl$macdbrest\n";
+write_mactable_cache($raw);
+my ($mactable, $vlilist) = index_mactable($raw);
+my $mactable_loaded = time();
+my $mactable_mtime = (stat($mactable_cache))[9] || $mactable_loaded;
+
+# --- state -------------------------------------------------------------------------------
+
+# sparse accumulators: only what was actually seen this interval
+my ($acc, $stats) = ({}, {});
+my $prev = { flushts => undef, active => {}, counter => -1, k => 1 };
+my $counter = 0;
+my $child = 0;
+my $deferred = 0;
+
+my $execute_periodic = 0;
+my $quit_after_periodic = 0;
+$SIG{TERM} = sub { $execute_periodic = 1; $quit_after_periodic = 1; };
+$SIG{QUIT} = sub { $execute_periodic = 1; $quit_after_periodic = 1; };
+$SIG{INT}  = sub { $execute_periodic = 1; $quit_after_periodic = 1; };
+$SIG{HUP}  = sub { $execute_periodic = 1; };
+$SIG{ALRM} = sub { $execute_periodic = 1; };
+ualarm($timer_period * 1000000, $timer_period * 1000000);
+
+my $tv = [gettimeofday()];
+
+my $sflowpid = open(my $SFLOWTOOL, '-|', $sflowtool, split(' ', $sflowtool_opts))
+	or die "FATAL: cannot run $sflowtool: $!\n";
+
+while (<$SFLOWTOOL>) {
+	if (substr($_, 0, 4) eq 'FLOW') {
+		chomp;
+		$insanedebug && print STDERR "DEBUG: $_\n";
+		# FLOW,agent,inputPort,outputPort,srcMAC,dstMAC,ethType,in_vlan,out_vlan,srcIP,dstIP,
+		#   proto,tos,ttl,sport,dport,tcpFlags,pktSize,ipSize,samplingRate
+		my ($sampletype, $srcmac, $dstmac, $ethertype, $vlan, $pktsize, $samplerate) = (split(/,/))[0,4,5,6,7,17,19];
+		$stats->{samples}++;
+		my $p;
+		if ($ethertype eq '0x0800') { $p = 4 } elsif ($ethertype eq '0x86dd') { $p = 6 } else { $stats->{not_ip}++; goto PERIODIC; }
+		my $tags = $mactable->{$vlan};
+		if (!$tags) { $stats->{vlan_unknown}++; goto PERIODIC; }
+		my $srcvli = $tags->{$srcmac};
+		my $dstvli = $tags->{$dstmac};
+		if ($srcvli && $dstvli && $srcvli != $dstvli) {
+			my $bytes = $pktsize * $samplerate;
+			$acc->{p2p}{$p}{bytes}{$srcvli}{$dstvli} += $bytes;
+			$acc->{p2p}{$p}{pkts}{$srcvli}{$dstvli}  += $samplerate;
+			$acc->{ind}{$p}{bytes}{$srcvli}{in}  += $bytes;
+			$acc->{ind}{$p}{bytes}{$dstvli}{out} += $bytes;
+			$acc->{ind}{$p}{pkts}{$srcvli}{in}   += $samplerate;
+			$acc->{ind}{$p}{pkts}{$dstvli}{out}  += $samplerate;
+			$stats->{accepted}++;
+		} elsif (!$srcvli) {
+			$stats->{src_unknown}++;
+		} elsif (!$dstvli) {
+			# broadcast/multicast destinations are expected; count them apart
+			if (hex(substr($dstmac, 0, 2)) & 1) { $stats->{dst_group}++ } else { $stats->{dst_unknown}++ }
+		} else {
+			$stats->{same_vli}++;
+		}
+		$debug && !($srcvli && $dstvli) && print STDERR "DEBUG: rejected: $_\n";
+	}
+PERIODIC:
+	periodic() if $execute_periodic;
+}
+
+close($SFLOWTOOL);
+kill 9, $sflowpid;
+die "Oops, input pipe died. Aborting.\n";
+
+# --- periodic work -----------------------------------------------------------------------
+
+sub reap {
+	return 0 unless $child;
+	my $r = waitpid($child, WNOHANG);
+	if ($r == $child || $r == -1) {
+		$child = 0;
+		return 0;
+	}
+	return 1;	# still running
+}
+
+sub periodic {
+	$execute_periodic = 0;
+
+	if ($quit_after_periodic) {
+		kill 9, $sflowpid;
+		waitpid($child, 0) if $child;
+		$child = 0;
+	} elsif (reap()) {
+		# the previous flush is still writing: keep accumulating and stretch
+		# this interval - the rates come out right, the resolution coarser
+		$deferred++;
+		print STDERR "WARNING: flush still running after ".sprintf('%.0f', tv_interval($tv))."s, extending the interval\n" unless $quiet;
+		return;
+	}
+
+	# pick up a MAC table the last child fetched
+	my $m = (stat($mactable_cache))[9];
+	if ($m && $m > $mactable_mtime) {
+		my $new = eval { local $/; open(my $fh, '<', $mactable_cache) or die; from_json(<$fh>) };
+		if ($new && ref $new eq 'HASH') {
+			($mactable, $vlilist) = index_mactable($new);
+			$mactable_loaded = time();
+		}
+		$mactable_mtime = $m;
+	}
+	if (time() - $mactable_loaded > $mactabletimeout) {
+		kill 9, $sflowpid;
+		die "FATAL: could not reload mactable after $mactabletimeout seconds. Aborting.\n";
+	}
+
+	my $newtv = [gettimeofday()];
+	my $interval = tv_interval($tv, $newtv);
+	$tv = $newtv;
+	my $flushts = int($newtv->[0]);
+	my %job = (
+		acc => $acc, stats => $stats, vlilist => $vlilist, interval => $interval,
+		flushts => $flushts, counter => $counter, k => idle_k($interval), prev => $prev,
+		deferred => $deferred,
+	);
+
+	# what the next flush needs to know about this one
+	my %active;
+	foreach my $p (keys %{$acc->{p2p} || {}}) {
+		my $b = $acc->{p2p}{$p}{bytes};
+		foreach my $s (keys %$b) {
+			foreach my $d (keys %{$b->{$s}}) {
+				$active{"$s-$d"} = 1;
+				$active{"$d-$s"} = 1;	# the reverse file carries the same cell
+			}
+		}
+	}
+	$prev = { flushts => $flushts, active => \%active, counter => $counter, k => $job{k} };
+	$counter++;
+	($acc, $stats, $deferred) = ({}, {}, 0);
+
+	if ($quit_after_periodic) {
+		inline_flush(\%job);
+		$debug && print STDERR "DEBUG: orderly quit at ".time()."\n";
+		exit 0;
+	}
+
+	my $pid = fork();
+	if (!defined $pid) {
+		print STDERR "WARNING: fork failed ($!), flushing inline\n";
+		inline_flush(\%job);
+		ualarm($timer_period * 1000000, $timer_period * 1000000);
+		return;
+	}
+	if ($pid == 0) {
+		# a signal arriving mid-request breaks the rrdcached conversation
+		$SIG{$_} = 'DEFAULT' for qw(TERM QUIT INT);
+		$SIG{$_} = 'IGNORE' for qw(HUP ALRM);
+		ualarm(0);
+		# leave the sflowtool pipe alone: close() on it would wait for sflowtool
+		flush(\%job);
+		my $fresh = fetch_mactable();
+		write_mactable_cache($fresh) if $fresh;
+		POSIX::_exit(0);
+	}
+	$child = $pid;
+}
+
+sub inline_flush {
+	my ($job) = @_;
+	ualarm(0);
+	local $SIG{HUP} = 'IGNORE';
+	local $SIG{ALRM} = 'IGNORE';
+	flush($job);
+}
+
+# flushes between zero writes to an idle pair
+sub idle_k {
+	my ($interval) = @_;
+	my $k = int($idle_refresh / ($interval > 1 ? $interval : 1));
+	return $k < 1 ? 1 : $k;
+}
+
+# spreads the idle writes evenly over the flushes instead of all at once
+sub idle_due {
+	my ($s, $d, $counter, $k) = @_;
+	return 1 if $k <= 1;
+	return (($s * 7919 + $d * 104729 + $counter) % $k) == 0;
+}
+
+sub flush {
+	my ($job) = @_;
+	my $t0 = [gettimeofday()];
+	my ($acc, $interval, $ts, $prev) = @{$job}{qw(acc interval flushts prev)};
+	my @opts = $rrdcached ? ('--daemon', $rrdcached_sock) : ();
+	my %n = (written => 0, created => 0, prezero => 0, errors => 0);
+
+	foreach my $p (4, 6) {
+		foreach my $type (qw(bytes pkts)) {
+			my $cells = $acc->{p2p}{$p}{$type} || {};
+			my $ind = $acc->{ind}{$p}{$type} || {};
+			foreach my $vlan (keys %{$job->{vlilist}}) {
+				my @vlis = keys %{$job->{vlilist}{$vlan}};
+				my ($agg_in, $agg_out) = (0, 0);
+				foreach my $s (@vlis) {
+					my $dir = sprintf("%s/ipv%d/%s/p2p/src-%05d", $basedir, $p, $type, $s);
+					my %exists = map { $_ => 1 } list_dir($dir);
+					foreach my $d (@vlis) {
+						next if $s == $d;
+						my $in  = $cells->{$d}{$s} || 0;
+						my $out = $cells->{$s}{$d} || 0;
+						my $name = sprintf("p2p.ipv%d.%s.src-%05d.dst-%05d.rrd", $p, $type, $s, $d);
+						my $file = "$dir/$name";
+						my @values;
+						if ($in || $out) {
+							if (!$exists{$name}) {
+								make_path($dir) unless -d $dir;
+								create_rrd($file, defined $prev->{flushts} ? $prev->{flushts} - 1 : $ts - int($interval) - 1, \%n) or next;
+							} elsif (defined $prev->{flushts} && !written_at_prev($s, $d, $prev)) {
+								push @values, "$prev->{flushts}:0:0";
+								$n{prezero}++;
+							}
+							push @values, sprintf("%d:%d:%d", $ts, int($in / $interval), int($out / $interval));
+						} elsif ($exists{$name} && idle_due($s, $d, $job->{counter}, $job->{k})) {
+							push @values, "$ts:0:0";
+						} elsif ($create_idle && !$exists{$name}) {
+							make_path($dir) unless -d $dir;
+							create_rrd($file, $ts - int($interval) - 1, \%n) or next;
+							push @values, "$ts:0:0";
+						}
+						update_rrd($file, \@opts, \@values, \%n) if @values;
+					}
+
+					my $i = $ind->{$s}{in} || 0;
+					my $o = $ind->{$s}{out} || 0;
+					$agg_in += $i;
+					$agg_out += $o;
+					my $f = sprintf("%s/ipv%d/%s/individual/individual.ipv%d.%s.src-%05d.rrd", $basedir, $p, $type, $p, $type, $s);
+					ensure_rrd($f, $ts - int($interval) - 1, \%n) or next;
+					update_rrd($f, \@opts, [sprintf("%d:%d:%d", $ts, int($i / $interval), int($o / $interval))], \%n);
+				}
+				my $f = sprintf("%s/ipv%d/%s/aggregate/aggregate.ipv%d.%s.vlan%05d.rrd", $basedir, $p, $type, $p, $type, $vlan);
+				ensure_rrd($f, $ts - int($interval) - 1, \%n) or next;
+				update_rrd($f, \@opts, [sprintf("%d:%d:%d", $ts, int($agg_in / $interval), int($agg_out / $interval))], \%n);
+			}
+		}
+	}
+
+	return if $quiet;
+	my $s = $job->{stats};
+	my $samples = $s->{samples} || 0;
+	my $pct = sub { $samples ? sprintf('%.1f%%', 100 * ($s->{$_[0]} || 0) / $samples) : '0%' };
+	my @drop = map { "$_=".$pct->($_) } grep { $s->{$_} } qw(src_unknown dst_unknown dst_group vlan_unknown not_ip same_vli);
+	printf STDERR "flush: interval=%.1fs%s duration=%.1fs samples=%d accepted=%s%s rrd: written=%d created=%d prezero=%d errors=%d idle-every=%d\n",
+		$interval, ($job->{deferred} ? " (extended x$job->{deferred})" : ''), tv_interval($t0), $samples, $pct->('accepted'),
+		(@drop ? ' dropped: '.join(' ', @drop) : ''), @n{qw(written created prezero errors)}, $job->{k};
+}
+
+sub written_at_prev {
+	my ($s, $d, $prev) = @_;
+	return 1 if $prev->{active}{"$s-$d"};
+	return idle_due($s, $d, $prev->{counter}, $prev->{k});
+}
+
+sub list_dir {
+	my ($dir) = @_;
+	opendir(my $dh, $dir) or return ();
+	my @f = grep { /\.rrd$/ } readdir($dh);
+	closedir($dh);
+	return @f;
+}
+
+sub ensure_rrd {
+	my ($file, $start, $n) = @_;
+	return 1 if -s $file;
+	my $dir = dirname($file);
+	make_path($dir) unless -d $dir;
+	return create_rrd($file, $start, $n);
+}
+
+sub create_rrd {
+	my ($file, $start, $n) = @_;
+	# data sources and archives exactly as the stock handler creates them
+	RRDs::create($file, '--start', $start,
+		'DS:traffic_in:GAUGE:600:U:U',
+		'DS:traffic_out:GAUGE:600:U:U',
+		'RRA:AVERAGE:0.5:1:600',    'RRA:MAX:0.5:1:600',
+		'RRA:AVERAGE:0.5:6:700',    'RRA:MAX:0.5:6:700',
+		'RRA:AVERAGE:0.5:24:750',   'RRA:MAX:0.5:24:750',
+		'RRA:AVERAGE:0.5:288:3650', 'RRA:MAX:0.5:288:3650',
+	);
+	if (my $err = RRDs::error) {
+		print STDERR "WARNING: while creating $file: $err\n";
+		$n->{errors}++;
+		return 0;
+	}
+	$n->{created}++;
+	return 1;
+}
+
+sub update_rrd {
+	my ($file, $opts, $values, $n) = @_;
+	RRDs::update($file, @$opts, @$values);
+	if (my $err = RRDs::error) {
+		print STDERR "WARNING: while updating $file: $err\n";
+		$n->{errors}++;
+		return 0;
+	}
+	$n->{written}++;
+	return 1;
+}
