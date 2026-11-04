@@ -345,7 +345,7 @@ interface CoverageInfra {
   outage_points: number;
   bucket_seconds: number;
   series: { t: number; mrtg: number; sflow: number; ratio: number | null }[];
-  verdict: "ok" | "loss" | "double" | "unknown" | "error";
+  verdict: "ok" | "loss" | "double" | "none" | "unknown" | "error";
   message: string;
 }
 

@@ -53,3 +53,14 @@ def test_coverage_ratio_and_verdicts(admin, db, tenant, monkeypatch):
     infra = admin.get("/api/v1/ixp/sflow-coverage", params={"period": "day"}).json()["infrastructures"][0]
     assert infra["verdict"] == "ok"
     assert admin.get("/api/v1/ixp/sflow-coverage", params={"period": "year"}).status_code == 422
+
+
+def test_infrastructure_with_no_sflow_at_all(admin, db, tenant, monkeypatch):
+    i = _integration(db, tenant, demo=True)
+    ixpmanager.sync_members(db, i, client=FakeIxpm())
+    db.commit()
+    monkeypatch.setattr(grapher, "_demo", _flat(0, 0, 1000))
+    grapher._cache.clear()
+    infra = admin.get("/api/v1/ixp/sflow-coverage").json()["infrastructures"][0]
+    assert infra["verdict"] == "none" and infra["ratio"] == 0.0
+    assert infra["outage_points"] == 288 and "recorded nothing" in infra["message"]
