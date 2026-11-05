@@ -180,27 +180,36 @@ def test_configured_macs_uses_the_admin_api_path():
         c.configured_macs()
 
 
-def test_p2p_health_tries_busy_pairs(admin, db, tenant, monkeypatch):
+def test_p2p_health_follows_a_member_with_sflow_traffic(admin, db, tenant, monkeypatch):
     i = _integration(db, tenant, demo=True)
     ixpmanager.sync_members(db, i, client=FakeIxpm())
     db.commit()
     real = grapher._demo
 
-    def only(pair):
+    def demo_with(member: set, pairs: set):
+        """sFlow traffic only for these VLAN interfaces and these (svli, dvli) pairs."""
+
         def demo(graph, params, kind):
-            if graph == "p2p" and (params.get("svli"), params.get("dvli")) != pair:
-                return [] if kind == "log" else {"statistics": {}}
+            empty = [] if kind == "log" else {"statistics": {}}
+            if graph == "vlaninterface" and params.get("id") not in member:
+                return empty
+            if graph == "p2p" and (params.get("svli"), params.get("dvli")) not in pairs:
+                return empty
             return real(graph, params, kind)
 
         return demo
 
-    # only Google -> Hurricane Electric (502 -> 503) exchanged sampled traffic
-    monkeypatch.setattr(grapher, "_demo", only((502, 503)))
-    grapher._cache.clear()
-    p2p = admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
-    assert p2p["ok"] and p2p["pair"] == [15169, 6939]
+    def p2p_check(demo):
+        monkeypatch.setattr(grapher, "_demo", demo)
+        grapher._cache.clear()
+        return admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
 
-    monkeypatch.setattr(grapher, "_demo", only((0, 0)))
-    grapher._cache.clear()
-    p2p = admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
-    assert not p2p["ok"] and p2p["reason"] == "no_data" and "None of 6 pairs" in p2p["error"]
+    # only Google's port (502) is sampled; its traffic went to Hurricane Electric (503)
+    c = p2p_check(demo_with({502}, {(502, 503)}))
+    assert c["ok"] and c["pair"] == [15169, 6939]
+
+    c = p2p_check(demo_with(set(), set()))
+    assert not c["ok"] and "has any sFlow traffic of its own" in c["error"]
+
+    c = p2p_check(demo_with({502}, set()))
+    assert not c["ok"] and "AS15169 has sFlow traffic of its own" in c["error"]
