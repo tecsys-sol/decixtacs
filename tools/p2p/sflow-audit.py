@@ -79,6 +79,18 @@ class MacTable:
                     multi[(tag, mac)].add(vli)
         # the handler walks infrastructures in hash order and takes the first hit
         self.ambiguous = {k: v for k, v in multi.items() if len(v) > 1}
+        # MAC -> the one tag it is known on (None when on several), for samples without a VLAN
+        tags_of: Dict[str, set] = defaultdict(set)
+        for tags in self.raw.values():
+            for tag, macs in tags.items():
+                for mac in macs:
+                    tags_of[mac].add(tag)
+        self.mac2tag = {m: (next(iter(t)) if len(t) == 1 else None) for m, t in tags_of.items()}
+
+    def tag_by_mac(self, src: str, dst: str) -> Optional[str]:
+        """The improved handler's fallback: both MACs known on exactly one tag, the same one."""
+        t = self.mac2tag.get(src)
+        return t if t and t == self.mac2tag.get(dst) else None
 
     def get(self, tag: str, mac: str) -> int:
         for tags in self.raw.values():
@@ -144,6 +156,8 @@ class Audit:
         self.port_src: Dict[Tuple[str, str], Dict[int, List[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
         self.pair_samples: Counter = Counter()
         self.pair_bytes: Counter = Counter()
+        self.by_mac_bytes = 0  # dropped for VLAN, placeable by MAC (improved handler)
+        self.port_est: Counter = Counter()  # (agent, input port) -> sampled bytes, all samples
 
     def feed(self, line: str) -> None:
         if not line.startswith("FLOW"):
@@ -162,6 +176,7 @@ class Audit:
         self.samples += 1
         self.agent_samples[agent] += 1
         self.agent_bytes[agent] += est
+        self.port_est[(agent, inport)] += est
         self.agent_rates[agent][rate] += 1
         self.agent_eth[agent][eth] += 1
         if tag == "0":
@@ -170,6 +185,10 @@ class Audit:
         reason, s, d = classify(self.t, eth, tag, src, dst)
         self.reason_samples[reason] += 1
         self.reason_bytes[reason] += est
+        if reason in ("vlan_zero", "vlan_unknown"):
+            t = self.t.tag_by_mac(src, dst)
+            if t and classify(self.t, eth, t, src, dst)[0] == "accepted":
+                self.by_mac_bytes += est
 
         if reason in ("src_unknown", "dst_unknown"):
             mac = src if reason == "src_unknown" else dst
@@ -286,6 +305,7 @@ class Audit:
             },
             "traffic_by_reason_pct": {k: round(100.0 * v / total, 2) for k, v in self.reason_bytes.most_common()},
             "lost_pct": round(100.0 * sum(lost.values()) / total, 2),
+            "placeable_by_mac_pct": round(100.0 * self.by_mac_bytes / total, 2),
             "unknown_macs": [
                 {
                     "reason": r,
@@ -318,33 +338,57 @@ def sequence_loss(lines) -> dict:
     dgram: Dict[str, List[int]] = defaultdict(list)
     samp: Dict[Tuple[str, str], List[int]] = defaultdict(list)
     drops: Dict[Tuple[str, str], List[int]] = defaultdict(list)
-    agent = sub = None
-    st = src = seq = None
+    # (agent IP, ifIndex) -> [(switch uptime ms, ifInOctets)], from interface counter samples
+    counters: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
+    # (agent, sourceId) -> [(sampleSequenceNo, samplePool, meanSkipCount)], from flow samples
+    pools: Dict[Tuple[str, str], List[Tuple[int, int, int]]] = defaultdict(list)
+    agent = sub = ip = None
+    uptime = None
+    smp: Dict[str, str] = {}
     for raw in lines:
         parts = raw.split(None, 1)
-        if len(parts) != 2:
-            if raw.startswith("endSample") and st == "FLOWSAMPLE" and agent and src and seq is not None:
-                samp[(agent, src)].append(seq)
-            if raw.startswith("startSample"):
-                st = src = seq = None
+        if not parts:
             continue
-        k, v = parts[0], parts[1].strip()
-        if k == "agent":
-            agent = v + (f"/{sub}" if sub not in (None, "0") else "")
+        k = parts[0]
+        v = parts[1].strip() if len(parts) > 1 else ""
+        # sflowtool writes "startSample ------" / "endSample   ------": the dashes are not a value
+        if k == "startSample":
+            smp = {}
+        elif k == "endSample":
+            st = smp.get("sampleType")
+            src, seq = smp.get("sourceId"), smp.get("sampleSequenceNo")
+            if st == "FLOWSAMPLE" and agent and src and seq:
+                samp[(agent, src)].append(int(seq))
+                if "dropEvents" in smp:
+                    drops[(agent, src)].append(int(smp["dropEvents"]))
+                if "samplePool" in smp and "meanSkipCount" in smp:
+                    pools[(agent, src)].append((int(seq), int(smp["samplePool"]), int(smp["meanSkipCount"])))
+            elif st == "COUNTERSSAMPLE" and ip and uptime is not None and "ifIndex" in smp and "ifInOctets" in smp:
+                counters[(ip, smp["ifIndex"])].append((uptime, int(smp["ifInOctets"])))
+            smp = {}
+        elif k == "startDatagram":
+            agent = sub = ip = None
+            uptime = None
         elif k == "agentSubId":
             sub = v
+        elif k == "agent":
+            ip = v
+            agent = v + (f"/{sub}" if sub not in (None, "0") else "")
         elif k == "packetSequenceNo" and agent:
             dgram[agent].append(int(v))
-        elif k == "sampleType":
-            st = v
-        elif k == "sourceId":
-            src = v
-        elif k == "sampleSequenceNo":
-            seq = int(v)
-        elif k == "dropEvents" and agent and src and st == "FLOWSAMPLE":
-            drops[(agent, src)].append(int(v))
-        elif k == "startDatagram":
-            agent = sub = None
+        elif k == "sysUpTime":
+            uptime = int(v)
+        elif k in (
+            "sampleType",
+            "sourceId",
+            "sampleSequenceNo",
+            "dropEvents",
+            "samplePool",
+            "meanSkipCount",
+            "ifIndex",
+            "ifInOctets",
+        ):
+            smp.setdefault(k, v)
 
     def gaps(seqs: List[int]) -> Tuple[int, int]:
         """(expected, missing), restarting the count where the sequence resets."""
@@ -380,6 +424,41 @@ def sequence_loss(lines) -> dict:
                 "agent_drop_events": d,
             }
         )
+    out["counters"] = {k: r for k, r in ((k, _counter_rate(v)) for k, v in counters.items()) if r is not None}
+    out["effective_rates"] = _effective_rates(pools)
+    return out
+
+
+def _counter_rate(obs: List[Tuple[int, int]]) -> Optional[float]:
+    """Bytes/s from successive ifInOctets readings, timed by the switch's own uptime."""
+    obs = sorted(set(obs))
+    total = secs = 0.0
+    for (t0, o0), (t1, o1) in zip(obs, obs[1:]):
+        if t1 > t0 and o1 >= o0:  # a counter that went backwards was reset: skip that step
+            total += o1 - o0
+            secs += (t1 - t0) / 1000.0
+    return total / secs if secs >= 10 else None
+
+
+def _effective_rates(pools) -> List[dict]:
+    """Per agent: packets the samplers saw (samplePool) per sample they generated, against the
+    sampling rate they report. A higher effective rate means each sample stands for more traffic
+    than the switch says, and every estimate - P2P graphs included - comes out too low."""
+    per: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])  # pool delta, seq delta, reported x seq
+    for (agent, _src), obs in pools.items():
+        obs = sorted(set(obs))
+        for (s0, p0, _), (s1, p1, k1) in zip(obs, obs[1:]):
+            ds = (s1 - s0) % 2**32
+            dp = (p1 - p0) % 2**32
+            if 0 < ds < 10**6:
+                a = per[agent.split("/")[0]]
+                a[0] += dp
+                a[1] += ds
+                a[2] += k1 * ds
+    out = []
+    for agent, (dp, ds, rs) in sorted(per.items()):
+        if ds:
+            out.append({"agent": agent, "reported_rate": round(rs / ds), "effective_rate": round(dp / ds)})
     return out
 
 
@@ -387,6 +466,49 @@ def _span(seg: List[int]) -> Tuple[int, int]:
     uniq = sorted(set(seg))
     expected = uniq[-1] - uniq[0] + 1
     return expected, expected - len(uniq)
+
+
+def sampling_vs_counters(audit: "Audit", loss: dict, seconds: Optional[float], unsampled_bps: float = 1e8) -> dict:
+    """How much of each switch's ingress traffic its samples account for.
+
+    A port's own ifInOctets counter (from sFlow counter samples) is the truth. The samples
+    taken on that port, scaled by their sampling rate, should add up to it. Ports with
+    traffic and no samples at all are either member ports where sampling is off - their
+    traffic is missing from every P2P graph - or core links, which correctly are not sampled.
+    """
+    if not seconds or not loss or not loss.get("counters"):
+        return {}
+    counters = loss["counters"]
+    agents: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0, 0])
+    unsampled = []
+    for (ip, ifindex), rate in counters.items():
+        est = audit.port_est.get((ip, ifindex), 0) / seconds
+        if est > 0:
+            a = agents[ip]
+            a[0] += rate
+            a[1] += est
+            a[2] += 1
+        elif rate * 8 >= unsampled_bps:
+            unsampled.append({"agent": ip, "ifindex": ifindex, "mbps": round(rate * 8 / 1e6, 1)})
+    per_agent = [
+        {
+            "agent": ip,
+            "ports": int(n),
+            "counter_mbps": round(c * 8 / 1e6, 1),
+            "sampled_mbps": round(e * 8 / 1e6, 1),
+            "ratio": round(e / c, 3) if c else None,
+        }
+        for ip, (c, e, n) in sorted(agents.items())
+    ]
+    tc = sum(a[0] for a in agents.values())
+    te = sum(a[1] for a in agents.values())
+    unsampled.sort(key=lambda u: -u["mbps"])
+    return {
+        "per_agent": per_agent,
+        "overall_ratio": round(te / tc, 3) if tc else None,
+        "unsampled_ports": unsampled,
+        "unsampled_mbps": round(sum(u["mbps"] for u in unsampled), 1),
+    }
 
 
 def print_text(r: dict, loss: Optional[dict]) -> None:
@@ -405,6 +527,10 @@ def print_text(r: dict, loss: Optional[dict]) -> None:
     for k, v in r["traffic_by_reason_pct"].items():
         w(f"   {v:6.2f}%  {k:13s} {REASONS[k]}\n")
     w(f"   => {r['lost_pct']:.2f}% of peering traffic never reaches a P2P graph\n")
+    if r.get("placeable_by_mac_pct"):
+        pct = r["placeable_by_mac_pct"]
+        w(f"   => {pct:.2f}% has no usable VLAN but both MACs are known on one tag: the improved\n")
+        w("      handler (tools/p2p/sflow-to-rrd-handler) places it there instead of dropping it\n")
 
     if r["unknown_macs"]:
         w("\n== MACs the handler cannot place (largest first)\n")
@@ -439,6 +565,34 @@ def print_text(r: dict, loss: Optional[dict]) -> None:
             if k in p["pairs_by_error"]:
                 pairs, share = p["pairs_by_error"][k], p["traffic_share_by_error"][k]
                 w(f"   error {k:>6s}: {pairs:6d} member pairs, {share:5.1f}% of traffic\n")
+
+    cmpc = r.get("sampling_vs_counters") or {}
+    if cmpc:
+        w("\n== Do the samples account for the traffic? (sampled estimate vs the ports' own ifInOctets)\n")
+        for a in cmpc["per_agent"]:
+            flag = "  <- under-sampled" if a["ratio"] is not None and a["ratio"] < 0.8 else ""
+            w(
+                f"   {a['agent']:16s} {a['ports']:4d} sampled ports: counters {a['counter_mbps']:10.1f} Mb/s, "
+                f"samples {a['sampled_mbps']:10.1f} Mb/s  = {100 * (a['ratio'] or 0):5.1f}%{flag}\n"
+            )
+        if cmpc["overall_ratio"] is not None:
+            pct = 100 * cmpc["overall_ratio"]
+            w(f"   => on the ports that are sampled, samples account for {pct:.1f}% of the traffic\n")
+        if cmpc["unsampled_ports"]:
+            w(
+                f"   {len(cmpc['unsampled_ports'])} port(s) carry traffic but sent no flow samples "
+                f"({cmpc['unsampled_mbps']:.0f} Mb/s in total). Member ports among them are missing from P2P\n"
+                "   graphs entirely; core links are correctly not sampled. Look the ifIndex up in IXP Manager:\n"
+            )
+            for u in cmpc["unsampled_ports"][:15]:
+                w(f"     {u['agent']:16s} ifIndex {u['ifindex']:>6s}  {u['mbps']:10.1f} Mb/s\n")
+    rates = (loss or {}).get("effective_rates") or []
+    if rates:
+        w("\n== Sampling rate: reported by the switch vs effective (packets seen per sample)\n")
+        for e in rates:
+            off = e["effective_rate"] / e["reported_rate"] if e["reported_rate"] else 0
+            flag = f"  <- each sample stands for {off:.1f}x the reported rate" if off > 1.2 else ""
+            w(f"   {e['agent']:16s} reported 1:{e['reported_rate']:<8d} effective 1:{e['effective_rate']:<8d}{flag}\n")
 
     if loss:
         w("\n== Loss before the handler (from sequence numbers)\n")
@@ -480,6 +634,10 @@ def main(argv=None) -> int:
         with open(a.full, errors="replace") as ff:
             loss = sequence_loss(ff)
     r = audit.report(a.seconds, a.top)
+    r["sampling_vs_counters"] = sampling_vs_counters(audit, loss, a.seconds)
+    if loss:
+        # tuple keys are for the computation only
+        loss = {k: v for k, v in loss.items() if k != "counters"}
     if a.json:
         json.dump({"audit": r, "loss": loss}, sys.stdout, indent=2)
         sys.stdout.write("\n")

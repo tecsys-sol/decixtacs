@@ -28,20 +28,22 @@ needs = pytest.mark.skipif(
 MACS = {"1": {"100": {f"02{i:010x}": i for i in range(1, 7)}}}
 # MACs stored the way a person might type them: the stock handler never matches these
 MACS["1"]["100"]["02:00:00:00:00:07".upper()] = 7
+# a member on another peering VLAN (tag 200)
+MACS["1"]["200"] = {f"02{8:010x}": 8}
 
 # pair 1->2: 20s on, 30s off, 10s on, then off; 3->4 and 7->3 carry steady background traffic
 GENERATOR = textwrap.dedent(
     """
     import os, sys, time
     t0 = float(os.environ["T0"]); size, skip = 1000, 10
-    def line(s, d):
-        head = f"FLOW,10.0.0.1,{s},{d},02{s:010x},02{d:010x},0x0800,100,100,a,b,6,0,64,1,2,0x10"
+    def line(s, d, vlan=100):
+        head = f"FLOW,10.0.0.1,{s},{d},02{s:010x},02{d:010x},0x0800,{vlan},{vlan},a,b,6,0,64,1,2,0x10"
         return f"{head},{size},{size-18},{skip}\\n"
     while True:
         t = time.time() - t0
         if t > 105: break
         on = 0 <= t < 20 or 50 <= t < 60
-        out = line(3, 4) + line(7, 3)
+        out = line(3, 4) + line(7, 3) + line(4, 6, vlan=0) + line(4, 8, vlan=0)
         if on: out += line(1, 2) * 2
         sys.stdout.write(out); sys.stdout.flush()
         time.sleep(0.01)
@@ -160,5 +162,9 @@ def test_idle_pairs_read_zero_and_traffic_is_not_smeared(tmp_path):
 
     # a pair that never carried traffic gets no file
     assert not (tmp_path / "ipv4/bytes/p2p/src-00005").exists()
+    # VLAN 0: placed when both MACs are on one tag, dropped when they are not
+    assert (tmp_path / "ipv4/bytes/p2p/src-00004/p2p.ipv4.bytes.src-00004.dst-00006.rrd").exists()
+    assert not (tmp_path / "ipv4/bytes/p2p/src-00004/p2p.ipv4.bytes.src-00004.dst-00008.rrd").exists()
+    assert "vlan-by-mac=" in flushes[-2] and "vlan_zero=" in flushes[-2]
     # the MAC stored as 02:00:00:00:00:07 in upper case still matched
     assert (tmp_path / "ipv4/bytes/p2p/src-00007/p2p.ipv4.bytes.src-00007.dst-00003.rrd").exists()

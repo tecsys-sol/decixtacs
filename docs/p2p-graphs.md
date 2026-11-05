@@ -125,8 +125,13 @@ peer is missing altogether. Common reasons:
 - **Wrong VLAN tag.** The lookup is by the sample's VLAN tag:
   - A VLAN whose `number` in IXP Manager does not match the tag on the wire drops
     everything on it.
-  - A switch that exports no VLAN for untagged frames (no "extended switch" record)
-    reports VLAN 0, and everything from it is dropped.
+  - A switch that exports no VLAN for untagged member ports reports VLAN 0, and
+    everything from it is dropped. On collector01 all seven switches do this: every
+    sample carries `in_vlan 0`, even with an "extended switch" record present. The
+    improved handler places such samples by MAC: a member's router MAC is configured on
+    one VLAN interface, so when the source and destination MAC are each known on
+    exactly one tag, and it is the same tag, that is the VLAN. The audit reports how
+    much traffic this recovers.
 - **Case or format.** sflowtool prints lowercase hex without separators. The stock
   handler matches exactly, so an entry stored as `AA:BB:…` never matches.
 - **Duplicate MACs.** The same MAC on two virtual interfaces (a moved port, a reseller
@@ -159,6 +164,25 @@ GROUP BY l.mac, vli.vlanid HAVING COUNT(*) > 1;
 ```
 
 The improved handler also normalises MAC case and separators.
+
+### 2a. Samples that do not add up to the traffic
+
+Each sample stands for `samplingRate` packets. If a switch samples fewer packets than its
+reported rate says, or samples only some of its member ports, the samples add up to less
+than the ports carried. Then every P2P graph reads low before the collector is even
+involved. sFlow also carries each port's own `ifInOctets` counter, which is the truth to
+compare against.
+
+**Check:** `capture-and-audit.sh`, under *Do the samples account for the traffic?*:
+- **Per switch:** the sampled estimate against the counters of the ports it samples.
+- **Unsampled ports:** ports that carry traffic but sent no flow samples. Member ports
+  among these are missing from every P2P graph. Core links are correctly not sampled,
+  so check each `ifIndex` in IXP Manager before acting.
+- **Sampling rate:** each switch's effective rate (packets seen per sample, from
+  `samplePool`) against the rate it reports.
+
+**Fix:** switch configuration. Enable ingress sampling on every member port, and check
+any rate the switch adapts under load.
 
 ### 3. Packets sampled twice: graphs that read high
 
@@ -318,6 +342,10 @@ Run them in this order:
    - Reported per switch: agents and their sampling rates; core links being sampled.
    - From the sequence numbers: datagram and sample loss between the switches and the
      collector, and drops the switches themselves report.
+   - From the switches' interface counters: what share of each port's traffic the
+     samples account for, ports that are never sampled, and effective against reported
+     sampling rate. This runs on the capture alone; nothing is queried on the switches.
+   - Traffic without a usable VLAN that the improved handler would place by MAC.
    - Delete the capture afterwards; it holds packet headers.
 4. **`rrd-check.py`** on the collector:
    - `pair A B`: the A→B and B→A files must mirror each other. A mismatch means one
@@ -385,6 +413,9 @@ Differences in behaviour, all deliberate:
 - **When an idle pair turns active, it first gets a zero at the previous flush time.**
   That keeps the new rate from being spread back over the idle minutes. A test
   (`tools/p2p/tests/test_handler.py`) checks that this holds, and fails without it.
+- **Samples with VLAN 0 are placed by MAC** (cause 2), when both MACs are known on the
+  same single tag. Anything ambiguous is still dropped. `--no-vlan-from-mac` turns this
+  off.
 
 ## Versions
 

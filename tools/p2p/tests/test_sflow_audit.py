@@ -105,6 +105,9 @@ def test_sequence_loss_from_full_output():
         ]
     out = sa.sequence_loss(t + "\n" for t in text)
     a = out["agents"][0]
+    # samples 2, 4, 8, 10 of 2..10 arrived: 5 of 9 missing (the dashes after
+    # startSample/endSample once hid every sample from this count)
+    assert a["flow_sample_loss_pct"] == round(100 * 5 / 9, 2)
     assert a["datagrams"] == 4 and a["datagram_loss_pct"] == 20.0
     assert a["agent_drop_events"] == 40
 
@@ -123,3 +126,57 @@ def test_cli_json(tmp_path, capsys):
     # empty table as IXP Manager serialises it
     (tmp_path / "empty.json").write_text("[]")
     assert sa.main(["--lines", str(tmp_path / "lines"), "--macs", str(tmp_path / "empty.json")]) == 0
+
+
+def _datagram(agent, uptime, samples):
+    out = [
+        "startDatagram =================================",
+        f"agent {agent}",
+        "packetSequenceNo 1",
+        f"sysUpTime {uptime}",
+    ]
+    for smp in samples:
+        out += ["startSample ----------------------", *smp, "endSample   ----------------------"]
+    return out + ["endDatagram   ================================="]
+
+
+def test_samples_against_port_counters_and_effective_rate():
+    # port 5 carries 1000 bytes/s by its own counter over 60s of switch uptime; port 7 carries
+    # 50 MB/s and is never sampled
+    def ctr(ifindex, octets):
+        return ["sampleType COUNTERSSAMPLE", f"sourceId 0:{ifindex}", f"ifIndex {ifindex}", f"ifInOctets {octets}"]
+
+    def flowsmp(seq, pool):
+        return [
+            "sampleType FLOWSAMPLE",
+            f"sampleSequenceNo {seq}",
+            "sourceId 0:5",
+            "meanSkipCount 1000",
+            f"samplePool {pool}",
+            "dropEvents 0",
+        ]
+
+    text = _datagram("10.0.0.1", 0, [ctr(5, 0), ctr(7, 0), flowsmp(1, 0)]) + _datagram(
+        "10.0.0.1", 60000, [ctr(5, 60000), ctr(7, 3_000_000_000), flowsmp(11, 40000)]
+    )
+    loss = sa.sequence_loss(t + "\n" for t in text)
+    # 40000 packets seen over 10 samples: one sample per 4000 packets, not the 1000 reported
+    assert loss["effective_rates"] == [{"agent": "10.0.0.1", "reported_rate": 1000, "effective_rate": 4000}]
+
+    audit = sa.Audit(sa.MacTable(MACS), core_threshold=3)
+    for _ in range(3):  # 3 samples of 10 bytes at 1:1000 in 60s = 500 bytes/s, half the counter
+        audit.feed(flow(inp=5, size=10, rate=1000))
+    cmp = sa.sampling_vs_counters(audit, loss, seconds=60)
+    assert cmp["per_agent"] == [
+        {"agent": "10.0.0.1", "ports": 1, "counter_mbps": 0.0, "sampled_mbps": 0.0, "ratio": 0.5}
+    ]
+    assert cmp["overall_ratio"] == 0.5
+    assert cmp["unsampled_ports"] == [{"agent": "10.0.0.1", "ifindex": "7", "mbps": 400.0}]
+
+
+def test_vlan_zero_placeable_by_mac():
+    macs = {"1": {"100": {"0000000000a1": 11, "0000000000b2": 12}, "200": {"0000000000c3": 13}}}
+    r = run([flow(vlan=0), flow(vlan=0, dst="0000000000c3"), flow()], macs=macs)
+    assert round(r["traffic_by_reason_pct"]["vlan_zero"], 1) == 66.7
+    # a1 -> b2 share tag 100; a1 -> c3 do not share a tag and stay dropped
+    assert r["placeable_by_mac_pct"] == round(100 / 3, 2)
