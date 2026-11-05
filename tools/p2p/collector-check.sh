@@ -182,24 +182,35 @@ if [ -n "$COUNT_FILES" ] && [ -d "$BASE" ]; then
     info "$(printf '%9d' "$NIND")  individual"
     if [ -n "${NVLI:-}" ] && [ "$NVLI" -gt 1 ]; then
         FULL=$((4 * NVLI * (NVLI - 1)))
-        info "the 7.4.0 handler keeps one file per ordered member pair x2 protocols x2 types: $FULL for $NVLI interfaces,"
-        info "and updates every one of them on every flush, traffic or not"
+        info "the stock handler writes one file per ordered pair of the $NVLI current interfaces x2 protocols x2 types:"
+        info "$FULL updates per flush, traffic or not"
+        if [ "$NP2P" -gt "$FULL" ]; then
+            STALE=$((NP2P - FULL))
+            warn "$STALE pair files (~$((STALE * 182 / 1000000)) GB) belong to interfaces no longer in the MAC table: never updated again"
+            info "list them: find $BASE -path '*/p2p/*' -name '*.rrd' -mtime +7   (current pairs are rewritten every few minutes)"
+        fi
     fi
-    # what one stock flush writes: every pair file it has, every individual and aggregate file
-    PER_FLUSH=$((NP2P + NIND + 4))
 fi
 
 # --- finish the rate measurements -------------------------------------------------------
-# rrdcached's update counter, once a second: each flush shows up as a run of busy seconds
+# Is anyone reading the samples? sflowtool writes each one into a pipe to the handler. When the
+# handler stops reading (the stock handler while it flushes) the pipe fills and sflowtool blocks in
+# write() - and while it is blocked nobody reads the UDP socket. Sampling sflowtool's kernel wait
+# state a few times a second measures exactly the share of time samples go unread.
 NOW=$(date +%s); LEFT=$((T0 + WINDOW - NOW))
 [ "$LEFT" -gt 0 ] && printf '\n(measuring for another %ss ...)\n' "$LEFT"
-TICKS=()
-PREV=$(rrdc_stat | stat_val UpdatesReceived)
+PROBES=0 BLOCKED=0 QMAX=0
 while [ "$(date +%s)" -lt $((T0 + WINDOW)) ]; do
-    sleep 1
-    CUR=$(rrdc_stat | stat_val UpdatesReceived)
-    [ -n "$CUR" ] && [ -n "$PREV" ] && TICKS+=($((CUR - PREV)))
-    PREV=$CUR
+    if [ -n "$SPID" ] && [ -r "/proc/$SPID/wchan" ]; then
+        W=$(cat "/proc/$SPID/wchan" 2>/dev/null)
+        SC=$(cut -d' ' -f1,2 "/proc/$SPID/syscall" 2>/dev/null)
+        PROBES=$((PROBES + 1))
+        # x86_64 write(2) is syscall 1; fd 1 is sflowtool's stdout, the pipe
+        case "$W $SC" in *pipe_write*|*" 1 0x1") BLOCKED=$((BLOCKED + 1)) ;; esac
+    fi
+    Q=$(udp_line); Q=${Q%% *}
+    [ -n "$Q" ] && [ "$Q" -gt "$QMAX" ] && QMAX=$Q
+    sleep 0.2
 done
 U1=$(udp_line); R1=$(snmp_rcvbuf); S1=$(rrdc_stat); C1=${HPID:+$(cpu_ticks "$HPID")}
 T1=$(date +%s); DT=$((T1 - T0))
@@ -228,36 +239,30 @@ if [ -n "${HPID:-}" ] && [ -n "${C0:-}" ] && [ -n "${C1:-}" ]; then
     fi
 fi
 
-head_ "Flush throughput (rrdcached) over ${DT}s"
-if [ -n "$S0" ] && [ -n "$S1" ]; then
+head_ "Is the handler reading? (sflowtool sampled $PROBES times over ${DT}s)"
+if [ "$PROBES" -gt 0 ]; then
+    BPCT=$((100 * BLOCKED / PROBES))
+    info "sflowtool blocked writing to the handler ${BPCT}% of the time; socket receive queue peaked at $QMAX bytes"
+    if [ "$BPCT" -ge 10 ]; then
+        fail "for ${BPCT}% of the time nobody reads the sFlow socket: samples queue, then are dropped once it fills."
+        if [ -n "$IMPROVED" ]; then
+            info "the improved handler is busy even while reading - check its 'flush:' journal lines and its CPU"
+        else
+            info "The stock handler reads nothing while it flushes and divides what it did read by the whole interval:"
+            info "expect P2P graphs to record roughly $((100 - BPCT))% of real traffic, less where the queue overflowed."
+        fi
+    else
+        ok "the handler keeps up: sflowtool blocked only ${BPCT}% of the time"
+    fi
+    [ "$QMAX" -gt $((RMEM / 2)) ] && warn "the receive queue reached over half of rmem_max ($RMEM) - bursts are close to being dropped"
+else
+    warn "could not read sflowtool's state from /proc (run as root)"
+fi
+if [ -n "$S0" ] && [ -n "$S1" ] && [ -n "$(stat_val UpdatesReceived <<<"$S1")" ]; then
     UR=$(( $(stat_val UpdatesReceived <<<"$S1") - $(stat_val UpdatesReceived <<<"$S0") ))
     QL=$(stat_val QueueLength <<<"$S1")
     PERMIN=$((UR * 60 / DT))
-    info "updates received: $PERMIN/min; queue length now: $QL"
-    # busy seconds and the length of each busy run (= one flush)
-    read -r BUSY RUNS LONGEST < <(printf '%s\n' "${TICKS[@]}" | awk '
-        $1>0 {b++; r++; next} {if (r) {n++; if (r>m) m=r}; r=0}
-        END {if (r) {n++; if (r>m) m=r}; print b+0, n+0, m+0}')
-    NT=${#TICKS[@]}
-    FT=${FT:-60}
-    if [ "$NT" -gt 0 ] && [ "$UR" -gt 0 ]; then
-        DUTY=$((100 * BUSY / NT))
-        info "rrdcached busy ${BUSY}s of ${NT}s (${DUTY}%), $RUNS flush burst(s), longest ${LONGEST}s; handler cycle ${FT}s"
-        if [ -n "$IMPROVED" ]; then
-            info "improved handler: it keeps reading while it flushes - its 'flush:' journal lines give the real figures"
-        elif [ "$RUNS" -le 1 ] && [ "$BUSY" -ge $((NT - 2)) ]; then
-            fail "writes never paused in ${NT}s: one flush takes longer than the window - and the stock handler reads no"
-            info "samples while it flushes. Most samples are being lost; P2P graphs read far below real. Re-run with -w 600."
-        elif [ "$DUTY" -ge 10 ]; then
-            fail "the handler spends up to ${DUTY}% of its time flushing, reading no samples: P2P graphs read low by up to that much"
-        else
-            ok "flushes take ${LONGEST}s or less - about ${DUTY}% of the time"
-        fi
-    elif [ "$PERMIN" -eq 0 ]; then
-        fail "rrdcached received no updates in ${DT}s - the handler is not writing"
-    fi
-else
-    warn "could not read rrdcached STATS from $SOCK (install socat or netcat-openbsd)"
+    info "rrdcached: $PERMIN updates/min; queue length now: $QL"
 fi
 
 head_ "Freshness"

@@ -15,10 +15,8 @@ Input is what the handler reads, so the answer is about the real pipeline:
     curl -sH "X-IXP-Manager-API-Key: $KEY" $IXPM/api/v4/sflow-db-mapper/learned-macs > /tmp/macs.json
     sflow-audit.py --lines /tmp/sflow.lines --full /tmp/sflow.full --macs /tmp/macs.json --seconds 120
 
-capture-and-audit.sh does all of that in one go. Python 3.8+, standard library only.
+capture-and-audit.sh does all of that in one go. Python 3.6+, standard library only.
 """
-
-from __future__ import annotations
 
 import argparse
 import json
@@ -27,6 +25,7 @@ import re
 import sys
 import urllib.request
 from collections import Counter, defaultdict
+from typing import Dict, List, Optional, Set, Tuple
 
 IPV4, IPV6 = "0x0800", "0x86dd"
 
@@ -47,7 +46,7 @@ REASONS = {
 }
 
 
-def load_macs(src: str, api_key: str | None) -> dict:
+def load_macs(src: str, api_key: Optional[str]) -> dict:
     if src.startswith(("http://", "https://")):
         req = urllib.request.Request(src, headers={"X-IXP-Manager-API-Key": api_key or ""})
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -59,7 +58,7 @@ def load_macs(src: str, api_key: str | None) -> dict:
 class MacTable:
     """IXP Manager's {infrastructure: {vlan tag: {mac: vli id}}}, looked up like the handler."""
 
-    def __init__(self, raw: dict, infra: str | None = None):
+    def __init__(self, raw: dict, infra: Optional[str] = None):
         if isinstance(raw, list):  # an empty table serialises as []
             raw = {}
         self.raw = {
@@ -68,10 +67,10 @@ class MacTable:
             if infra is None or str(i) == str(infra)
         }
         self.tags = {t for tags in self.raw.values() for t in tags}
-        self.vlis: dict[int, set[tuple[str, str]]] = defaultdict(set)
+        self.vlis: Dict[int, Set[Tuple[str, str]]] = defaultdict(set)
         # every way a MAC could be written, to explain a near miss
-        self.loose: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
-        multi: dict[tuple[str, str], set[int]] = defaultdict(set)
+        self.loose: Dict[str, List[Tuple[str, str, int]]] = defaultdict(list)
+        multi: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
         for infra_id, tags in self.raw.items():
             for tag, macs in tags.items():
                 for mac, vli in macs.items():
@@ -111,7 +110,7 @@ def is_group(mac: str) -> bool:
         return False
 
 
-def classify(table: MacTable, eth: str, tag: str, src: str, dst: str) -> tuple[str, int, int]:
+def classify(table: MacTable, eth: str, tag: str, src: str, dst: str) -> Tuple[str, int, int]:
     """The handler's decision for one sample, with the reason when it drops it."""
     if eth not in (IPV4, IPV6):
         return "not_ip", 0, 0
@@ -137,12 +136,12 @@ class Audit:
         self.reason_samples: Counter = Counter()
         self.agent_samples: Counter = Counter()
         self.agent_bytes: Counter = Counter()
-        self.agent_rates: dict[str, Counter] = defaultdict(Counter)
+        self.agent_rates: Dict[str, Counter] = defaultdict(Counter)
         self.agent_vlan0: Counter = Counter()
-        self.agent_eth: dict[str, Counter] = defaultdict(Counter)
-        self.unknown: dict[tuple[str, str, str], dict] = {}
+        self.agent_eth: Dict[str, Counter] = defaultdict(Counter)
+        self.unknown: Dict[Tuple[str, str, str], dict] = {}
         # (agent, input port) -> source VLI -> [samples, bytes]
-        self.port_src: dict[tuple[str, str], dict[int, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+        self.port_src: Dict[Tuple[str, str], Dict[int, List[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
         self.pair_samples: Counter = Counter()
         self.pair_bytes: Counter = Counter()
 
@@ -199,7 +198,7 @@ class Audit:
         or on egress is the same packet counted a second time.
         """
         core_ports = []
-        home: dict[int, set] = defaultdict(set)
+        home: Dict[int, set] = defaultdict(set)
         for port, srcs in self.port_src.items():
             total = sum(v[0] for v in srcs.values())
             top_vli, (top_n, _) = max(srcs.items(), key=lambda kv: kv[1][0])
@@ -227,7 +226,7 @@ class Audit:
         core_ports.sort(key=lambda c: -c["accepted_bytes"])
         return {"core_ports": core_ports, "off_perimeter_bytes": off_bytes}
 
-    def precision(self, seconds: float | None) -> dict | None:
+    def precision(self, seconds: Optional[float]) -> Optional[dict]:
         """How noisy the P2P graphs are at this sampling rate.
 
         A 5-minute RRD point built from n samples has a relative error of about
@@ -251,7 +250,7 @@ class Audit:
             "traffic_share_by_error": {k: round(100.0 * v / total, 1) for k, v in bytes_by.items()},
         }
 
-    def report(self, seconds: float | None, top: int) -> dict:
+    def report(self, seconds: Optional[float], top: int) -> dict:
         total = sum(self.reason_bytes.values()) or 1
         lost = {
             k: v
@@ -316,9 +315,9 @@ def sequence_loss(lines) -> dict:
     data source. Gaps are datagrams lost between switch and capture point; dropEvents
     are samples the switch itself could not export (agent overload).
     """
-    dgram: dict[str, list[int]] = defaultdict(list)
-    samp: dict[tuple[str, str], list[int]] = defaultdict(list)
-    drops: dict[tuple[str, str], list[int]] = defaultdict(list)
+    dgram: Dict[str, List[int]] = defaultdict(list)
+    samp: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    drops: Dict[Tuple[str, str], List[int]] = defaultdict(list)
     agent = sub = None
     st = src = seq = None
     for raw in lines:
@@ -347,7 +346,7 @@ def sequence_loss(lines) -> dict:
         elif k == "startDatagram":
             agent = sub = None
 
-    def gaps(seqs: list[int]) -> tuple[int, int]:
+    def gaps(seqs: List[int]) -> Tuple[int, int]:
         """(expected, missing), restarting the count where the sequence resets."""
         exp = miss = 0
         seg = [seqs[0]] if seqs else []
@@ -384,13 +383,13 @@ def sequence_loss(lines) -> dict:
     return out
 
 
-def _span(seg: list[int]) -> tuple[int, int]:
+def _span(seg: List[int]) -> Tuple[int, int]:
     uniq = sorted(set(seg))
     expected = uniq[-1] - uniq[0] + 1
     return expected, expected - len(uniq)
 
 
-def print_text(r: dict, loss: dict | None) -> None:
+def print_text(r: dict, loss: Optional[dict]) -> None:
     w = sys.stdout.write
     secs = f" over {r['seconds']:.0f}s" if r["seconds"] else ""
     w(f"\n== Samples{secs}: {r['samples']}  (unparsed lines: {r['unparsed_lines']})\n")

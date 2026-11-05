@@ -13,14 +13,12 @@ Every number in these files comes from one traffic matrix, so they must agree:
                once the improved handler runs (the stock 7.4.0 handler recreates every
                pair's file on its next flush)
 
-Run on the collector. Needs the rrdtool binary. Python 3.8+, standard library only.
+Run on the collector. Needs the rrdtool binary. Python 3.6+, standard library only.
 
   rrd-check.py pair 123 456
   rrd-check.py sum 123 --days 7
   rrd-check.py idle --days 90 -j 8 > idle.txt   # then: xargs -a idle.txt rm --
 """
-
-from __future__ import annotations
 
 import argparse
 import os
@@ -29,20 +27,24 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional, Tuple
 
 SOCK = "unix:/var/run/rrdcached.sock"
 
 
-def daemon_opts(args) -> list[str]:
+def daemon_opts(args) -> List[str]:
     path = args.daemon.split(":", 1)[-1]
     return ["--daemon", args.daemon] if args.daemon and os.path.exists(path) else []
 
 
 def fetch(
-    path: str, start: int, end: int, daemon: list[str], cf: str = "AVERAGE"
-) -> list[tuple[int, float | None, float | None]]:
+    path: str, start: int, end: int, daemon: List[str], cf: str = "AVERAGE"
+) -> List[Tuple[int, Optional[float], Optional[float]]]:
     out = subprocess.run(
-        ["rrdtool", "fetch", path, cf, "-s", str(start), "-e", str(end), *daemon], capture_output=True, text=True
+        ["rrdtool", "fetch", path, cf, "-s", str(start), "-e", str(end), *daemon],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
     )
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip() or f"rrdtool fetch {path} failed")
@@ -56,15 +58,22 @@ def fetch(
     return rows
 
 
-def last(path: str, daemon: list[str]) -> int | None:
+def last(path: str, daemon: List[str]) -> Optional[int]:
     if daemon:
-        out = subprocess.run(["rrdtool", "lastupdate", path, *daemon], capture_output=True, text=True)
+        out = subprocess.run(
+            ["rrdtool", "lastupdate", path, *daemon],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
         for ln in out.stdout.splitlines():
             head = ln.split(":")[0].strip()
             if head.isdigit():
                 return int(head)
         return None
-    out = subprocess.run(["rrdtool", "last", path], capture_output=True, text=True)
+    out = subprocess.run(
+        ["rrdtool", "last", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True
+    )
     return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip().isdigit() else None
 
 
@@ -81,7 +90,7 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
-def human(bps: float | None) -> str:
+def human(bps: Optional[float]) -> str:
     if bps is None:
         return "     n/a"
     v = bps * 8
@@ -236,7 +245,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--base", default="/data/ixpmatrix", help="sflow_rrddir (default /data/ixpmatrix)")
     ap.add_argument("--daemon", default=SOCK, help=f"rrdcached address (default {SOCK}); '' to read files only")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
+    sub.required = True  # the keyword argument needs Python 3.7
     p = sub.add_parser("pair")
     p.add_argument("a", type=int)
     p.add_argument("b", type=int)

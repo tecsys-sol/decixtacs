@@ -88,9 +88,12 @@ sflowtool that drops what is not read, as a full socket buffer does, on a fast S
 At 750 members, the work per flush is 57× the 100-member case. Unless the collector's
 disks are far faster than the bench's, it is losing most of its samples.
 
-**Check:** `collector-check.sh` watches rrdcached's update counter once a second. Each
-flush shows up as a burst of busy seconds. It reports how long flushes take, how much of
-the time the handler is not reading, and the UDP socket's drop counter.
+**Check:** `collector-check.sh` samples sflowtool's kernel state five times a second.
+When the handler stops reading, the pipe between them fills and sflowtool blocks in
+`write()`; while it is blocked nobody reads the UDP socket. The share of time it is
+blocked is the share of samples left unread. On the test bench this read 29% when the
+handler actually lost 28.4%. It also reports the socket's peak receive queue and drop
+counter.
 
 **Fix:** `tools/p2p/sflow-to-rrd-handler`, a drop-in replacement (see
 [Deploying](#deploying-the-improved-handler)):
@@ -299,8 +302,10 @@ Run them in this order:
    - It is also available as `GET /api/v1/ixp/sflow-coverage?period=day|week|month`.
 2. **`collector-check.sh`** on the collector, as root:
    - It reads `ixpmanager.conf` like the handler does.
-   - Then, over about two minutes, it measures UDP drops, handler CPU, flush duration
-     and the on-disk lag.
+   - Then, over about two minutes, it measures how much of the time sflowtool is
+     blocked by the handler, UDP drops, the receive queue, handler CPU and the on-disk
+     lag. It needs neither rrdcached's `STATS` command (often refused with
+     `-P FLUSH,UPDATE`) nor anything installed on the collector.
    - It also checks the MAC-table API, disk, `rmem_max`, the rrdcached write delay and
      the journal.
    - Read only. Use `-w 600` if one flush may take minutes. Use `-x <url>` to also check
@@ -321,14 +326,17 @@ Run them in this order:
      files are missing (disk full, failed creates).
    - `lag`: how far the on-disk files trail rrdcached.
    - `idle --days 90`: P2P files with no traffic at all, which are safe to delete
-     **once the improved handler runs**. The stock handler recreates every pair's file
-     on its next flush, so pruning under it frees nothing. Its every-minute zero writes
-     also keep every file's mtime fresh, so a `find -mtime` prune finds nothing to
-     delete.
+     **once the improved handler runs**. The stock handler recreates every current
+     pair's file on its next flush, so pruning those under it frees nothing.
+   - Files of interfaces that are **no longer in the MAC table** (members who left,
+     interfaces renumbered) are different: no handler writes them again. Under the stock
+     handler every current pair is rewritten every few minutes, so these are exactly the
+     old files: `find /ixpmatrix -path '*/p2p/*' -name '*.rrd' -mtime +7`.
+     `collector-check.sh` counts them (on collector01, about 980,000 files).
    - Files with no data at all, as opposed to known zeros, are never listed.
 
 Requirements:
-- **Python scripts:** Python 3.8+ with only the standard library.
+- **Python scripts:** Python 3.6+ with only the standard library (collector01 runs 3.6).
 - **Shell scripts:** bash, curl, rrdtool, and socat or netcat-openbsd (for rrdcached's
   STATS).
 - **Capture:** tcpdump and sflowtool, which the collector already has.

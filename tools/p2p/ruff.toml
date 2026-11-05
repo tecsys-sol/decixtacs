@@ -1,6 +1,10 @@
 # Operator scripts for the sFlow collector: same rules as the backend, except that
 # running rrdtool/sflowtool by name and fetching an operator-supplied URL is the point.
 extend = "../../backend/pyproject.toml"
+# The collector runs an older distribution: the scripts must run on Python 3.6. py37 is
+# the oldest target ruff knows, so the two 3.7-only suggestions are switched off too
+# (subprocess's capture_output= and text= do not exist in 3.6).
+target-version = "py37"
 
 [lint.per-file-ignores]
-"*" = ["S603", "S607", "S310"]
+"*" = ["S603", "S607", "S310", "UP021", "UP022"]
