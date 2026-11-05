@@ -62,8 +62,10 @@ ENDPOINT=learned-macs
 OUT=${OUT:-$(mktemp -d /tmp/p2p-audit.XXXXXX)}
 mkdir -p "$OUT"
 echo "capturing udp/$PORT on $IFACE for ${SECONDS_TO_CAPTURE}s into $OUT ..." >&2
-timeout "$SECONDS_TO_CAPTURE" tcpdump -q -n -i "$IFACE" -s 0 -w "$OUT/sflow.pcap" "udp port $PORT" 2>"$OUT/tcpdump.log" || true
+timeout "$SECONDS_TO_CAPTURE" tcpdump -q -n -i "$IFACE" -s 0 -w "$OUT/sflow.raw.pcap" "udp port $PORT" 2>"$OUT/tcpdump.log" || true
 grep -E "packets (captured|dropped by kernel)" "$OUT/tcpdump.log" >&2 || true
+# -i any records a datagram once per interface it crosses (bond, VLAN, bridge); the handler reads it once
+python3 "$HERE/pcap-dedupe.py" "$OUT/sflow.raw.pcap" "$OUT/sflow.pcap" && rm -f "$OUT/sflow.raw.pcap"
 
 sflowtool -r "$OUT/sflow.pcap" -l >"$OUT/sflow.lines" 2>/dev/null
 sflowtool -r "$OUT/sflow.pcap" >"$OUT/sflow.full" 2>/dev/null

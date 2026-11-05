@@ -346,6 +346,10 @@ Run them in this order:
      samples account for, ports that are never sampled, and effective against reported
      sampling rate. This runs on the capture alone; nothing is queried on the switches.
    - Traffic without a usable VLAN that the improved handler would place by MAC.
+   - The capture is deduplicated before decoding (`pcap-dedupe.py`). `tcpdump -i any`
+     records a datagram once per interface it crosses (bond, VLAN, bridge), which made
+     some switches look over-sampled 2-6x on collector01. The audit warns if a capture
+     still contains duplicates.
    - Delete the capture afterwards; it holds packet headers.
 4. **`rrd-check.py`** on the collector:
    - `pair A B`: the A→B and B→A files must mirror each other. A mismatch means one

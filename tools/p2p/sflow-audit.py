@@ -435,6 +435,8 @@ def sequence_loss(lines) -> dict:
             {
                 "agent": a,
                 "datagrams": len(seqs),
+                # the same datagram captured more than once (tcpdump -i any over a bond/VLAN/bridge)
+                "duplicate_pct": round(100.0 * (len(seqs) - len(set(seqs))) / len(seqs), 1) if seqs else 0.0,
                 "datagram_loss_pct": round(100.0 * miss / exp, 2) if exp else 0.0,
                 "flow_sample_loss_pct": round(100.0 * s_miss / s_exp, 2) if s_exp else 0.0,
                 "agent_drop_events": d,
@@ -621,6 +623,13 @@ def print_text(r: dict, loss: Optional[dict]) -> None:
             off = e["effective_rate"] / e["reported_rate"] if e["reported_rate"] else 0
             flag = f"  <- each sample stands for {off:.1f}x the reported rate" if off > 1.2 else ""
             w(f"   {e['agent']:16s} reported 1:{e['reported_rate']:<8d} effective 1:{e['effective_rate']:<8d}{flag}\n")
+
+    dup = [a for a in (loss or {}).get("agents", []) if a.get("duplicate_pct")]
+    if dup:
+        w("\n!! The capture holds duplicate datagrams - every figure from these switches is inflated:\n")
+        for a in dup:
+            w(f"   {a['agent']:16s} {a['duplicate_pct']:5.1f}% of its datagrams were captured more than once\n")
+        w("   Re-capture with capture-and-audit.sh, which drops duplicates (pcap-dedupe.py).\n")
 
     if loss:
         w("\n== Loss before the handler (from sequence numbers)\n")
