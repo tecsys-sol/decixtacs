@@ -190,7 +190,7 @@ def test_ixpmanager_and_birdseye(admin):
         )
     )
     # a read-only API key: IXP Manager refuses the VLAN interface mapping (superuser only)
-    respx.get(f"{ixp_url}/api/v4/sflow-db-mapper/configured-macs").mock(return_value=httpx.Response(403))
+    respx.get(f"{ixp_url}/admin/api/v4/sflow-db-mapper/configured-macs").mock(return_value=httpx.Response(403))
     respx.get(f"{rs_url}/api/protocols/bgp").mock(
         return_value=httpx.Response(
             200,

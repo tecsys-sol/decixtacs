@@ -58,8 +58,14 @@ class IxpManagerClient:
         return r.json()
 
     def configured_macs(self) -> dict:
-        """{infrastructure id: {vlan tag: {mac: vlan interface id}}} - superuser API key only."""
-        r = self.http.get("/api/v4/sflow-db-mapper/configured-macs")
+        """{infrastructure id: {vlan tag: {mac: vlan interface id}}} - superuser API key only.
+
+        IXP Manager 7.x serves its superuser API under /admin/api/v4; the old /api/v4 path for it
+        exists only with UNSECURED_API_ACCESS (off by default), and 404s otherwise. Older releases
+        have only /api/v4."""
+        r = self.http.get("/admin/api/v4/sflow-db-mapper/configured-macs")
+        if r.status_code == 404:
+            r = self.http.get("/api/v4/sflow-db-mapper/configured-macs")
         r.raise_for_status()
         return r.json()
 

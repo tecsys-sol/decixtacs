@@ -6,6 +6,7 @@ import io
 import uuid
 
 import httpx
+import pytest
 
 from app.models import RouteServerClient
 from app.services.integrations import grapher, ixpmanager
@@ -147,3 +148,33 @@ def test_graph_csv_and_p2p_matrix(admin, db, tenant):
     assert m["reason"] is None and len(m["members"]) == 3 and m["vlan_id"] == 2
     assert all(m["cells"][k][k] is None for k in range(3))
     assert all(isinstance(m["cells"][a][b], int | float) for a in range(3) for b in range(3) if a != b)
+
+
+def test_configured_macs_uses_the_admin_api_path():
+    # IXP Manager 7.x: superuser API under /admin/api/v4; /api/v4 404s unless UNSECURED_API_ACCESS
+    seen = []
+
+    def v74(req: httpx.Request):
+        seen.append(req.url.path)
+        if req.url.path.startswith("/admin/api/v4/"):
+            return httpx.Response(200, json={"1": {"100": {"0200000000aa": 7}}})
+        return httpx.Response(404)
+
+    c = ixpmanager.IxpManagerClient("https://ixp.example", "k")
+    c.http = httpx.Client(base_url="https://ixp.example", transport=httpx.MockTransport(v74))
+    assert c.configured_macs() == {"1": {"100": {"0200000000aa": 7}}}
+    assert seen == ["/admin/api/v4/sflow-db-mapper/configured-macs"]
+
+    # older releases: only /api/v4
+    def old(req: httpx.Request):
+        if req.url.path.startswith("/admin/"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"1": {}})
+
+    c.http = httpx.Client(base_url="https://ixp.example", transport=httpx.MockTransport(old))
+    assert c.configured_macs() == {"1": {}}
+
+    # a refused key is not mistaken for a missing route
+    c.http = httpx.Client(base_url="https://ixp.example", transport=httpx.MockTransport(lambda r: httpx.Response(403)))
+    with pytest.raises(httpx.HTTPStatusError):
+        c.configured_macs()

@@ -691,7 +691,8 @@ def ixp_sflow_coverage(
                     "sFlow recorded nothing for this infrastructure while its member ports carried traffic, so every "
                     "P2P graph here is empty. Either its switches do not send sFlow to the collector, or the collector "
                     "drops every sample (VLAN tag not in IXP Manager's MAC table, or VLAN 0 because the switch exports "
-                    "no VLAN). tools/p2p/capture-and-audit.sh lists which switches send sFlow and why samples are dropped."
+                    "no VLAN). tools/p2p/capture-and-audit.sh lists which switches send sFlow and why samples "
+                    "are dropped."
                 ),
             )
         if errors and ratio is None:
