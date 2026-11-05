@@ -182,7 +182,22 @@ compare against.
   `samplePool`) against the rate it reports.
 
 **Fix:** switch configuration. Enable ingress sampling on every member port, and check
-any rate the switch adapts under load.
+any rate the switch adapts under load. `sflow-ports.py` turns IXP Manager's port list and a
+capture into the commands per switch:
+
+```sh
+# where IXP Manager's database is reachable (read-only)
+sflow-ports.py --print-sql > ports.sql
+mysql -h <db-host> -u <ro-user> -p ixpmanager -B < ports.sql > ports.tsv
+# on the collector, before deleting the capture
+sflow-ports.py --ports ports.tsv --full /tmp/p2p-audit.XXXX/sflow.full
+```
+
+It lists, per switch: member ports (peering or reseller, physically connected) without
+sFlow; ports whose samples report another rate than `--rate` (default 20000); sampled core
+links; and switches with member ports that send nothing. It recognises a port as
+sFlow-enabled from its counter samples, which Junos sends about every 20 s even when the
+port is idle.
 
 ### 3. Packets sampled twice: graphs that read high
 

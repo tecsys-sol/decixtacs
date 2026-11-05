@@ -9,6 +9,7 @@ the IXP Manager source, is in [docs/p2p-graphs.md](../../docs/p2p-graphs.md).
 | portal: IXP → Traffic → *P2P accuracy* | NetworkOps portal | Is sFlow recording all the traffic the ports carry? Too little (lost samples) or too much (double sampling)? |
 | `collector-check.sh` | collector, root | Is the handler keeping up? Socket drops, flush duration, MAC-table API, disk, rrdcached delay, journal errors |
 | `capture-and-audit.sh` → `sflow-audit.py` | collector, root | Which samples the handler throws away and why: unknown MACs (with switch/port), VLAN mismatches, core-link sampling, sampling precision, datagram loss |
+| `sflow-ports.py` | DB host, then collector | Per switch, as Junos commands: member ports without sFlow, ports reporting another sampling rate, sampled core links, switches sending nothing |
 | `pcap-dedupe.py` | collector | Drops datagrams `tcpdump -i any` captured more than once (bond/VLAN/bridge); used by `capture-and-audit.sh` |
 | `rrd-check.py` | collector | Do the RRD files agree with each other? How far behind is disk? Which pair files carry no traffic (prune candidates)? |
 | `sflow-to-rrd-handler` | collector | Drop-in replacement for IXP Manager's handler that never stops reading and writes only what carries traffic |
