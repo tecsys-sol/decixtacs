@@ -30,6 +30,9 @@ MACS = {"1": {"100": {f"02{i:010x}": i for i in range(1, 7)}}}
 MACS["1"]["100"]["02:00:00:00:00:07".upper()] = 7
 # a member on another peering VLAN (tag 200)
 MACS["1"]["200"] = {f"02{8:010x}": 8}
+# a router MAC configured on both tags: its tag must come from the switch (--agent-vlan)
+MACS["1"]["100"][f"02{9:010x}"] = 9
+MACS["1"]["200"][f"02{9:010x}"] = 19
 
 # pair 1->2: 20s on, 30s off, 10s on, then off; 3->4 and 7->3 carry steady background traffic
 GENERATOR = textwrap.dedent(
@@ -43,7 +46,7 @@ GENERATOR = textwrap.dedent(
         t = time.time() - t0
         if t > 105: break
         on = 0 <= t < 20 or 50 <= t < 60
-        out = line(3, 4) + line(7, 3) + line(4, 6, vlan=0) + line(4, 8, vlan=0)
+        out = line(3, 4) + line(7, 3) + line(4, 6, vlan=0) + line(4, 8, vlan=0) + line(9, 3, vlan=0)
         if on: out += line(1, 2) * 2
         sys.stdout.write(out); sys.stdout.flush()
         time.sleep(0.01)
@@ -118,6 +121,8 @@ def test_idle_pairs_read_zero_and_traffic_is_not_smeared(tmp_path):
             sys.executable,
             "--sflowtool_opts",
             str(gen),
+            "--agent-vlan",
+            "10.0.0.=100",
             "--flushtimer",
             "2",
             "--idle-refresh",
@@ -165,6 +170,8 @@ def test_idle_pairs_read_zero_and_traffic_is_not_smeared(tmp_path):
     # VLAN 0: placed when both MACs are on one tag, dropped when they are not
     assert (tmp_path / "ipv4/bytes/p2p/src-00004/p2p.ipv4.bytes.src-00004.dst-00006.rrd").exists()
     assert not (tmp_path / "ipv4/bytes/p2p/src-00004/p2p.ipv4.bytes.src-00004.dst-00008.rrd").exists()
-    assert "vlan-by-mac=" in flushes[-2] and "vlan_zero=" in flushes[-2]
+    assert "vlan-by-mac=" in flushes[-2] and "vlan-by-agent=" in flushes[-2]
+    # ambiguous MAC: placed on the switch's tag
+    assert (tmp_path / "ipv4/bytes/p2p/src-00009/p2p.ipv4.bytes.src-00009.dst-00003.rrd").exists()
     # the MAC stored as 02:00:00:00:00:07 in upper case still matched
     assert (tmp_path / "ipv4/bytes/p2p/src-00007/p2p.ipv4.bytes.src-00007.dst-00003.rrd").exists()

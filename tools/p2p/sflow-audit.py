@@ -342,6 +342,9 @@ def sequence_loss(lines) -> dict:
     counters: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
     # (agent, sourceId) -> [(sampleSequenceNo, samplePool, meanSkipCount)], from flow samples
     pools: Dict[Tuple[str, str], List[Tuple[int, int, int]]] = defaultdict(list)
+    # agent IP -> sampled bytes by where the sample was taken: on the port the packet came in
+    # (ingress), on the port it left by (egress), or neither
+    direction: Dict[str, Counter] = defaultdict(Counter)
     agent = sub = ip = None
     uptime = None
     smp: Dict[str, str] = {}
@@ -363,6 +366,16 @@ def sequence_loss(lines) -> dict:
                     drops[(agent, src)].append(int(smp["dropEvents"]))
                 if "samplePool" in smp and "meanSkipCount" in smp:
                     pools[(agent, src)].append((int(seq), int(smp["samplePool"]), int(smp["meanSkipCount"])))
+                if ip and "sampledPacketSize" in smp and "meanSkipCount" in smp:
+                    port = src.split(":")[-1]
+                    where = (
+                        "ingress"
+                        if port == smp.get("inputPort")
+                        else "egress"
+                        if port == smp.get("outputPort")
+                        else "other"
+                    )
+                    direction[ip][where] += int(smp["sampledPacketSize"]) * int(smp["meanSkipCount"])
             elif st == "COUNTERSSAMPLE" and ip and uptime is not None and "ifIndex" in smp and "ifInOctets" in smp:
                 counters[(ip, smp["ifIndex"])].append((uptime, int(smp["ifInOctets"])))
             smp = {}
@@ -387,6 +400,9 @@ def sequence_loss(lines) -> dict:
             "meanSkipCount",
             "ifIndex",
             "ifInOctets",
+            "inputPort",
+            "outputPort",
+            "sampledPacketSize",
         ):
             smp.setdefault(k, v)
 
@@ -426,6 +442,11 @@ def sequence_loss(lines) -> dict:
         )
     out["counters"] = {k: r for k, r in ((k, _counter_rate(v)) for k, v in counters.items()) if r is not None}
     out["effective_rates"] = _effective_rates(pools)
+    out["sampling_direction"] = [
+        {"agent": ip, **{k: round(100.0 * c[k] / sum(c.values()), 1) for k in ("ingress", "egress", "other")}}
+        for ip, c in sorted(direction.items())
+        if sum(c.values())
+    ]
     return out
 
 
@@ -586,6 +607,13 @@ def print_text(r: dict, loss: Optional[dict]) -> None:
             )
             for u in cmpc["unsampled_ports"][:15]:
                 w(f"     {u['agent']:16s} ifIndex {u['ifindex']:>6s}  {u['mbps']:10.1f} Mb/s\n")
+    dirs = (loss or {}).get("sampling_direction") or []
+    if dirs:
+        w("\n== Where each switch samples (share of sampled traffic)\n")
+        for d in dirs:
+            flag = "  <- egress sampling: these packets are counted again where they entered" if d["egress"] > 5 else ""
+            w(f"   {d['agent']:16s} ingress {d['ingress']:5.1f}%  egress {d['egress']:5.1f}%  other {d['other']:5.1f}%")
+            w(flag + "\n")
     rates = (loss or {}).get("effective_rates") or []
     if rates:
         w("\n== Sampling rate: reported by the switch vs effective (packets seen per sample)\n")

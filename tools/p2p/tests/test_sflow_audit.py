@@ -180,3 +180,22 @@ def test_vlan_zero_placeable_by_mac():
     assert round(r["traffic_by_reason_pct"]["vlan_zero"], 1) == 66.7
     # a1 -> b2 share tag 100; a1 -> c3 do not share a tag and stay dropped
     assert r["placeable_by_mac_pct"] == round(100 / 3, 2)
+
+
+def test_sampling_direction():
+    def smp(seq, inp, out):
+        return [
+            "sampleType FLOWSAMPLE",
+            f"sampleSequenceNo {seq}",
+            "sourceId 0:5",
+            "meanSkipCount 100",
+            "samplePool 0",
+            f"inputPort {inp}",
+            f"outputPort {out}",
+            "sampledPacketSize 1000",
+        ]
+
+    # sampler on port 5: two packets entering it, one leaving by it (egress), one neither
+    text = _datagram("10.0.0.1", 0, [smp(1, 5, 9), smp(2, 5, 8), smp(3, 9, 5), smp(4, 7, 8)])
+    d = sa.sequence_loss(t + "\n" for t in text)["sampling_direction"]
+    assert d == [{"agent": "10.0.0.1", "ingress": 50.0, "egress": 25.0, "other": 25.0}]

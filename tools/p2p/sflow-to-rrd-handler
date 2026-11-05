@@ -45,7 +45,9 @@
 #     every such sample. A member's router MAC is configured on one VLAN interface,
 #     so when the source and destination MAC are each known on exactly one tag - the
 #     same one - the sample is placed on it. Anything ambiguous is still dropped.
-#     --no-vlan-from-mac restores the stock behaviour.
+#     --no-vlan-from-mac restores the stock behaviour. Samples the MACs cannot place
+#     (a MAC on several tags) can fall back to the switch: --agent-vlan 172.17.138.=66
+#     assigns everything from agents whose address starts 172.17.138. to tag 66.
 #
 # Requires the same Perl modules as the original: RRDs, JSON, REST::Client,
 # Config::General (via IXPManager::Config), Time::HiRes.
@@ -93,6 +95,7 @@ my $insanedebug = 0;
 my $create_idle = 0;
 my $quiet = 0;
 my $vlan_from_mac = 1;
+my @agent_vlan;
 
 GetOptions(
 	'debug!'		=> \$debug,
@@ -112,9 +115,19 @@ GetOptions(
 	'create-idle!'		=> \$create_idle,
 	'quiet!'		=> \$quiet,
 	'vlan-from-mac!'	=> \$vlan_from_mac,
+	'agent-vlan=s'	=> \@agent_vlan,
 ) or die "bad options\n";
 
 $debug = 1 if $insanedebug;
+
+# agent address prefix -> VLAN tag, longest prefix first
+my @agent_tags;
+foreach my $m (@agent_vlan) {
+	my ($prefix, $tag) = split(/=/, $m, 2);
+	die "FATAL: --agent-vlan wants PREFIX=TAG, got '$m'\n" unless defined($tag) && length($prefix) && $tag =~ /^\d+$/;
+	push @agent_tags, [$prefix, $tag];
+}
+@agent_tags = sort { length($b->[0]) <=> length($a->[0]) } @agent_tags;
 die "FATAL: must set 'apikey' parameter in <ixp> section of ixpmanager.conf\n" unless defined $apikey;
 die "FATAL: must set 'apibaseurl' parameter in <ixp> section of ixpmanager.conf\n" unless defined $apibaseurl;
 
@@ -211,7 +224,7 @@ while (<$SFLOWTOOL>) {
 		$insanedebug && print STDERR "DEBUG: $_\n";
 		# FLOW,agent,inputPort,outputPort,srcMAC,dstMAC,ethType,in_vlan,out_vlan,srcIP,dstIP,
 		#   proto,tos,ttl,sport,dport,tcpFlags,pktSize,ipSize,samplingRate
-		my ($sampletype, $srcmac, $dstmac, $ethertype, $vlan, $pktsize, $samplerate) = (split(/,/))[0,4,5,6,7,17,19];
+		my ($sampletype, $agent, $srcmac, $dstmac, $ethertype, $vlan, $pktsize, $samplerate) = (split(/,/))[0,1,4,5,6,7,17,19];
 		$stats->{samples}++;
 		my $p;
 		if ($ethertype eq '0x0800') { $p = 4 } elsif ($ethertype eq '0x86dd') { $p = 6 } else { $stats->{not_ip}++; goto PERIODIC; }
@@ -222,6 +235,16 @@ while (<$SFLOWTOOL>) {
 			if ($t && $t eq ($mac2tag->{$dstmac} // '')) {
 				$tags = $mactable->{$t};
 				$stats->{vlan_from_mac}++;
+			}
+		}
+		if (!$tags && @agent_tags) {
+			# still no VLAN: the tag configured for this switch's address range
+			foreach my $at (@agent_tags) {
+				if (index($agent, $at->[0]) == 0) {
+					$tags = $mactable->{$at->[1]};
+					$stats->{vlan_from_agent}++ if $tags;
+					last;
+				}
 			}
 		}
 		if (!$tags) { $stats->{$vlan eq '0' ? 'vlan_zero' : 'vlan_unknown'}++; goto PERIODIC; }
@@ -434,7 +457,8 @@ sub flush {
 	my $pct = sub { $samples ? sprintf('%.1f%%', 100 * ($s->{$_[0]} || 0) / $samples) : '0%' };
 	my @drop = map { "$_=".$pct->($_) } grep { $s->{$_} } qw(src_unknown dst_unknown dst_group vlan_zero vlan_unknown not_ip same_vli);
 	# share of samples that had no usable VLAN and were placed by their MACs
-	my $bymac = $s->{vlan_from_mac} ? ' vlan-by-mac='.$pct->('vlan_from_mac') : '';
+	my $bymac = ($s->{vlan_from_mac} ? ' vlan-by-mac='.$pct->('vlan_from_mac') : '')
+		. ($s->{vlan_from_agent} ? ' vlan-by-agent='.$pct->('vlan_from_agent') : '');
 	printf STDERR "flush: interval=%.1fs%s duration=%.1fs samples=%d accepted=%s%s%s rrd: written=%d created=%d prezero=%d errors=%d idle-every=%d\n",
 		$interval, ($job->{deferred} ? " (extended x$job->{deferred})" : ''), tv_interval($t0), $samples, $pct->('accepted'),
 		$bymac, (@drop ? ' dropped: '.join(' ', @drop) : ''), @n{qw(written created prezero errors)}, $job->{k};

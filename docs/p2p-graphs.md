@@ -383,6 +383,16 @@ options, input and output as the original. On collector01 (IXP Manager 5.7.0 tre
    ```
 2. Point the service at it (`systemctl edit sflow-to-rrd-handler`, or the unit's
    `ExecStart`), with the same arguments as before. Then restart it.
+   - If the old handler was patched locally to pick the VLAN by switch address (as on
+     collector01: `172.17.138` → 66 and so on), pass the same map as fallbacks. Note the
+     trailing dot, so `172.17.14.` cannot match `172.17.140.x`:
+     ```
+     --agent-vlan 172.17.138.=66 --agent-vlan 172.17.140.=67 --agent-vlan 172.17.142.=68 \
+     --agent-vlan 172.17.144.=69 --agent-vlan 172.17.147.=72
+     ```
+     MAC placement is tried first and is more precise: it also places members on the
+     other tags of a site. The switch's tag is used only when a MAC is configured on
+     several tags.
 3. Watch it for a few minutes with `journalctl -fu sflow-to-rrd-handler`. Each flush
    logs one line like this:
    ```
