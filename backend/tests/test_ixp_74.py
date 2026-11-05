@@ -178,3 +178,29 @@ def test_configured_macs_uses_the_admin_api_path():
     c.http = httpx.Client(base_url="https://ixp.example", transport=httpx.MockTransport(lambda r: httpx.Response(403)))
     with pytest.raises(httpx.HTTPStatusError):
         c.configured_macs()
+
+
+def test_p2p_health_tries_busy_pairs(admin, db, tenant, monkeypatch):
+    i = _integration(db, tenant, demo=True)
+    ixpmanager.sync_members(db, i, client=FakeIxpm())
+    db.commit()
+    real = grapher._demo
+
+    def only(pair):
+        def demo(graph, params, kind):
+            if graph == "p2p" and (params.get("svli"), params.get("dvli")) != pair:
+                return [] if kind == "log" else {"statistics": {}}
+            return real(graph, params, kind)
+
+        return demo
+
+    # only Google -> Hurricane Electric (502 -> 503) exchanged sampled traffic
+    monkeypatch.setattr(grapher, "_demo", only((502, 503)))
+    grapher._cache.clear()
+    p2p = admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
+    assert p2p["ok"] and p2p["pair"] == [15169, 6939]
+
+    monkeypatch.setattr(grapher, "_demo", only((0, 0)))
+    grapher._cache.clear()
+    p2p = admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
+    assert not p2p["ok"] and p2p["reason"] == "no_data" and "None of 6 pairs" in p2p["error"]

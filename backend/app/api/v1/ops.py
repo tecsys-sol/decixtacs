@@ -581,21 +581,57 @@ def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
         {"id": first[1]["vli_id"], "protocol": "ipv4"} if first else None,
         no_vli,
     )
-    pair = None
-    if first:
-        pair = next(
-            (
-                (first, other)
-                for other in vlis
-                if other[0].asn != first[0].asn and other[1].get("vlan_id") == first[1].get("vlan_id")
-            ),
-            None,
+    # P2P files exist only for pairs that exchanged sampled traffic, so an arbitrary pair proves
+    # nothing. Try pairs among the largest ports on the first member's VLAN and pass on the first
+    # that has data.
+    label = "Member-to-member P2P (sFlow)"
+    if not first:
+        check(label, "p2p", None, no_vli)
+        return {"checks": checks, "error": None}
+    same = [x for x in vlis if x[1].get("vlan_id") == first[1].get("vlan_id")]
+    top = sorted(same, key=lambda x: -(x[1].get("capacity_mbps") or 0))[:6]
+    pairs = [(a, b) for a in top for b in top if a[0].asn != b[0].asn][:12]
+    if not pairs:
+        check(label, "p2p", None, "no second member on the same VLAN")
+        return {"checks": checks, "error": None}
+    last = None
+    for a, b in pairs:
+        r = g.series("p2p", {"svli": a[1]["vli_id"], "dvli": b[1]["vli_id"], "protocol": "ipv4", "period": "day"})
+        if not r.reason:
+            checks.append(
+                {
+                    "label": label,
+                    "graph": "p2p",
+                    "params": r.params,
+                    "ok": True,
+                    "points": len(r.points),
+                    "reason": None,
+                    "error": None,
+                    "pair": [a[0].asn, b[0].asn],
+                }
+            )
+            return {"checks": checks, "error": None}
+        last = r
+        if r.reason not in ("no_data", "all_zero"):
+            break  # refused, unreachable...: the same for every pair
+    error = last.error
+    if last.reason in ("no_data", "all_zero"):
+        error = (
+            f"None of {len(pairs)} pairs among the largest member ports on this VLAN has P2P data. P2P files exist "
+            "only for pairs whose traffic was sampled, so either these members' ports are not sFlow-enabled "
+            "(tools/p2p/sflow-ports.py lists them) or the collector writes no P2P files (check the handler's "
+            "'flush:' lines)."
         )
-    check(
-        "Member-to-member P2P (sFlow)",
-        "p2p",
-        {"svli": pair[0][1]["vli_id"], "dvli": pair[1][1]["vli_id"], "protocol": "ipv4"} if pair else None,
-        no_vli if not first else "no second member on the same VLAN",
+    checks.append(
+        {
+            "label": label,
+            "graph": "p2p",
+            "params": last.params,
+            "ok": False,
+            "points": len(last.points),
+            "reason": last.reason,
+            "error": error,
+        }
     )
     return {"checks": checks, "error": None}
 
