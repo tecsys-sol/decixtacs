@@ -112,13 +112,18 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     read -r CODE TT < <(curl -s -o "$TMP" -w '%{http_code} %{time_total}\n' --max-time 30 \
         -H "X-IXP-Manager-API-Key: $API_KEY" "${API_URL%/}/sflow-db-mapper/$EP")
     if [ "$CODE" = 200 ]; then
-        read -r NVLI NMAC TAGS < <(python3 -c '
+        read -r NVLI NMAC TAGS PAIRS < <(python3 -c '
 import json,sys
+from collections import defaultdict
 d=json.load(open(sys.argv[1])) or {}
 v={x for i in d.values() for t in i.values() for x in t.values()}
 m=sum(len(t) for i in d.values() for t in i.values())
-tags=sorted({t for i in d.values() for t in i})
-print(len(v), m, ",".join(tags) or "-")' "$TMP")
+per=defaultdict(set)
+for i in d.values():
+    for t, macs in i.items(): per[t].update(macs.values())
+# the handler pairs interfaces only within one VLAN tag
+pairs=sum(len(s)*(len(s)-1) for s in per.values())
+print(len(v), m, ",".join(sorted(per)) or "-", pairs)' "$TMP")
         ok "$EP: $NVLI VLAN interfaces, $NMAC MACs on tags $TAGS (fetched in ${TT}s)"
         [ "${NVLI:-0}" -gt 0 ] || fail "the MAC table is empty - the handler drops every sample"
         awk -v t="$TT" 'BEGIN{exit !(t > 1.0)}' && warn "the handler re-fetches this every flush and reads no samples meanwhile (${TT}s)"
@@ -181,9 +186,11 @@ if [ -n "$COUNT_FILES" ] && [ -d "$BASE" ]; then
     NIND=$(find "$BASE" -path '*/individual/*' -name '*.rrd' 2>/dev/null | wc -l)
     info "$(printf '%9d' "$NIND")  individual"
     if [ -n "${NVLI:-}" ] && [ "$NVLI" -gt 1 ]; then
-        FULL=$((4 * NVLI * (NVLI - 1)))
-        info "the stock handler writes one file per ordered pair of the $NVLI current interfaces x2 protocols x2 types:"
-        info "$FULL updates per flush, traffic or not"
+        FULL=$((4 * ${PAIRS:-0}))
+        info "current pairs: ${PAIRS:-?} ordered pairs of interfaces on the same VLAN tag, x2 protocols x2 types = $FULL files"
+        if [ -z "$IMPROVED" ]; then
+            info "the stock handler updates every one of them on every flush, traffic or not"
+        fi
         if [ "$NP2P" -gt "$FULL" ]; then
             STALE=$((NP2P - FULL))
             warn "$STALE pair files (~$((STALE * 182 / 1000000)) GB) belong to interfaces no longer in the MAC table: never updated again"
