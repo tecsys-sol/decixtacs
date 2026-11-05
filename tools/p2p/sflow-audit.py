@@ -158,6 +158,7 @@ class Audit:
         self.pair_bytes: Counter = Counter()
         self.by_mac_bytes = 0  # dropped for VLAN, placeable by MAC (improved handler)
         self.port_est: Counter = Counter()  # (agent, input port) -> sampled bytes, all samples
+        self.port_rates: Dict[Tuple[str, str], Counter] = defaultdict(Counter)  # -> sampling rate -> samples
 
     def feed(self, line: str) -> None:
         if not line.startswith("FLOW"):
@@ -177,6 +178,7 @@ class Audit:
         self.agent_samples[agent] += 1
         self.agent_bytes[agent] += est
         self.port_est[(agent, inport)] += est
+        self.port_rates[(agent, inport)][rate] += 1
         self.agent_rates[agent][rate] += 1
         self.agent_eth[agent][eth] += 1
         if tag == "0":
@@ -503,6 +505,9 @@ def sampling_vs_counters(audit: "Audit", loss: dict, seconds: Optional[float], u
         return {}
     counters = loss["counters"]
     agents: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0, 0])
+    # sampling rate the port's samples report -> [counter bytes/s, sampled bytes/s, ports]
+    by_rate: Dict[str, List[float]] = defaultdict(lambda: [0.0, 0.0, 0])
+    ports = []
     unsampled = []
     for (ip, ifindex), rate in counters.items():
         est = audit.port_est.get((ip, ifindex), 0) / seconds
@@ -511,6 +516,24 @@ def sampling_vs_counters(audit: "Audit", loss: dict, seconds: Optional[float], u
             a[0] += rate
             a[1] += est
             a[2] += 1
+            rates = audit.port_rates[(ip, ifindex)]
+            top, n = rates.most_common(1)[0]
+            key = str(top) if n >= 0.9 * sum(rates.values()) else "mixed"
+            g = by_rate[key]
+            g[0] += rate
+            g[1] += est
+            g[2] += 1
+            if rate > 0:
+                ports.append(
+                    {
+                        "agent": ip,
+                        "ifindex": ifindex,
+                        "rates": "/".join(f"1:{r}" for r, _ in rates.most_common(3)),
+                        "counter_mbps": round(rate * 8 / 1e6, 1),
+                        "sampled_mbps": round(est * 8 / 1e6, 1),
+                        "ratio": round(est / rate, 2),
+                    }
+                )
         elif rate * 8 >= unsampled_bps:
             unsampled.append({"agent": ip, "ifindex": ifindex, "mbps": round(rate * 8 / 1e6, 1)})
     per_agent = [
@@ -526,7 +549,28 @@ def sampling_vs_counters(audit: "Audit", loss: dict, seconds: Optional[float], u
     tc = sum(a[0] for a in agents.values())
     te = sum(a[1] for a in agents.values())
     unsampled.sort(key=lambda u: -u["mbps"])
+    rate_groups = []
+    for key, (c, e, n) in sorted(
+        by_rate.items(), key=lambda kv: (kv[0] == "mixed", int(kv[0]) if kv[0].isdigit() else 0)
+    ):
+        ratio = e / c if c else None
+        rate_groups.append(
+            {
+                "reported_rate": key,
+                "ports": int(n),
+                "counter_mbps": round(c * 8 / 1e6, 1),
+                "sampled_mbps": round(e * 8 / 1e6, 1),
+                "ratio": round(ratio, 3) if ratio else None,
+                # if the hardware samples at a different rate than it reports, this is the rate it really uses
+                "implied_rate": round(int(key) / ratio) if key.isdigit() and ratio else None,
+            }
+        )
+    # the ports furthest from their counters, either way, among those carrying real traffic
+    busy = [p for p in ports if p["counter_mbps"] >= 100]
+    busy.sort(key=lambda p: -abs(math.log(p["ratio"])) if p["ratio"] > 0 else 0)
     return {
+        "by_reported_rate": rate_groups,
+        "worst_ports": busy[:15],
         "per_agent": per_agent,
         "overall_ratio": round(te / tc, 3) if tc else None,
         "unsampled_ports": unsampled,
@@ -601,6 +645,21 @@ def print_text(r: dict, loss: Optional[dict]) -> None:
         if cmpc["overall_ratio"] is not None:
             pct = 100 * cmpc["overall_ratio"]
             w(f"   => on the ports that are sampled, samples account for {pct:.1f}% of the traffic\n")
+        if cmpc.get("by_reported_rate"):
+            w("\n   Grouped by the sampling rate each port's samples report:\n")
+            for g in cmpc["by_reported_rate"]:
+                rate = g["reported_rate"] if g["reported_rate"] == "mixed" else "1:" + g["reported_rate"]
+                implied = f"  -> the hardware behaves like 1:{g['implied_rate']}" if g["implied_rate"] else ""
+                w(
+                    f"   {rate:>9s} {g['ports']:4d} ports: counters {g['counter_mbps']:10.1f} Mb/s, "
+                    f"samples {g['sampled_mbps']:10.1f} Mb/s = {100 * (g['ratio'] or 0):6.1f}%{implied}\n"
+                )
+            w("   A switch that reports one rate but samples at another shows up as a group far from 100%.\n")
+        if cmpc.get("worst_ports"):
+            w("\n   Ports furthest from their own counters (>= 100 Mb/s):\n")
+            for q in cmpc["worst_ports"][:10]:
+                w(f"     {q['agent']:16s} ifIndex {q['ifindex']:>6s}  {q['rates']:22s} ")
+                w(f"counters {q['counter_mbps']:9.1f} Mb/s  samples {q['sampled_mbps']:9.1f} Mb/s  x{q['ratio']}\n")
         if cmpc["unsampled_ports"]:
             w(
                 f"   {len(cmpc['unsampled_ports'])} port(s) carry traffic but sent no flow samples "

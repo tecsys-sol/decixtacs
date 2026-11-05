@@ -199,3 +199,24 @@ def test_sampling_direction():
     text = _datagram("10.0.0.1", 0, [smp(1, 5, 9), smp(2, 5, 8), smp(3, 9, 5), smp(4, 7, 8)])
     d = sa.sequence_loss(t + "\n" for t in text)["sampling_direction"]
     assert d == [{"agent": "10.0.0.1", "ingress": 50.0, "egress": 25.0, "other": 25.0}]
+
+
+def test_groups_ports_by_reported_rate():
+    def ctr(ifindex, octets):
+        return ["sampleType COUNTERSSAMPLE", f"sourceId 0:{ifindex}", f"ifIndex {ifindex}", f"ifInOctets {octets}"]
+
+    # both ports carry 20 MB/s (160 Mb/s) by their counters over 60s
+    text = _datagram("10.0.0.1", 0, [ctr(5, 0), ctr(6, 0)]) + _datagram(
+        "10.0.0.1", 60000, [ctr(5, 1_200_000_000), ctr(6, 1_200_000_000)]
+    )
+    loss = sa.sequence_loss(t + "\n" for t in text)
+    audit = sa.Audit(sa.MacTable(MACS), core_threshold=3)
+    for _ in range(60):  # port 5: honest 1:20000 -> 20 MB/s
+        audit.feed(flow(inp=5, size=1000, rate=20000))
+    for _ in range(60):  # port 6: says 1:160000 but sampled as often as 1:20000 -> 160 MB/s
+        audit.feed(flow(inp=6, size=1000, rate=160000))
+    cmp = sa.sampling_vs_counters(audit, loss, seconds=60)
+    groups = {g["reported_rate"]: g for g in cmp["by_reported_rate"]}
+    assert groups["20000"]["ratio"] == 1.0 and groups["20000"]["implied_rate"] == 20000
+    assert groups["160000"]["ratio"] == 8.0 and groups["160000"]["implied_rate"] == 20000
+    assert cmp["worst_ports"][0]["ifindex"] == "6" and cmp["worst_ports"][0]["ratio"] == 8.0
