@@ -58,20 +58,19 @@ class CommandOut(ORM):
     dangerous: str | None = None
 
 
-@router.get("/accounting/commands", response_model=Page[CommandOut])
-def search_commands(
+def _filter_commands(
+    ctx: Ctx,
+    stmt,
     user: str | None = None,
-    device: str | None = Query(None, description="hostname or management address"),
-    device_id: uuid.UUID | None = Query(None, description="inventory device (matches its id, address and name)"),
-    command: str | None = Query(None, description="substring; prefix with ~ for a regex (PostgreSQL)"),
+    device: str | None = None,
+    device_id: uuid.UUID | None = None,
+    command: str | None = None,
     result: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
-    limit: int = Query(100, le=1000),
-    offset: int = 0,
-    ctx: Ctx = Depends(require("accounting:read")),
 ):
-    stmt = select(CommandLog).where(CommandLog.tenant_id == ctx.tenant_id).order_by(CommandLog.timestamp.desc())
+    """The accounting filters, shared by the command list and its charts so both count the same rows."""
+    stmt = stmt.where(CommandLog.tenant_id == ctx.tenant_id)
     if user:
         stmt = stmt.where(CommandLog.username == user)
     if device:
@@ -97,10 +96,107 @@ def search_commands(
         stmt = stmt.where(CommandLog.timestamp >= start)
     if end:
         stmt = stmt.where(CommandLog.timestamp <= end)
+    return stmt
+
+
+@router.get("/accounting/commands", response_model=Page[CommandOut])
+def search_commands(
+    user: str | None = None,
+    device: str | None = Query(None, description="hostname or management address"),
+    device_id: uuid.UUID | None = Query(None, description="inventory device (matches its id, address and name)"),
+    command: str | None = Query(None, description="substring; prefix with ~ for a regex (PostgreSQL)"),
+    result: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("accounting:read")),
+):
+    stmt = _filter_commands(ctx, select(CommandLog), user, device, device_id, command, result, start, end).order_by(
+        CommandLog.timestamp.desc()
+    )
     page = paginate(ctx.db, stmt, CommandOut, limit, offset)
     for item in page["items"]:
         item.dangerous = classify_command(item.command)
     return page
+
+
+@router.get("/accounting/activity")
+def accounting_activity(
+    user: str | None = None,
+    device: str | None = None,
+    device_id: uuid.UUID | None = None,
+    command: str | None = None,
+    result: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    days: int = Query(7, ge=1, le=366, description="window when start is not given"),
+    tz: str = Query("UTC", description="IANA time zone the buckets and the weekday x hour grid use"),
+    ctx: Ctx = Depends(require("accounting:read")),
+):
+    """Matching commands counted in the database over the whole window - per hour (windows up to two
+    days) or per day, with dangerous ones apart, and by weekday x hour - so the charts cover the
+    window however many commands it holds."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from app.db.base import utcnow
+
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(422, f"unknown time zone {tz!r}") from None
+    end_ = end or utcnow()
+    start_ = start or end_ - timedelta(days=days)
+    if start_ >= end_:
+        raise HTTPException(422, "start must be before end")
+    grain = "hour" if end_ - start_ <= timedelta(days=2) else "day"
+
+    local = func.timezone(tz, CommandLog.timestamp)  # wall-clock time in the viewer's zone
+    bucket = func.date_trunc(grain, local)
+    where = _filter_commands(ctx, select(), user, device, device_id, command, result, start_, end_)
+
+    # dangerous is a Python classification: group by command so each distinct one is classified once
+    counts: dict[datetime, list[int]] = {}
+    verdict: dict[str, bool] = {}
+    total = 0
+    for b, cmd, n in ctx.db.execute(
+        where.add_columns(bucket.label("b"), CommandLog.command, func.count()).group_by(bucket, CommandLog.command)
+    ):
+        bad = verdict.get(cmd)
+        if bad is None:
+            bad = verdict[cmd] = classify_command(cmd) is not None
+        c = counts.setdefault(b, [0, 0])
+        c[1 if bad else 0] += n
+        total += n
+
+    grid = [[0] * 24 for _ in range(7)]
+    for dow, hour, n in ctx.db.execute(
+        where.add_columns(func.extract("isodow", local), func.extract("hour", local), func.count()).group_by(
+            func.extract("isodow", local), func.extract("hour", local)
+        )
+    ):
+        grid[int(dow) - 1][int(hour)] = n
+
+    # every bucket of the window, empty ones included, in the viewer's wall-clock time
+    step = timedelta(hours=1) if grain == "hour" else timedelta(days=1)
+    cur = start_.astimezone(zone).replace(tzinfo=None, minute=0, second=0, microsecond=0)
+    if grain == "day":
+        cur = cur.replace(hour=0)
+    last = end_.astimezone(zone).replace(tzinfo=None)
+    buckets = []
+    while cur <= last:
+        c = counts.get(cur, [0, 0])
+        buckets.append({"t": cur.isoformat(timespec="minutes"), "commands": c[0], "dangerous": c[1]})
+        cur += step
+    return {
+        "grain": grain,
+        "tz": tz,
+        "start": start_,
+        "end": end_,
+        "total": total,
+        "buckets": buckets,
+        "weekday_hour": grid,  # [Mon..Sun][0..23]
+    }
 
 
 class IngestIn(BaseModel):

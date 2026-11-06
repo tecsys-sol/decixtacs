@@ -16,23 +16,44 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { Segmented } from "@/components/ui/tabs";
-import { ACTIVITY_LIMIT } from "@/hooks/use-activity";
-import { useNow } from "@/hooks/use-now";
 import { useTimeRange } from "@/hooks/use-time-range";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
-import { bucketSeries, dailySeries, DAY_LABELS, dayHourMatrix, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
+import { DAY_LABELS, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
 import { barOption, heatmapOption, palette } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { CommandLog, Page } from "@/lib/types";
-import { formatNumber, localInputToIso, parseDate } from "@/lib/utils";
+import { formatNumber, localInputToIso } from "@/lib/utils";
 
 const DEFAULTS = { user: "", device: "", command: "", result: "", start: "", end: "", offset: "0" };
+
+/** Counted by the server over the whole window, in the viewer's time zone. */
+interface Activity {
+  grain: "hour" | "day";
+  total: number;
+  buckets: { t: string; commands: number; dangerous: number }[];
+  weekday_hour: number[][];
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-11-06T13:00" (wall-clock in the viewer's zone) -> "13:00" or "6 Nov" */
+function bucketLabel(t: string, grain: Activity["grain"]): string {
+  if (grain === "hour") return t.slice(11, 16);
+  return `${Number(t.slice(8, 10))} ${MONTHS[Number(t.slice(5, 7)) - 1]}`;
+}
+
+const viewerTz = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+};
 
 export default function AccountingPage() {
   const [f, setF] = useUrlState(DEFAULTS);
   const theme = useChartTheme();
-  const now = useNow();
   const { range, setRange } = useTimeRange();
   const offset = Number(f.offset) || 0;
   const set = (k: keyof typeof DEFAULTS) => (v: string) => setF({ [k]: v, offset: "0" });
@@ -53,63 +74,66 @@ export default function AccountingPage() {
     placeholderData: (p) => p,
   });
 
+  const days = range === "24h" ? 1 : range === "7d" ? 7 : 30;
   const stats = useQuery({
-    queryKey: ["accounting", "stats", { ...f, offset: undefined }],
+    queryKey: ["accounting", "activity", { ...f, offset: undefined }, days],
     queryFn: () =>
-      api.get<Page<CommandLog>>("/accounting/commands", {
+      api.get<Activity>("/accounting/activity", {
         user: f.user,
         device: f.device,
         command: f.command,
         result: f.result,
         start: localInputToIso(f.start),
         end: localInputToIso(f.end),
-        limit: ACTIVITY_LIMIT,
+        days,
+        tz: viewerTz(),
       }),
     placeholderData: (p) => p,
     staleTime: 60_000,
   });
-  const days = range === "24h" ? 1 : range === "7d" ? 7 : 30;
   const top = useQuery({
     queryKey: ["accounting", "top", days],
     queryFn: () => api.get<{ users: { user: string; commands: number }[]; devices: { device: string; commands: number }[] }>("/accounting/top", { days }),
   });
 
   const charts = React.useMemo(() => {
-    const rows = stats.data?.items ?? [];
-    const t = now;
-    // span of the loaded rows decides the grain: hours for <= 2 days, else days (max 60)
-    const times = rows.map((r) => parseDate(r.timestamp)?.getTime() ?? 0).filter(Boolean);
-    const oldest = times.length ? Math.min(...times) : t;
-    const spanDays = Math.min(60, Math.max(1, Math.ceil((t - oldest) / 86_400_000)));
-    let timeline;
-    if (spanDays <= 2) {
-      const s = bucketSeries(rows, (r) => r.timestamp, "24h", t, { group: (r) => (r.dangerous ? "Dangerous" : "Commands"), groupOrder: ["Commands", "Dangerous"] });
-      timeline = { labels: s.labels, series: s.series };
-    } else {
-      const all = dailySeries(rows.filter((r) => !r.dangerous), (r) => r.timestamp, spanDays, t);
-      const bad = dailySeries(rows.filter((r) => r.dangerous), (r) => r.timestamp, spanDays, t);
-      timeline = { labels: all.labels, series: [{ name: "Commands", data: all.data }, { name: "Dangerous", data: bad.data }] };
+    const a = stats.data;
+    const buckets = a?.buckets ?? [];
+    const colors = { Commands: palette(theme)[0], Dangerous: theme.status.danger };
+    const cells: [number, number, number][] = [];
+    let max = 0;
+    for (let day = 0; day < 7; day++) {
+      for (let h = 0; h < 24; h++) {
+        const v = a?.weekday_hour?.[day]?.[h] ?? 0;
+        cells.push([h, day, v]);
+        max = Math.max(max, v);
+      }
     }
-    const colors: Record<string, string> = { Commands: palette(theme)[0], Dangerous: theme.status.danger };
-    const heat = dayHourMatrix(rows.map((r) => r.timestamp), t, 3650);
     return {
-      n: rows.length,
+      n: a?.total ?? 0,
       timeline: barOption(
-        { categories: timeline.labels, series: timeline.series.map((x) => ({ ...x, stack: "c", color: colors[x.name] })), barWidth: 14 },
+        {
+          categories: buckets.map((b) => bucketLabel(b.t, a?.grain ?? "day")),
+          series: [
+            { name: "Commands", data: buckets.map((b) => b.commands), stack: "c", color: colors.Commands },
+            { name: "Dangerous", data: buckets.map((b) => b.dangerous), stack: "c", color: colors.Dangerous },
+          ],
+          barWidth: buckets.length > 40 ? 6 : 14,
+        },
         theme,
       ),
       heat: heatmapOption(
         {
           xLabels: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
           yLabels: DAY_LABELS,
-          cells: heat.cells,
-          max: heat.max,
+          cells,
+          max,
           tooltip: (x, y, v) => `<b>${y} ${x}:00</b> — ${v.toLocaleString("en")} command${v === 1 ? "" : "s"}`,
         },
         theme,
       ),
     };
-  }, [stats.data, now, theme]);
+  }, [stats.data, theme]);
   const topUsers = React.useMemo(
     () => barOption({ categories: (top.data?.users ?? []).map((u) => u.user), series: [{ name: "Commands", data: (top.data?.users ?? []).map((u) => u.commands) }], horizontal: true, valueLabels: true }, theme),
     [top.data, theme],
@@ -122,8 +146,12 @@ export default function AccountingPage() {
       ),
     [top.data, theme],
   );
-  const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${formatNumber(stats.data.items.length)} of ${formatNumber(stats.data.total)}` : "";
   const rangeLabel = TIME_RANGES.find((r) => r.value === range)?.long.toLowerCase();
+  const windowLabel = f.start || f.end ? "the chosen dates" : rangeLabel;
+  const statsNote = stats.data ? ` · ${formatNumber(stats.data.total)} commands, ${windowLabel}` : "";
+  const windowPicker = (
+    <Segmented<TimeRange> aria-label="Window" value={range} onChange={setRange} options={TIME_RANGES.map((r) => ({ value: r.value, label: r.label }))} />
+  );
 
   const dirty = Object.entries(f).some(([k, v]) => k !== "offset" && v);
   const dangerousOnPage = (q.data?.items ?? []).filter((c) => c.dangerous).length;
@@ -135,7 +163,7 @@ export default function AccountingPage() {
         description="Every command executed on network devices, as reported by TACACS+ accounting."
       />
       <div className="mb-4 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-        <ChartCard title="Commands over time" description={`Matching the filters below, dangerous commands highlighted${statsNote}`}>
+        <ChartCard title="Commands over time" description={`Matching the filters below, dangerous commands highlighted${statsNote}`} actions={windowPicker}>
           <ChartBody loading={stats.isLoading} error={stats.error} empty={!charts.n} emptyTitle="No commands match" emptyIcon={Terminal} height={240}>
             <Chart option={charts.timeline} height={240} ariaLabel="Commands over time" />
           </ChartBody>
@@ -149,7 +177,6 @@ export default function AccountingPage() {
           title="Top users"
           description={`Commands, ${rangeLabel}`}
           delay={2}
-          actions={<Segmented<TimeRange> aria-label="Window" value={range} onChange={setRange} options={TIME_RANGES.map((r) => ({ value: r.value, label: r.label }))} />}
         >
           <ChartBody loading={top.isLoading} error={top.error} empty={!top.data?.users.length} emptyTitle="No commands in this window" emptyIcon={Users} emptyArt="default" height={200}>
             <Chart
