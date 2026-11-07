@@ -59,7 +59,7 @@ export function RunCharts({ detail, theme, delay = 0 }: { detail: ComplianceRunD
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
-    const sevOf = new Map<string, string>();
+    const sevOf = new Map<string, string>(Object.entries(detail?.rule_severity ?? {}));
     for (const f of detail?.failures ?? []) if (!sevOf.has(f.rule)) sevOf.set(f.rule, f.severity);
     return {
       n: items.length,
@@ -72,11 +72,13 @@ export function RunCharts({ detail, theme, delay = 0 }: { detail: ComplianceRunD
     return barOption({ categories: h.labels.map((l) => `${l}%`), series: [{ name: "Devices", data: h.data, color: palette(theme)[0] }], barWidth: 26 }, theme);
   }, [detail, theme]);
   const sev = React.useMemo(() => {
-    const counts = countBy(detail?.failures ?? [], (f) => f.severity);
+    const counts = detail?.failures_by_severity
+      ? Object.entries(detail.failures_by_severity).map(([name, value]) => ({ name, value }))
+      : countBy(detail?.failures ?? [], (f) => f.severity);
     const items = counts
       .sort((a, b) => SEVERITY_ORDER.indexOf(a.name) - SEVERITY_ORDER.indexOf(b.name))
       .map((c) => ({ name: humanize(c.name), value: c.value, color: severityColor(c.name, theme) }));
-    return donutOption({ items, centerValue: formatNumber(detail?.failures.length ?? 0), centerLabel: "failed checks" }, theme);
+    return donutOption({ items, centerValue: formatNumber(detail?.failures_total ?? detail?.failures.length ?? 0), centerLabel: "failed checks" }, theme);
   }, [detail, theme]);
   const loading = !detail;
   return (
@@ -100,7 +102,7 @@ export function RunCharts({ detail, theme, delay = 0 }: { detail: ComplianceRunD
         </ChartBody>
       </ChartCard>
       <ChartCard title="Severity breakdown" description="Failed checks by rule severity" delay={delay + 2} className="lg:col-span-2 xl:col-span-1">
-        <ChartBody loading={loading} empty={!detail?.failures.length} emptyTitle="No failed checks" emptyIcon={CheckCircle2} emptyArt="success" height={240}>
+        <ChartBody loading={loading} empty={!(detail?.failures_total ?? detail?.failures.length)} emptyTitle="No failed checks" emptyIcon={CheckCircle2} emptyArt="success" height={240}>
           <Chart option={sev} height={240} ariaLabel="Failed checks by severity" />
         </ChartBody>
       </ChartCard>

@@ -443,6 +443,10 @@ export interface ComplianceRunDetail {
     detail: string;
   }[];
   failures_by_rule: Record<string, number>;
+  /** counted over every failed check of the run (the failures list is capped) */
+  failures_by_severity?: Record<string, number>;
+  rule_severity?: Record<string, string>;
+  failures_total?: number;
 }
 
 // --- TACACS ------------------------------------------------------------------------------

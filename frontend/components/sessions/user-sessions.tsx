@@ -11,8 +11,8 @@ import { TableState } from "@/components/common/table-skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api } from "@/lib/api";
-import type { CommandLog, Page } from "@/lib/types";
+import { fetchAll } from "@/lib/api";
+import type { CommandLog } from "@/lib/types";
 import { cn, formatDateTime, formatDuration, shortSha } from "@/lib/utils";
 
 export interface UserSession {
@@ -55,13 +55,11 @@ function Transcript({ s }: { s: UserSession }) {
   const q = useQuery({
     queryKey: ["session-commands", s.id],
     queryFn: () =>
-      api.get<Page<CommandLog>>("/accounting/commands", {
-        user: s.username,
-        device: s.device_address,
-        start: isoPlus(s.start, -1),
-        end: isoPlus(s.end, 1),
-        limit: 1000,
-      }),
+      fetchAll<CommandLog>(
+        "/accounting/commands",
+        { user: s.username, device: s.device_address, start: isoPlus(s.start, -1), end: isoPlus(s.end, 1) },
+        1000,
+      ).then((items) => ({ items })),
     enabled: s.commands > 0,
   });
   if (!s.commands)
@@ -103,7 +101,6 @@ function Transcript({ s }: { s: UserSession }) {
           </div>
         );
       })}
-      {(q.data?.total ?? 0) > 1000 ? <p className="mt-1 text-[#7d8597]"># … first 1,000 commands shown</p> : null}
       {s.change ? (
         <p className="mt-2 text-[#86efac]">
           # configuration change recorded {formatDateTime(s.change.at)}: +{s.change.added} −{s.change.removed}

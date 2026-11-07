@@ -24,11 +24,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useAuth } from "@/hooks/use-auth";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
-import { countBy } from "@/lib/aggregate";
 import { barOption, donutOption, funnelOption, severityColor, type ChartTheme } from "@/lib/charts";
 import { CHANGE_RISKS, CHANGE_STATES, PAGE_SIZE } from "@/lib/constants";
 import type { Change, Page } from "@/lib/types";
-import { formatDateTime, humanize } from "@/lib/utils";
+import { formatDateTime, formatNumber, humanize } from "@/lib/utils";
 
 const STAGES = ["draft", "pending_approval", "approved", "implemented", "closed"];
 
@@ -48,17 +47,25 @@ export default function ChangesPage() {
   });
   const items = q.data?.items ?? [];
   const theme = useChartTheme();
-  const all = useQuery({ queryKey: ["changes", "stats"], queryFn: () => api.get<Page<Change>>("/changes", { limit: 500 }), staleTime: 60_000 });
+  // counted by the server over every change request, not a page of them
+  const all = useQuery({
+    queryKey: ["changes", "stats"],
+    queryFn: () => api.get<{ total: number; states: Record<string, number>; risks: Record<string, number> }>("/changes/stats"),
+    staleTime: 60_000,
+  });
   const charts = React.useMemo(() => {
-    const rows = all.data?.items ?? [];
+    const n = all.data?.total ?? 0;
     const rank = (st: string) => (st === "cancelled" ? 0 : st === "rejected" ? 1 : Math.max(0, STAGES.indexOf(st)));
-    const funnel = STAGES.map((st, i) => ({ name: humanize(st), value: rows.filter((c) => rank(c.state) >= i).length }));
-    const risks = countBy(rows, (c) => c.risk).sort((a, b) => CHANGE_RISKS.indexOf(a.name as never) - CHANGE_RISKS.indexOf(b.name as never));
-    const states = countBy(rows, (c) => c.state);
+    const stateEntries = Object.entries(all.data?.states ?? {});
+    const funnel = STAGES.map((st, i) => ({ name: humanize(st), value: stateEntries.filter(([s]) => rank(s) >= i).reduce((x, [, v]) => x + v, 0) }));
+    const risks = Object.entries(all.data?.risks ?? {})
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => CHANGE_RISKS.indexOf(a.name as never) - CHANGE_RISKS.indexOf(b.name as never));
+    const states = stateEntries.map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
     return {
-      n: rows.length,
+      n,
       funnel: funnelOption(funnel, theme),
-      risk: donutOption({ items: risks.map((r) => ({ name: humanize(r.name), value: r.value, color: riskColor(r.name, theme) })), centerValue: String(rows.length), centerLabel: "changes" }, theme),
+      risk: donutOption({ items: risks.map((r) => ({ name: humanize(r.name), value: r.value, color: riskColor(r.name, theme) })), centerValue: formatNumber(n), centerLabel: "changes" }, theme),
       states: barOption({ categories: states.map((x) => humanize(x.name)), series: [{ name: "Changes", data: states.map((x) => x.value) }], horizontal: true, valueLabels: true }, theme),
       statesN: states.length,
     };

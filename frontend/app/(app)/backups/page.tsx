@@ -34,15 +34,14 @@ import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/hooks/use-auth";
-import { useRecentBackups } from "@/hooks/use-backup-stats";
-import { useNow } from "@/hooks/use-now";
+import { useBackupActivity } from "@/hooks/use-backup-stats";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useDeviceNames } from "@/hooks/use-lookups";
 import { toast } from "@/hooks/use-toast";
 import { useOnOpen } from "@/hooks/use-reset";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
-import { countBy, dailySeries } from "@/lib/aggregate";
+import { bucketLabel } from "@/lib/aggregate";
 import { barOption, divergingBarOption, donutOption, palette } from "@/lib/charts";
 import { BACKUP_STATUSES, PAGE_SIZE } from "@/lib/constants";
 import type { Backup, BackupRunResult, Change, Page } from "@/lib/types";
@@ -155,7 +154,6 @@ export default function BackupsPage() {
   const qc = useQueryClient();
   const devices = useDeviceNames();
   const theme = useChartTheme();
-  const now = useNow();
   const [filters, setFilters] = useUrlState({ changed_only: "", status: "", author: "", device: "", offset: "0" });
   const [author, setAuthor] = React.useState(filters.author);
   const debouncedAuthor = useDebounce(author, 400);
@@ -193,32 +191,32 @@ export default function BackupsPage() {
   });
 
   const items = q.data?.items ?? [];
-  const stats = useRecentBackups(30, {
+  const stats = useBackupActivity("30d", {
     device_id: filters.device || undefined,
     status: filters.status || undefined,
     author: filters.author || undefined,
     changed_only: filters.changed_only === "1",
   });
   const charts = React.useMemo(() => {
-    const rows = stats.data?.items ?? [];
-    const statusItems = countBy(rows, (b) => (b.status === "failed" ? "failed" : b.changed ? "changed" : "unchanged"));
+    // counted by the server over every matching backup in the last 30 days
+    const a = stats.data;
+    const o = a?.outcomes ?? { changed: 0, unchanged: 0, failed: 0 };
+    const statusItems = (["changed", "unchanged", "failed"] as const).filter((k) => o[k]).map((k) => ({ name: k, value: o[k] }));
     const colors: Record<string, string> = { changed: palette(theme)[0], unchanged: theme.status.neutral, failed: theme.status.danger };
-    const changed = rows.filter((b) => b.changed);
-    const perDay = dailySeries(changed, (b) => b.collected_at, 30, now);
-    const added = dailySeries(changed, (b) => b.collected_at, 30, now, (b) => b.lines_added);
-    const removed = dailySeries(changed, (b) => b.collected_at, 30, now, (b) => b.lines_removed);
+    const labels = (a?.days.starts ?? []).map((s) => bucketLabel(new Date(s).getTime(), "30d"));
+    const n = a?.total ?? 0;
     return {
-      n: rows.length,
-      changed: changed.length,
+      n,
+      changed: o.changed,
       status: donutOption(
-        { items: statusItems.map((i) => ({ name: humanize(i.name), value: i.value, color: colors[i.name] })), centerValue: formatNumber(rows.length), centerLabel: "backups" },
+        { items: statusItems.map((i) => ({ name: humanize(i.name), value: i.value, color: colors[i.name] })), centerValue: formatNumber(n), centerLabel: "backups" },
         theme,
       ),
-      perDay: barOption({ categories: perDay.labels, series: [{ name: "Config changes", data: perDay.data }], barWidth: 12, axisLabelInterval: 4 }, theme),
-      lines: divergingBarOption({ categories: added.labels, added: added.data, removed: removed.data, showCategoryLabels: true }, theme),
+      perDay: barOption({ categories: labels, series: [{ name: "Config changes", data: a?.days.changed ?? [] }], barWidth: 12, axisLabelInterval: 4 }, theme),
+      lines: divergingBarOption({ categories: labels, added: a?.days.lines_added ?? [], removed: a?.days.lines_removed ?? [], showCategoryLabels: true }, theme),
     };
-  }, [stats.data, now, theme]);
-  const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${stats.data.items.length} of ${formatNumber(stats.data.total)}` : "";
+  }, [stats.data, theme]);
+  const statsNote = stats.data ? ` · ${formatNumber(stats.data.total)} backups` : "";
 
   return (
     <>

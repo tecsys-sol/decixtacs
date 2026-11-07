@@ -14,10 +14,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SimpleSelect } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+import { api, fetchAll } from "@/lib/api";
 import { divergingBarOption, gaugeOption, lineOption, type ChartTheme } from "@/lib/charts";
 import { riskLevel } from "@/lib/status";
-import type { Backup, CommitInfo, Device, DiffOut, Page } from "@/lib/types";
+import type { Backup, CommitInfo, Device, DiffOut } from "@/lib/types";
 import { cn, formatDate, formatDateTime, humanize, parseDate, shortSha } from "@/lib/utils";
 
 import { useDeviceHistory } from "./use-device-history";
@@ -31,7 +31,7 @@ function riskColor(level: string, theme: ChartTheme): string {
 export function useDeviceBackups(deviceId: string) {
   return useQuery({
     queryKey: ["backups", "device", deviceId, "all"],
-    queryFn: () => api.get<Page<Backup>>("/backups", { device_id: deviceId, limit: 500 }),
+    queryFn: () => fetchAll<Backup>("/backups", { device_id: deviceId }).then((items) => ({ items, total: items.length })),
   });
 }
 

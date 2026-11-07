@@ -3,13 +3,12 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { useAuth } from "@/hooks/use-auth";
-import { api } from "@/lib/api";
+import { api, fetchAll } from "@/lib/api";
 import type {
   Credential,
   Device,
   DeviceGroup,
   Group,
-  Page,
   Platform,
   Role,
   Site,
@@ -63,7 +62,7 @@ export function useAllUsers() {
   const { can } = useAuth();
   return useQuery({
     queryKey: ["users", "all"],
-    queryFn: () => api.get<Page<User>>("/users", { limit: 500 }).then((p) => p.items),
+    queryFn: () => fetchAll<User>("/users"),
     staleTime: LOOKUP_STALE,
     enabled: can("users:read"),
   });
@@ -73,7 +72,7 @@ export function useAllUsers() {
 export function useDeviceNames() {
   const q = useQuery({
     queryKey: ["devices", "names"],
-    queryFn: () => api.get<Page<Device>>("/devices", { limit: 500 }).then((p) => p.items),
+    queryFn: () => fetchAll<Device>("/devices", {}, 1000),
     staleTime: LOOKUP_STALE,
   });
   const map = new Map<string, string>();

@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { useOnChange } from "@/hooks/use-reset";
 import { toast } from "@/hooks/use-toast";
-import { api, errorMessage } from "@/lib/api";
+import { api, errorMessage, fetchAll } from "@/lib/api";
 import type { Backup, Change, Device, Page, RestoreOut } from "@/lib/types";
 import { formatDateTime, shortSha } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ export function RestoreTab({ device }: { device: Device }) {
 
   const backups = useQuery({
     queryKey: ["backups", "device", device.id, "restorable"],
-    queryFn: () => api.get<Page<Backup>>("/backups", { device_id: device.id, limit: 500 }),
+    queryFn: () => fetchAll<Backup>("/backups", { device_id: device.id }).then((items) => ({ items, total: items.length })),
     // one entry per stored version: the backup that stored it, plus how often later runs confirmed it
     select: (p) => {
       const byCommit = new Map<string, { b: Backup; runs: number; last: string }>();

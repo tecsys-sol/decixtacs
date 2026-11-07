@@ -20,23 +20,31 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Segmented } from "@/components/ui/tabs";
-import { useNow } from "@/hooks/use-now";
+import { viewerTz } from "@/hooks/use-activity";
 import { useTimeRange } from "@/hooks/use-time-range";
 import { toast } from "@/hooks/use-toast";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, errorMessage } from "@/lib/api";
-import { bucketSeries, countBy, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
+import { bucketLabel, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
 import { barOption } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { AuditEvent, AuditVerify, Page } from "@/lib/types";
 import { cn, formatDateTime, formatNumber, localInputToIso } from "@/lib/utils";
+
+/** GET /audit/activity - counted by the server over every matching event. */
+interface AuditActivity {
+  total: number;
+  in_range: number;
+  actions: { name: string; count: number }[];
+  starts: string[];
+  series: Record<string, number[]>;
+}
 
 const DEFAULTS = { actor: "", action: "", target_type: "", start: "", end: "", offset: "0" };
 
 export default function AuditPage() {
   const [f, setF] = useUrlState(DEFAULTS);
   const theme = useChartTheme();
-  const now = useNow();
   const { range, setRange } = useTimeRange();
   const offset = Number(f.offset) || 0;
   const [expanded, setExpanded] = React.useState<string | null>(null);
@@ -69,44 +77,38 @@ export default function AuditPage() {
   });
 
   const items = q.data?.items ?? [];
+  // counted by the server over every matching event, not a capped list
   const stats = useQuery({
-    queryKey: ["audit", "stats", { ...f, offset: undefined }],
+    queryKey: ["audit", "activity", { ...f, offset: undefined }, range],
     queryFn: () =>
-      api.get<Page<AuditEvent>>("/audit", {
+      api.get<AuditActivity>("/audit/activity", {
         actor: f.actor,
         action: f.action,
         target_type: f.target_type,
         start: localInputToIso(f.start),
         end: localInputToIso(f.end),
-        limit: 1000,
+        range,
+        tz: viewerTz(),
       }),
     placeholderData: (p) => p,
     staleTime: 60_000,
   });
   const charts = React.useMemo(() => {
-    const rows = stats.data?.items ?? [];
-    const actions = countBy(rows, (e) => e.action, 10);
-    const areas = countBy(rows, (e) => e.action.split(".")[0], 5);
-    const areaOrder = areas.map((a) => a.name);
-    const series = bucketSeries(rows, (e) => e.timestamp, range, now, {
-      group: (e) => {
-        const a = e.action.split(".")[0];
-        return areaOrder.slice(0, 4).includes(a) ? a : "Other";
-      },
-      groupOrder: [...areaOrder.slice(0, 4), ...(areaOrder.length > 4 ? ["Other"] : [])],
-    });
+    const a = stats.data;
+    const actions = a?.actions ?? [];
+    const labels = (a?.starts ?? []).map((s) => bucketLabel(new Date(s).getTime(), range));
     return {
-      n: rows.length,
-      inRange: series.counted,
-      actions: barOption({ categories: actions.map((a) => a.name), series: [{ name: "Events", data: actions.map((a) => a.value) }], horizontal: true, valueLabels: true, labelWidth: 150 }, theme),
+      n: a?.total ?? 0,
+      inRange: a?.in_range ?? 0,
+      actions: barOption({ categories: actions.map((x) => x.name), series: [{ name: "Events", data: actions.map((x) => x.count) }], horizontal: true, valueLabels: true, labelWidth: 150 }, theme),
       actionsN: actions.length,
       timeline: barOption(
-        { categories: series.labels, series: series.series.map((x) => ({ name: x.name, data: x.data, stack: "a" })), axisLabelInterval: range === "30d" ? 4 : 3, barWidth: 12 },
+        { categories: labels, series: Object.entries(a?.series ?? {}).map(([name, data]) => ({ name, data, stack: "a" })), axisLabelInterval: range === "30d" ? 4 : 3, barWidth: 12 },
         theme,
       ),
     };
-  }, [stats.data, range, now, theme]);
-  const statsNote = stats.data && stats.data.total > stats.data.items.length ? ` · latest ${formatNumber(stats.data.items.length)} of ${formatNumber(stats.data.total)}` : "";
+  }, [stats.data, range, theme]);
+  const statsNote = stats.data ? ` · ${formatNumber(stats.data.total)} events` : "";
 
   return (
     <>

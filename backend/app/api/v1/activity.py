@@ -532,19 +532,8 @@ def device_activity(
     return out
 
 
-@router.get("/audit", response_model=Page[AuditOut])
-def list_audit(
-    actor: str | None = None,
-    action: str | None = Query(None, description="exact or prefix*"),
-    target_type: str | None = None,
-    target_id: str | None = None,
-    start: datetime | None = None,
-    end: datetime | None = None,
-    limit: int = Query(100, le=1000),
-    offset: int = 0,
-    ctx: Ctx = Depends(require("audit:read")),
-):
-    stmt = select(AuditEvent).where(AuditEvent.tenant_id == ctx.tenant_id).order_by(AuditEvent.timestamp.desc())
+def _filter_audit(ctx: Ctx, stmt, actor, action, target_type, target_id, start, end):
+    stmt = stmt.where(AuditEvent.tenant_id == ctx.tenant_id)
     if actor:
         stmt = stmt.where(AuditEvent.actor_name == actor)
     if action:
@@ -559,7 +548,80 @@ def list_audit(
         stmt = stmt.where(AuditEvent.timestamp >= start)
     if end:
         stmt = stmt.where(AuditEvent.timestamp <= end)
+    return stmt
+
+
+@router.get("/audit", response_model=Page[AuditOut])
+def list_audit(
+    actor: str | None = None,
+    action: str | None = Query(None, description="exact or prefix*"),
+    target_type: str | None = None,
+    target_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(100, le=1000),
+    offset: int = 0,
+    ctx: Ctx = Depends(require("audit:read")),
+):
+    stmt = _filter_audit(
+        ctx, select(AuditEvent).order_by(AuditEvent.timestamp.desc()), actor, action, target_type, target_id, start, end
+    )
     return paginate(ctx.db, stmt, AuditOut, limit, offset)
+
+
+@router.get("/audit/activity")
+def audit_activity(
+    actor: str | None = None,
+    action: str | None = Query(None, description="exact or prefix*"),
+    target_type: str | None = None,
+    target_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    span: str = Query("24h", alias="range", pattern="^(24h|7d|30d)$"),
+    tz: str = Query("UTC", description="IANA time zone the buckets are aligned to"),
+    ctx: Ctx = Depends(require("audit:read")),
+):
+    """Audit events matching the filters, counted in the database: the 10 most frequent actions, the
+    busiest areas (the action's prefix before the first dot) and, per bucket of ``range``, events
+    stacked by the top 4 areas plus Other."""
+    from app.api.v1.common import UiBuckets
+
+    ub = UiBuckets(span, tz)
+
+    def filtered(*cols):
+        return _filter_audit(ctx, select(*cols), actor, action, target_type, target_id, start, end)
+
+    total = ctx.db.scalar(filtered(func.count())) or 0
+    actions = ctx.db.execute(
+        filtered(AuditEvent.action, func.count().label("n"))
+        .group_by(AuditEvent.action)
+        .order_by(func.count().desc(), AuditEvent.action)
+        .limit(10)
+    ).all()
+    area = func.split_part(AuditEvent.action, ".", 1)
+    areas = ctx.db.execute(filtered(area, func.count()).group_by(area).order_by(func.count().desc(), area)).all()
+    top = [a for a, _ in areas[:4]]
+    names = top + (["Other"] if len(areas) > 4 else [])
+    series = {n: [0] * ub.count for n in names}
+    hour = ub.hour(AuditEvent.timestamp)
+    for a, h, n in ctx.db.execute(
+        filtered(area, hour, func.count())
+        .where(AuditEvent.timestamp >= ub.window[0], AuditEvent.timestamp < ub.window[1])
+        .group_by(area, hour)
+    ):
+        i = ub.index(h)
+        if i is not None:
+            series[a if a in top else "Other"][i] += n
+    return {
+        "tz": tz,
+        "range": span,
+        "total": total,
+        "actions": [{"name": a, "count": n} for a, n in actions],
+        "areas": [{"name": a, "count": n} for a, n in areas],
+        "starts": ub.labels(),
+        "series": series,
+        "in_range": sum(sum(v) for v in series.values()),
+    }
 
 
 @router.get("/audit/verify")
@@ -630,6 +692,22 @@ def list_changes(
     if q:
         stmt = stmt.where(ChangeRequest.title.ilike(f"%{q}%"))
     return paginate(ctx.db, stmt, ChangeOut, limit, offset)
+
+
+@router.get("/changes/stats")
+def change_stats(ctx: Ctx = Depends(require("changes:read"))):
+    """Change requests counted by state and by risk - all of them, not a page."""
+
+    def by(col):
+        return {
+            k: n
+            for k, n in ctx.db.execute(
+                select(col, func.count()).where(ChangeRequest.tenant_id == ctx.tenant_id).group_by(col)
+            )
+        }
+
+    states = by(ChangeRequest.state)
+    return {"total": sum(states.values()), "states": states, "risks": by(ChangeRequest.risk)}
 
 
 @router.post("/changes", response_model=ChangeOut, status_code=201)

@@ -18,13 +18,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Segmented } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { useCommandActivity, useTacacsActivity } from "@/hooks/use-activity";
-import { useRecentBackups } from "@/hooks/use-backup-stats";
+import { useBackupActivity } from "@/hooks/use-backup-stats";
 import { useDashboard } from "@/hooks/use-dashboard";
 import { useDesign } from "@/hooks/use-design";
 import { useNow } from "@/hooks/use-now";
 import { useTimeRange } from "@/hooks/use-time-range";
 import {
-  bucketSeries,
+  bucketLabel,
   compactNumber,
   dailySeries,
   DAY_LABELS,
@@ -33,9 +33,9 @@ import {
   TIME_RANGES,
   type TimeRange,
 } from "@/lib/aggregate";
-import { api } from "@/lib/api";
+import { api, fetchAll } from "@/lib/api";
 import { barOption, donutOption, gaugeOption, heatmapOption, lineOption, palette, type ChartTheme } from "@/lib/charts";
-import type { ComplianceRun, ComplianceRunDetail, Device, Page } from "@/lib/types";
+import type { ComplianceRun, ComplianceRunDetail, Device } from "@/lib/types";
 import { formatDate, formatNumber, humanize, parseDate } from "@/lib/utils";
 
 const DAY = 86_400_000;
@@ -114,11 +114,11 @@ export default function DashboardPage() {
 
   const devices = useQuery({
     queryKey: ["devices", "created"],
-    queryFn: () => api.get<Page<Device>>("/devices", { limit: 1000 }),
+    queryFn: () => fetchAll<Device>("/devices", {}, 1000).then((items) => ({ items, total: items.length })),
     enabled: can("devices:read"),
     staleTime: 5 * 60_000,
   });
-  const backups = useRecentBackups(30);
+  const backups = useBackupActivity(range);
   const activity = useTacacsActivity(range);
   const week = useCommandActivity(7);
   const latestRun = useQuery({
@@ -150,16 +150,13 @@ export default function DashboardPage() {
   }, [devices.data, t]);
 
   const backupStats = React.useMemo(() => {
-    const items = backups.data?.items ?? [];
-    const last24 = items.filter((b) => (parseDate(b.collected_at)?.getTime() ?? 0) >= t - DAY);
-    const changed24 = last24.filter((b) => b.changed);
-    const unplanned24 = changed24.filter((b) => !b.change_request_id).length;
-    const total = dailySeries(items, (b) => b.collected_at, 30, t);
-    const ok = dailySeries(items.filter((b) => b.status !== "failed"), (b) => b.collected_at, 30, t);
-    const changes = dailySeries(items.filter((b) => b.changed), (b) => b.collected_at, 30, t);
-    const rate = total.data.map((n, i) => (n ? Math.round((ok.data[i] / n) * 1000) / 10 : null));
-    return { changed24: changed24.length, unplanned24, labels: total.labels, rate, changes: changes.data };
-  }, [backups.data, t]);
+    // counted by the server over every backup, not a capped list
+    const a = backups.data;
+    const days = a?.days;
+    const labels = (days?.starts ?? []).map((s) => bucketLabel(new Date(s).getTime(), "30d"));
+    const rate = (days?.total ?? []).map((n, i) => (n ? Math.round((days!.ok[i] / n) * 1000) / 10 : null));
+    return { changed24: a?.last_24h.changed ?? 0, unplanned24: a?.last_24h.unplanned ?? 0, labels, rate, changes: days?.changed ?? [] };
+  }, [backups.data]);
 
   const successPct = d && d.backups.last_24h ? ((d.backups.last_24h - d.backups.failures_24h) / d.backups.last_24h) * 100 : null;
   const tacacs24 = d ? Object.values(d.tacacs.auth_24h).reduce((a, b) => a + b, 0) + d.tacacs.accounting_24h : 0;
@@ -235,24 +232,22 @@ export default function DashboardPage() {
   }, [week.data, theme]);
 
   const backupBars = React.useMemo(() => {
-    const s = bucketSeries(backups.data?.items ?? [], (b) => b.collected_at, range, t, {
-      group: (b) => (b.status === "failed" ? "Failed" : b.changed ? "Changed" : "Unchanged"),
-      groupOrder: ["Changed", "Unchanged", "Failed"],
-    });
+    const a = backups.data;
     const colors: Record<string, string> = { Changed: palette(theme)[0], Unchanged: theme.status.neutral, Failed: theme.status.danger };
+    const series = Object.entries(a?.series ?? {}).map(([name, data]) => ({ name, data, stack: "b", color: colors[name] }));
     return {
-      counted: s.counted,
+      counted: series.reduce((x, s) => x + s.data.reduce((y, v) => y + v, 0), 0),
       option: barOption(
         {
-          categories: s.labels,
-          series: s.series.map((x) => ({ ...x, stack: "b", color: colors[x.name] })),
+          categories: (a?.starts ?? []).map((s) => bucketLabel(new Date(s).getTime(), range)),
+          series,
           axisLabelInterval: range === "30d" ? 4 : 3,
           barWidth: 12,
         },
         theme,
       ),
     };
-  }, [backups.data, range, t, theme]);
+  }, [backups.data, range, theme]);
 
   const authPie = React.useMemo(() => {
     const items = Object.entries(d?.tacacs.auth_24h ?? {})

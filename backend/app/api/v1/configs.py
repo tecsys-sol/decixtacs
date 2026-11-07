@@ -85,11 +85,17 @@ def list_backups(
     offset: int = 0,
     ctx: Ctx = Depends(require("configs:read")),
 ):
-    stmt = (
-        select(ConfigBackup).where(ConfigBackup.tenant_id == ctx.tenant_id).order_by(ConfigBackup.collected_at.desc())
+    stmt = _backup_filters(
+        ctx, select(ConfigBackup).order_by(ConfigBackup.collected_at.desc()), device_id, status, changed_only, author
     )
+    if since:
+        stmt = stmt.where(ConfigBackup.collected_at >= since)
+    return paginate(ctx.db, stmt, BackupOut, limit, offset)
+
+
+def _backup_filters(ctx: Ctx, stmt, device_id, status, changed_only, author):
     visible = visible_devices_filter(ctx, select(Device.id).where(Device.tenant_id == ctx.tenant_id), "configs:read")
-    stmt = stmt.where(ConfigBackup.device_id.in_(visible))
+    stmt = stmt.where(ConfigBackup.tenant_id == ctx.tenant_id, ConfigBackup.device_id.in_(visible))
     if device_id:
         stmt = stmt.where(ConfigBackup.device_id == device_id)
     if status:
@@ -98,9 +104,93 @@ def list_backups(
         stmt = stmt.where(ConfigBackup.changed)
     if author:
         stmt = stmt.where(ConfigBackup.author == author)
-    if since:
-        stmt = stmt.where(ConfigBackup.collected_at >= since)
-    return paginate(ctx.db, stmt, BackupOut, limit, offset)
+    return stmt
+
+
+@router.get("/backups/activity")
+def backup_activity(
+    device_id: uuid.UUID | None = None,
+    status: str | None = None,
+    changed_only: bool = False,
+    author: str | None = None,
+    span: str = Query("24h", alias="range", pattern="^(24h|7d|30d)$"),
+    tz: str = Query("UTC", description="IANA time zone the buckets are aligned to"),
+    ctx: Ctx = Depends(require("configs:read")),
+):
+    """Backups counted in the database - not a capped list - for the charts: outcomes and per-day
+    series over the last 30 local days, the last 24 hours' changes, and Changed / Unchanged / Failed
+    per bucket of ``range`` (24 x 1h, 28 x 6h or 30 x 1 day in the viewer's zone)."""
+    from datetime import timedelta
+
+    from app.api.v1.common import UiBuckets
+    from app.db.base import utcnow
+
+    days = UiBuckets("30d", tz)
+    ub = UiBuckets(span, tz)
+    hour = days.hour(ConfigBackup.collected_at)
+    failed = ConfigBackup.status == "failed"
+    unplanned = ConfigBackup.change_request_id.is_(None)
+    rows = ctx.db.execute(
+        _backup_filters(
+            ctx,
+            select(
+                failed,
+                ConfigBackup.changed,
+                hour,
+                func.count(),
+                func.coalesce(func.sum(ConfigBackup.lines_added), 0),
+                func.coalesce(func.sum(ConfigBackup.lines_removed), 0),
+            ),
+            device_id,
+            status,
+            changed_only,
+            author,
+        )
+        .where(ConfigBackup.collected_at >= days.window[0], ConfigBackup.collected_at < days.window[1])
+        .group_by(failed, ConfigBackup.changed, hour)
+    ).all()
+
+    zero = lambda n: [0] * n  # noqa: E731
+    outcomes = {"changed": 0, "unchanged": 0, "failed": 0}
+    daily = {k: zero(days.count) for k in ("total", "ok", "changed", "lines_added", "lines_removed")}
+    names = {"changed": "Changed", "unchanged": "Unchanged", "failed": "Failed"}
+    series = {v: zero(ub.count) for v in names.values()}
+    for is_failed, changed, h, n, added, removed in rows:
+        outcome = "failed" if is_failed else "changed" if changed else "unchanged"
+        outcomes[outcome] += n
+        i = days.index(h)
+        if i is not None:
+            daily["total"][i] += n
+            daily["ok"][i] += 0 if is_failed else n
+            if changed:
+                daily["changed"][i] += n
+                daily["lines_added"][i] += int(added)
+                daily["lines_removed"][i] += int(removed)
+        j = ub.index(h)
+        if j is not None:
+            series[names[outcome]][j] += n
+
+    since = utcnow() - timedelta(hours=24)
+    changed24, unplanned24 = ctx.db.execute(
+        _backup_filters(
+            ctx,
+            select(func.count(), func.count().filter(unplanned)),
+            device_id,
+            status,
+            changed_only,
+            author,
+        ).where(ConfigBackup.collected_at >= since, ConfigBackup.changed)
+    ).one()
+    return {
+        "tz": tz,
+        "total": sum(outcomes.values()),
+        "outcomes": outcomes,
+        "days": {"starts": days.labels(), **daily},
+        "last_24h": {"changed": changed24, "unplanned": unplanned24},
+        "range": span,
+        "starts": ub.labels(),
+        "series": series,
+    }
 
 
 class BackupRequest(BaseModel):
@@ -833,9 +923,20 @@ def run_detail(run_id: uuid.UUID, ctx: Ctx = Depends(require("compliance:read"))
         .where(ComplianceResult.run_id == run.id, ComplianceResult.passed.is_(False))
         .limit(5000)
     ).all()
+    # counted over every failure, not just the listed 5000
     by_rule: dict[str, int] = {}
-    for _, name, _, _ in failures:
-        by_rule[name] = by_rule.get(name, 0) + 1
+    rule_severity: dict[str, str] = {}
+    by_severity: dict[str, int] = {}
+    for name, sev, n in ctx.db.execute(
+        select(ComplianceRule.name, ComplianceRule.severity, func.count())
+        .select_from(ComplianceResult)
+        .join(ComplianceRule, ComplianceRule.id == ComplianceResult.rule_id)
+        .where(ComplianceResult.run_id == run.id, ComplianceResult.passed.is_(False))
+        .group_by(ComplianceRule.name, ComplianceRule.severity)
+    ):
+        by_rule[name] = by_rule.get(name, 0) + n
+        rule_severity.setdefault(name, sev)
+        by_severity[sev] = by_severity.get(sev, 0) + n
     return {
         "run": RunOut.model_validate(run),
         "devices": [
@@ -844,4 +945,7 @@ def run_detail(run_id: uuid.UUID, ctx: Ctx = Depends(require("compliance:read"))
         ],
         "failures": [{"device": h, "rule": n, "severity": sev, "detail": r.detail} for r, n, sev, h in failures],
         "failures_by_rule": by_rule,
+        "failures_by_severity": by_severity,
+        "rule_severity": rule_severity,
+        "failures_total": sum(by_rule.values()),
     }

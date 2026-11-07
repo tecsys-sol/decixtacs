@@ -394,3 +394,19 @@ export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return "Unexpected error";
 }
+
+/**
+ * Every item of a paged list endpoint, fetched page by page (endpoints cap `limit` at 500 or 1000).
+ * `max` bounds a runaway list; pages after the first are fetched in parallel.
+ */
+export async function fetchAll<T>(path: string, query: Query = {}, pageSize = 500, max = 20_000): Promise<T[]> {
+  type P = { items: T[]; total: number };
+  const first = await api.get<P>(path, { ...query, limit: pageSize, offset: 0 });
+  const total = Math.min(first.total, max);
+  // step by what the server actually returned, in case it caps the page lower than asked
+  const step = first.items.length;
+  const offsets: number[] = [];
+  for (let o = step; step > 0 && o < total; o += step) offsets.push(o);
+  const rest = await Promise.all(offsets.map((offset) => api.get<P>(path, { ...query, limit: step, offset })));
+  return [...first.items, ...rest.flatMap((p) => p.items)].slice(0, max);
+}

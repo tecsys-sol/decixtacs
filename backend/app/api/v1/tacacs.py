@@ -702,40 +702,23 @@ def tacacs_activity(
     in the viewer's time zone like the UI's charts - so a window is complete however many events it
     holds. ``group=kind``: authentication and authorization events plus accounting commands;
     ``group=result``: authentication/authorization events by result, with per-kind totals."""
-    from datetime import timedelta
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
     from sqlalchemy import func
 
-    try:
-        zone = ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError):
-        raise HTTPException(422, f"unknown time zone {tz!r}") from None
-    step, count = {"24h": (timedelta(hours=1), 24), "7d": (timedelta(hours=6), 28), "30d": (timedelta(days=1), 30)}[
-        span
-    ]
-    now = utcnow().astimezone(zone).replace(tzinfo=None)
-    if step == timedelta(days=1):
-        end = now.replace(hour=0, minute=0, second=0, microsecond=0) + step
-    else:
-        end = now.replace(minute=0, second=0, microsecond=0)
-        if step == timedelta(hours=6):
-            end = end.replace(hour=end.hour // 6 * 6)
-        end += step
-    starts = [end - (count - i) * step for i in range(count)]
-    first = starts[0]
-    window = (first.replace(tzinfo=zone), end.replace(tzinfo=zone))
+    from app.api.v1.common import UiBuckets
+
+    ub = UiBuckets(span, tz)
+    count, window = ub.count, ub.window
 
     series: dict[str, list[int]] = {}
 
     def add(name: str, hour, n: int) -> None:
-        idx = int((hour - first) / step)
-        if 0 <= idx < count:
+        idx = ub.index(hour)
+        if idx is not None:
             series.setdefault(name, [0] * count)[idx] += n
 
     def hourly(model, *keys):
         """(key..., local hour, count) for the window, grouped in the database."""
-        hour = func.date_trunc("hour", func.timezone(tz, model.timestamp))
+        hour = ub.hour(model.timestamp)
         return ctx.db.execute(
             select(*keys, hour, func.count())
             .where(model.tenant_id == ctx.tenant_id, model.timestamp >= window[0], model.timestamp < window[1])
@@ -762,7 +745,7 @@ def tacacs_activity(
     return {
         "range": span,
         "tz": tz,
-        "starts": [s.isoformat(timespec="minutes") for s in starts],
+        "starts": ub.labels(),
         "series": series,
         "totals": {k: sum(v) for k, v in series.items()},
         "kinds": kinds,
