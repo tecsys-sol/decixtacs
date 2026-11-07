@@ -16,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { Segmented } from "@/components/ui/tabs";
+import { viewerTz } from "@/hooks/use-activity";
 import { useTimeRange } from "@/hooks/use-time-range";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api } from "@/lib/api";
@@ -43,13 +44,6 @@ function bucketLabel(t: string, grain: Activity["grain"]): string {
   return `${Number(t.slice(8, 10))} ${MONTHS[Number(t.slice(5, 7)) - 1]}`;
 }
 
-const viewerTz = () => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-};
 
 export default function AccountingPage() {
   const [f, setF] = useUrlState(DEFAULTS);

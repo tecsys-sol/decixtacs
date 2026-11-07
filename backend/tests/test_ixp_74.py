@@ -199,16 +199,25 @@ def test_p2p_health_follows_a_member_with_sflow_traffic(admin, db, tenant, monke
 
         return demo
 
-    def p2p_check(demo):
+    def health(demo):
         monkeypatch.setattr(grapher, "_demo", demo)
         grapher._cache.clear()
-        return admin.get("/api/v1/ixp/graphs/health").json()["checks"][-1]
+        return admin.get("/api/v1/ixp/graphs/health").json()["checks"]
+
+    def p2p_check(demo):
+        return health(demo)[-1]
 
     # only Google's port (502) is sampled; its traffic went to Hurricane Electric (503)
     c = p2p_check(demo_with({502}, {(502, 503)}))
     assert c["ok"] and c["pair"] == [15169, 6939]
 
-    c = p2p_check(demo_with(set(), set()))
+    # member graphs are judged by a member whose port is sampled, not by the first one listed
+    member = health(demo_with({502}, {(502, 503)}))[-2]
+    assert member["graph"] == "vlaninterface" and member["ok"] and member["params"]["id"] == 502
+
+    checks = health(demo_with(set(), set()))
+    assert not checks[-2]["ok"] and "has sFlow traffic" in checks[-2]["error"]
+    c = checks[-1]
     assert not c["ok"] and "has any sFlow traffic of its own" in c["error"]
 
     c = p2p_check(demo_with({502}, set()))

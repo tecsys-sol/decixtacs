@@ -575,12 +575,7 @@ def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
     check("Peering VLAN (sFlow)", "vlan", {"id": vl["id"], "protocol": "ipv4"} if vl else None, "no VLAN in the export")
     first = vlis[0] if vlis else None
     no_vli = "no member VLAN interface id known (" + str(detail.get("vlan_interface_lookup") or "not synced") + ")"
-    check(
-        "Member traffic (sFlow)",
-        "vlaninterface",
-        {"id": first[1]["vli_id"], "protocol": "ipv4"} if first else None,
-        no_vli,
-    )
+    member_label = "Member traffic (sFlow)"
     # P2P files exist only for pairs whose traffic was sampled, and a pair reads zero unless one of
     # the two ports is sFlow-enabled - so a pair picked by name or port size proves nothing. A member
     # with sFlow traffic of its own must have a peer with P2P data (its total is the sum of its P2P
@@ -591,11 +586,13 @@ def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
 
     label = "Member-to-member P2P (sFlow)"
     if not first:
+        check(member_label, "vlaninterface", None, no_vli)
         check(label, "p2p", None, no_vli)
         return {"checks": checks, "error": None}
     same = [x for x in vlis if x[1].get("vlan_id") == first[1].get("vlan_id")]
     by_cap = sorted(same, key=lambda x: -(x[1].get("capacity_mbps") or 0))
     if len({x[0].asn for x in same}) < 2:
+        check(member_label, "vlaninterface", {"id": first[1]["vli_id"], "protocol": "ipv4"})
         check(label, "p2p", None, "no second member on the same VLAN")
         return {"checks": checks, "error": None}
     base = {"protocol": "ipv4", "period": "day", "category": "bits"}
@@ -611,6 +608,23 @@ def ixp_graph_health(ctx: Ctx = Depends(require("devices:read"))):
     with ThreadPoolExecutor(max_workers=8) as ex:
         volumes = list(ex.map(volume, candidates))
     active = [x for v, x in sorted(zip(volumes, candidates, strict=True), key=lambda p: -p[0]) if v > 0]
+    # a member whose own port is not sampled reads zero; judge member graphs by one that has traffic
+    if active:
+        check(member_label, "vlaninterface", {"id": active[0][1]["vli_id"], "protocol": "ipv4"})
+    else:
+        checks.append(
+            {
+                "label": member_label,
+                "graph": "vlaninterface",
+                "params": None,
+                "ok": False,
+                "points": 0,
+                "reason": "no_data",
+                "error": f"None of the {len(candidates)} largest member ports on this VLAN has sFlow traffic: their "
+                "ports are not sFlow-enabled (tools/p2p/sflow-ports.py lists them), or the collector drops their "
+                "samples.",
+            }
+        )
     if not active:
         checks.append(
             {

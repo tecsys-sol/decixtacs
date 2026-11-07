@@ -18,17 +18,16 @@ import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Segmented } from "@/components/ui/tabs";
-import { KIND_LABEL, useAuthEvents } from "@/hooks/use-activity";
+import { KIND_LABEL, useAuthResults } from "@/hooks/use-activity";
 import { useDebounce } from "@/hooks/use-debounce";
-import { useNow } from "@/hooks/use-now";
 import { useTimeRange } from "@/hooks/use-time-range";
 import { useOnChange } from "@/hooks/use-reset";
 import { api } from "@/lib/api";
-import { bucketSeries, countBy, rangeStart, TIME_RANGES, type TimeRange } from "@/lib/aggregate";
+import { TIME_RANGES, type TimeRange } from "@/lib/aggregate";
 import { barOption, donutOption, type ChartTheme } from "@/lib/charts";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { AuthEvent, Page } from "@/lib/types";
-import { formatNumber, humanize, parseDate } from "@/lib/utils";
+import { formatNumber, humanize } from "@/lib/utils";
 
 function resultColor(result: string, theme: ChartTheme): string {
   const s = theme.status;
@@ -54,19 +53,18 @@ export function EventsTab() {
   });
   const items = q.data?.items ?? [];
   const theme = useChartTheme();
-  const now = useNow();
   const { range, setRange } = useTimeRange();
-  const recent = useAuthEvents();
+  // counted by the server over the whole window
+  const recent = useAuthResults(range);
   const charts = React.useMemo(() => {
-    const rows = recent.data?.items ?? [];
-    const since = rangeStart(range, now);
-    const inRange = rows.filter((e) => (parseDate(e.timestamp)?.getTime() ?? 0) >= since);
-    const results = countBy(inRange, (e) => e.result);
-    const order = results.map((r) => r.name);
-    const series = bucketSeries(inRange, (e) => e.timestamp, range, now, { group: (e) => e.result, groupOrder: order });
+    const results = Object.entries(recent.totals)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+    const n = results.reduce((x, r) => x + r.value, 0);
+    const series = recent.series ?? { labels: [], starts: [], series: [], counted: 0 };
     return {
-      n: inRange.length,
-      pie: donutOption({ items: results.map((r) => ({ name: humanize(r.name), value: r.value, color: resultColor(r.name, theme) })), centerValue: formatNumber(inRange.length), centerLabel: "events" }, theme),
+      n,
+      pie: donutOption({ items: results.map((r) => ({ name: humanize(r.name), value: r.value, color: resultColor(r.name, theme) })), centerValue: formatNumber(n), centerLabel: "events" }, theme),
       bars: barOption(
         {
           categories: series.labels,
@@ -76,10 +74,9 @@ export function EventsTab() {
         },
         theme,
       ),
-      kinds: countBy(inRange, (e) => KIND_LABEL[e.kind] ?? e.kind),
+      kinds: Object.entries(recent.kinds).map(([k, value]) => ({ name: KIND_LABEL[k] ?? k, value })),
     };
-  }, [recent.data, range, now, theme]);
-  const truncated = (recent.data?.total ?? 0) > (recent.data?.items.length ?? 0);
+  }, [recent.series, recent.totals, recent.kinds, range, theme]);
   const rangeLabel = TIME_RANGES.find((r) => r.value === range)?.long.toLowerCase();
 
   return (
@@ -92,7 +89,7 @@ export function EventsTab() {
       </ChartCard>
       <ChartCard
         title="Events over time"
-        description={`Stacked by result${truncated ? " · latest 1,000 events" : ""}`}
+        description="Stacked by result"
         delay={1}
         actions={<Segmented<TimeRange> aria-label="Window" value={range} onChange={setRange} options={TIME_RANGES.map((r) => ({ value: r.value, label: r.label }))} />}
       >

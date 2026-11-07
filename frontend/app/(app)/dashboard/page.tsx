@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Segmented } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
-import { useCommandsSince, useTacacsActivity } from "@/hooks/use-activity";
+import { useCommandActivity, useTacacsActivity } from "@/hooks/use-activity";
 import { useRecentBackups } from "@/hooks/use-backup-stats";
 import { useDashboard } from "@/hooks/use-dashboard";
 import { useDesign } from "@/hooks/use-design";
@@ -28,7 +28,6 @@ import {
   compactNumber,
   dailySeries,
   DAY_LABELS,
-  dayHourMatrix,
   foldTop,
   peak,
   TIME_RANGES,
@@ -121,7 +120,7 @@ export default function DashboardPage() {
   });
   const backups = useRecentBackups(30);
   const activity = useTacacsActivity(range);
-  const week = useCommandsSince("7d-fixed");
+  const week = useCommandActivity(7);
   const latestRun = useQuery({
     queryKey: ["compliance", "runs", 1],
     queryFn: () => api.get<ComplianceRun[]>("/compliance/runs", { limit: 1 }),
@@ -208,9 +207,20 @@ export default function DashboardPage() {
   }, [d?.devices.by_vendor, d?.devices.total, theme]);
 
   const heat = React.useMemo(() => {
-    const m = dayHourMatrix((week.data?.items ?? []).map((c) => c.timestamp), t, 7);
+    // counted by the server over all 7 days, in the viewer's time zone (rows Mon..Sun, columns 0..23)
+    const grid = week.data?.weekday_hour ?? [];
+    const cells: [number, number, number][] = [];
+    let max = 0;
+    for (let day = 0; day < 7; day++) {
+      for (let h = 0; h < 24; h++) {
+        const v = grid[day]?.[h] ?? 0;
+        cells.push([h, day, v]);
+        max = Math.max(max, v);
+      }
+    }
+    const m = { cells, max };
     return {
-      counted: m.counted,
+      counted: week.data?.total ?? 0,
       option: heatmapOption(
         {
           xLabels: HOURS,
@@ -222,7 +232,7 @@ export default function DashboardPage() {
         theme,
       ),
     };
-  }, [week.data, t, theme]);
+  }, [week.data, theme]);
 
   const backupBars = React.useMemo(() => {
     const s = bucketSeries(backups.data?.items ?? [], (b) => b.collected_at, range, t, {
@@ -530,7 +540,7 @@ export default function DashboardPage() {
         {can("accounting:read") ? (
           <ChartCard
             title="TACACS+ activity"
-            description={`Requests per ${perUnit === "h" ? "hour" : perUnit === "6h" ? "6 hours" : "day"} by type, stacked · ${rangeLong}${activity.truncated ? " · latest 1,000 records per source" : ""}`}
+            description={`Requests per ${perUnit === "h" ? "hour" : perUnit === "6h" ? "6 hours" : "day"} by type, stacked · ${rangeLong}${activity.series ? ` · ${formatNumber(activity.series.counted)} requests` : ""}`}
             delay={5}
             actions={
               <Segmented<TimeRange> aria-label="Activity window" value={range} onChange={setRange} options={TIME_RANGES.map((r) => ({ value: r.value, label: r.label }))} />
@@ -576,7 +586,7 @@ export default function DashboardPage() {
           </ChartBody>
         </ChartCard>
         {can("accounting:read") ? (
-          <ChartCard title="When engineers work" description={`Commands per hour, last 7 days${(week.data?.total ?? 0) > (week.data?.items.length ?? 0) ? " · latest 1,000" : ""}`} delay={8}>
+          <ChartCard title="When engineers work" description={`Commands per hour, last 7 days${week.data ? ` · ${formatNumber(week.data.total)} commands` : ""}`} delay={8}>
             <ChartBody loading={week.isLoading} error={week.error} empty={!heat.counted} emptyTitle="No commands in the last 7 days" emptyIcon={Terminal} height={250}>
               <Chart option={heat.option} height={250} ariaLabel="Commands by weekday and hour" />
             </ChartBody>

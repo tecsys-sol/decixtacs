@@ -19,6 +19,7 @@ from app.core.security import encrypt_secret, sha256
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.models import (
+    CommandLog,
     Device,
     DeviceGroup,
     Group,
@@ -688,6 +689,84 @@ def auth_events(
     if result:
         stmt = stmt.where(TacacsAuthEvent.result == result)
     return paginate(ctx.db, stmt, AuthEventOut, limit, offset)
+
+
+@router.get("/activity")
+def tacacs_activity(
+    span: str = Query("24h", alias="range", pattern="^(24h|7d|30d)$"),
+    group: str = Query("kind", pattern="^(kind|result)$"),
+    tz: str = Query("UTC", description="IANA time zone the buckets are aligned to"),
+    ctx: Ctx = Depends(require("accounting:read")),
+):
+    """TACACS+ requests counted in the database per bucket - 24 x 1h, 28 x 6h or 30 x 1 day, aligned
+    in the viewer's time zone like the UI's charts - so a window is complete however many events it
+    holds. ``group=kind``: authentication and authorization events plus accounting commands;
+    ``group=result``: authentication/authorization events by result, with per-kind totals."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from sqlalchemy import func
+
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(422, f"unknown time zone {tz!r}") from None
+    step, count = {"24h": (timedelta(hours=1), 24), "7d": (timedelta(hours=6), 28), "30d": (timedelta(days=1), 30)}[
+        span
+    ]
+    now = utcnow().astimezone(zone).replace(tzinfo=None)
+    if step == timedelta(days=1):
+        end = now.replace(hour=0, minute=0, second=0, microsecond=0) + step
+    else:
+        end = now.replace(minute=0, second=0, microsecond=0)
+        if step == timedelta(hours=6):
+            end = end.replace(hour=end.hour // 6 * 6)
+        end += step
+    starts = [end - (count - i) * step for i in range(count)]
+    first = starts[0]
+    window = (first.replace(tzinfo=zone), end.replace(tzinfo=zone))
+
+    series: dict[str, list[int]] = {}
+
+    def add(name: str, hour, n: int) -> None:
+        idx = int((hour - first) / step)
+        if 0 <= idx < count:
+            series.setdefault(name, [0] * count)[idx] += n
+
+    def hourly(model, *keys):
+        """(key..., local hour, count) for the window, grouped in the database."""
+        hour = func.date_trunc("hour", func.timezone(tz, model.timestamp))
+        return ctx.db.execute(
+            select(*keys, hour, func.count())
+            .where(model.tenant_id == ctx.tenant_id, model.timestamp >= window[0], model.timestamp < window[1])
+            .group_by(*keys, hour)
+        ).all()
+
+    kinds: dict[str, int] = {}
+    for key, hour, n in hourly(TacacsAuthEvent, TacacsAuthEvent.kind if group == "kind" else TacacsAuthEvent.result):
+        add(key, hour, n)
+    if group == "kind":
+        for hour, n in hourly(CommandLog):
+            add("acct", hour, n)
+    else:
+        for k, n in ctx.db.execute(
+            select(TacacsAuthEvent.kind, func.count())
+            .where(
+                TacacsAuthEvent.tenant_id == ctx.tenant_id,
+                TacacsAuthEvent.timestamp >= window[0],
+                TacacsAuthEvent.timestamp < window[1],
+            )
+            .group_by(TacacsAuthEvent.kind)
+        ):
+            kinds[k] = n
+    return {
+        "range": span,
+        "tz": tz,
+        "starts": [s.isoformat(timespec="minutes") for s in starts],
+        "series": series,
+        "totals": {k: sum(v) for k, v in series.items()},
+        "kinds": kinds,
+    }
 
 
 # --- import an existing Shrubbery tac_plus configuration ----------------------------------------
